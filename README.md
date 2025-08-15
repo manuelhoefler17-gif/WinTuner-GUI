@@ -1,7 +1,9 @@
 
 Execute the Powershell Script in Powershell 7.
 
-Do a set-execusionPolicy before you start it.
+Do a set-execusionPolicy bypass before you start it.
+
+Or you start with the Run_WinTuner_GUI.cmd.
 
 First Login with your Intune Admin or Global Admin.
 
