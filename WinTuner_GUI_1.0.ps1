@@ -3,6 +3,30 @@
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+# Version comparison helper: returns $true if Latest > Current
+function Test-IsNewerVersion {
+    param([string]$Latest, [string]$Current)
+    if (-not $Latest -or -not $Current) { return $false }
+    try {
+        $vL = [version]$Latest
+        $vC = [version]$Current
+        return $vL -gt $vC
+    } catch {
+        # Fallback: compare numeric segments
+        $numsL = ($Latest -split '[^0-9]+' | Where-Object { $_ -ne '' }) | ForEach-Object { [int]$_ }
+        $numsC = ($Current -split '[^0-9]+' | Where-Object { $_ -ne '' }) | ForEach-Object { [int]$_ }
+        $len = [Math]::Max(($numsL | Measure-Object).Count, ($numsC | Measure-Object).Count)
+        for ($i=0; $i -lt $len; $i++) {
+            $a = if ($i -lt $numsL.Count) { $numsL[$i] } else { 0 }
+            $b = if ($i -lt $numsC.Count) { $numsC[$i] } else { 0 }
+            if ($a -gt $b) { return $true }
+            if ($a -lt $b) { return $false }
+        }
+        # Same numeric skeleton; consider different strings as newer to avoid false negatives
+        return $Latest -ne $Current
+    }
+}
+
 # Dark mode theme colors
 $global:darkTheme = @{
     BackColor = [System.Drawing.Color]::FromArgb(32, 32, 32)
@@ -76,7 +100,7 @@ function Apply-Theme {
     }
     
     # Recursively apply theme to child controls
-    foreach ($childControl in $control.Controls) {
+    foreach ($childControl in @($control.Controls)) {
         Apply-Theme -control $childControl -theme $theme
     }
 }
@@ -172,6 +196,22 @@ $usernameLabel.AutoSize = $true
 $form.Controls.Add($usernameLabel)
 
 $usernameBox = New-Object System.Windows.Forms.TextBox
+
+# ENTER im Username-Feld -> "Login"
+if ($usernameBox -ne $null) {
+    $usernameBox.Add_KeyDown({
+        param($sender, $e)
+        if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Enter) {
+            if ($loginButton -and $loginButton.Enabled) {
+                $loginButton.PerformClick()
+            } else {
+                [System.Windows.Forms.MessageBox]::Show("Bitte gültigen M365 UPN eingeben, z.B. name@firma.de")
+            }
+            $e.SuppressKeyPress = $true
+        }
+    })
+}
+
 $usernameBox.Location = New-Object System.Drawing.Point(100,20)
 $usernameBox.Width = 450
 $usernameBox.BorderStyle = 'FixedSingle'
@@ -246,6 +286,20 @@ $appSearchLabel.AutoSize = $true
 $tabCreate.Controls.Add($appSearchLabel)
 
 $appSearchBox = New-Object System.Windows.Forms.TextBox
+
+# ENTER im App-Suchfeld -> "Suchen" (auslösen des Such-Buttons)
+if ($appSearchBox -ne $null) {
+    $appSearchBox.Add_KeyDown({
+        param($sender, $e)
+        if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Enter) {
+            if ($searchButton -and $searchButton.Enabled) {
+                $searchButton.PerformClick()
+            }
+            $e.SuppressKeyPress = $true
+        }
+    })
+}
+
 $appSearchBox.Location = New-Object System.Drawing.Point(100,20)
 $appSearchBox.Width = 450
 $appSearchBox.BorderStyle = 'FixedSingle'
@@ -435,7 +489,7 @@ $searchButton.Add_Click({
     $dropdown.Items.Clear()
     $global:packageMap.Clear()
 
-foreach ($result in $results) {
+foreach ($result in @($results)) {
         
 		$displayText = "$($result.Name) — $($result.PackageID)"
 		$dropdown.Items.Add($displayText)
@@ -499,11 +553,12 @@ $uploadButton.Add_Click({
 
 $updateSearchButton.Add_Click({
     Update-Status "Suche nach Updates..."
-    $tempApps = Get-WtWin32Apps -Update $true -Superseded $false
-    $updateDropdown.Items.Clear()
+    try { $tempApps = @(Get-WtWin32Apps -Update $true -Superseded $false) } catch { Write-Verbose "Get-WtWin32Apps update threw: $($_)"; $tempApps = @() }
+$updateDropdown.Items.Clear()
     $global:updateApps = @()
 
-    foreach ($app in $tempApps) {
+    $updateCandidates = @(($tempApps | Where-Object { $_.LatestVersion -and $_.CurrentVersion -and (Test-IsNewerVersion $_.LatestVersion $_.CurrentVersion) }) | Sort-Object Name)
+    foreach ($app in @($updateCandidates)) {
         $updateDropdown.Items.Add($app.Name)
         $global:updateApps += $app
     }
@@ -542,9 +597,9 @@ $updateAllButton.Add_Click({
     $progressBar.Value = 0
     $progressBar.Visible = $true
     $progressBar.Value = 10
-    $updatedApps = Get-WtWin32Apps -Update $true -Superseded $false
-
-    foreach ($app in $updatedApps) {
+    try { $updatedApps = @(Get-WtWin32Apps -Update $true -Superseded $false) } catch { Write-Verbose "Get-WtWin32Apps update threw: $($_)"; $updatedApps = @() }
+$updatedApps = @(($updatedApps | Where-Object { $_.LatestVersion -and $_.CurrentVersion -and (Test-IsNewerVersion $_.LatestVersion $_.CurrentVersion) }) | Sort-Object Name)
+    foreach ($app in @($updatedApps)) {
         Update-Status "Update: $($app.Name)"
         Start-Sleep -Milliseconds 300
         New-WtWingetPackage -PackageId $app.PackageId -PackageFolder $rootPackageFolder -Version $app.LatestVersion |
@@ -568,7 +623,7 @@ $removeOldAppsButton.Add_Click({
     if ($result -eq "Yes") {
         $progressBar.Value = 0
         $progressBar.Visible = $true
-        foreach ($app in $oldApps) {
+        foreach ($app in @($oldApps)) {
             Remove-WtWin32App -AppId $app.GraphId
             Update-Status "Entfernt: $($app.Name)"
         }
@@ -588,7 +643,7 @@ $supersededSearchButton.Add_Click({
         $global:supersededApps = Get-WtWin32Apps -Superseded $true
         $supersededDropdown.Items.Clear()
 
-        foreach ($app in $global:supersededApps) {
+        foreach ($app in @($global:supersededApps)) {
             $name     = $app.Name
             $version  = $app.CurrentVersion
             $display  = "$name — $version"   # Bindestrich statt nur Leerzeichen
