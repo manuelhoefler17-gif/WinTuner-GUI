@@ -201,7 +201,7 @@ if ($usernameBox -ne $null) {
             if ($loginButton -and $loginButton.Enabled) {
                 $loginButton.PerformClick()
             } else {
-                [System.Windows.Forms.MessageBox]::Show("Bitte gültigen M365 UPN eingeben, z.B. name@firma.de")
+                [System.Windows.Forms.MessageBox]::Show("Please enter a valid M365 UPN, z.B. name@firma.de")
             }
             $e.SuppressKeyPress = $true
         }
@@ -224,7 +224,7 @@ $usernameBox.add_TextChanged({
         $usernameError.Text = ""
         if ($loginButton) { $loginButton.Enabled = $true }
     } else {
-        $usernameError.Text = "Bitte gültigen M365 UPN eingeben, z.B. name@firma.de"
+        $usernameError.Text = "Please enter a valid M365 UPN, z.B. name@firma.de"
         if ($loginButton) { $loginButton.Enabled = $false }
     }
 })
@@ -266,12 +266,12 @@ $tabCreate = New-Object System.Windows.Forms.TabPage
 $tabCreate.Text = "WinGet Apps"
 $tabControl.TabPages.Add($tabCreate)
 $appSearchLabel = New-Object System.Windows.Forms.Label
-$appSearchLabel.Text = "Appsuche:"
+$appSearchLabel.Text = "Appsearch:"
 $appSearchLabel.Location = New-Object System.Drawing.Point(10,20)
 $appSearchLabel.AutoSize = $true
 $tabCreate.Controls.Add($appSearchLabel)
 $appSearchBox = New-Object System.Windows.Forms.TextBox
-# ENTER im App-Suchfeld -> "Suchen" (auslösen des Such-Buttons)
+# ENTER im App-Suchfeld -> "Search" (auslösen des Such-Buttons)
 if ($appSearchBox -ne $null) {
     $appSearchBox.Add_KeyDown({
         param($sender, $e)
@@ -288,7 +288,7 @@ $appSearchBox.Width = 450
 $appSearchBox.BorderStyle = 'FixedSingle'
 $tabCreate.Controls.Add($appSearchBox)
 $searchButton = New-Object System.Windows.Forms.Button
-$searchButton.Text = "Suchen"
+$searchButton.Text = "Search"
 $searchButton.Location = New-Object System.Drawing.Point(570,20)
 $searchButton.Width = 180
 $tabCreate.Controls.Add($searchButton)
@@ -297,7 +297,7 @@ $dropdown.Location = New-Object System.Drawing.Point(100,60)
 $dropdown.Width = 650
 $tabCreate.Controls.Add($dropdown)
 $pathLabel = New-Object System.Windows.Forms.Label
-$pathLabel.Text = "Speicherpfad:"
+$pathLabel.Text = "Filepath:"
 $pathLabel.Location = New-Object System.Drawing.Point(10,100)
 $pathLabel.AutoSize = $true
 $tabCreate.Controls.Add($pathLabel)
@@ -308,7 +308,7 @@ $pathBox.BorderStyle = 'FixedSingle'
 $pathBox.Text = "C:\Temp"
 $tabCreate.Controls.Add($pathBox)
 $browseButton = New-Object System.Windows.Forms.Button
-$browseButton.Text = "Durchsuchen..."
+$browseButton.Text = "Select..."
 $browseButton.Location = New-Object System.Drawing.Point(570,100)
 $browseButton.Width = 180
 $tabCreate.Controls.Add($browseButton)
@@ -319,7 +319,7 @@ $browseButton.Add_Click({
     }
 })
 $createButton = New-Object System.Windows.Forms.Button
-$createButton.Text = "Paket erstellen"
+$createButton.Text = "Create package"
 $createButton.Location = New-Object System.Drawing.Point(100,140)
 $createButton.Width = 180
 $tabCreate.Controls.Add($createButton)
@@ -335,13 +335,13 @@ $tabUpdate.Text = "Updates"
 $tabControl.TabPages.Add($tabUpdate)
 # Label über "Updates suchen"
 $updateHeaderLabel = New-Object System.Windows.Forms.Label
-$updateHeaderLabel.Text = "Vohanden Apps aktualisieren"
+$updateHeaderLabel.Text = "Update existing apps"
 $updateHeaderLabel.Location = New-Object System.Drawing.Point(100,20)
 $updateHeaderLabel.AutoSize = $true
 $updateHeaderLabel.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
 $tabUpdate.Controls.Add($updateHeaderLabel)
 $updateSearchButton = New-Object System.Windows.Forms.Button
-$updateSearchButton.Text = "Updates suchen"
+$updateSearchButton.Text = "Search Updates"
 $updateSearchButton.Location = New-Object System.Drawing.Point(100,50)
 $updateSearchButton.Width = 180
 $tabUpdate.Controls.Add($updateSearchButton)
@@ -350,12 +350,12 @@ $updateDropdown.Location = New-Object System.Drawing.Point(100,90)
 $updateDropdown.Width = 650
 $tabUpdate.Controls.Add($updateDropdown)
 $updateSelectedButton = New-Object System.Windows.Forms.Button
-$updateSelectedButton.Text = "Ausgewählte App updaten"
+$updateSelectedButton.Text = "Update selected apps"
 $updateSelectedButton.Location = New-Object System.Drawing.Point(100,130)
 $updateSelectedButton.Width = 250
 $tabUpdate.Controls.Add($updateSelectedButton)
 $updateAllButton = New-Object System.Windows.Forms.Button
-$updateAllButton.Text = "Alle Apps updaten"
+$updateAllButton.Text = "Update all apps"
 $updateAllButton.Location = New-Object System.Drawing.Point(420,130)
 $updateAllButton.Width = 250
 $tabUpdate.Controls.Add($updateAllButton)
@@ -365,15 +365,15 @@ $tabUpdate.Controls.Add($updateAllButton)
 #$supersededLabel.AutoSize = $true
 #$supersededLabel.Location = New-Object System.Drawing.Point(100, 200)
 #$tabUpdate.Controls.Add($supersededLabel)
-# Label über "Abgelöste Apps suchen"
+# Label über "Search Superseded Apps"
 $supersededHeaderLabel = New-Object System.Windows.Forms.Label
-$supersededHeaderLabel.Text = "Hier kann man abgelöste Apps entfernen"
+$supersededHeaderLabel.Text = "Here you can Search for superseded Apps"
 $supersededHeaderLabel.Location = New-Object System.Drawing.Point(100,170)
 $supersededHeaderLabel.AutoSize = $true
 $supersededHeaderLabel.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
 $tabUpdate.Controls.Add($supersededHeaderLabel)
 $supersededSearchButton = New-Object System.Windows.Forms.Button
-$supersededSearchButton.Text = "Abgelöste Apps suchen"
+$supersededSearchButton.Text = "Search Superseded Apps"
 $supersededSearchButton.Location = New-Object System.Drawing.Point(100,200)
 $supersededSearchButton.Width = 250
 $tabUpdate.Controls.Add($supersededSearchButton)
@@ -390,23 +390,23 @@ $deleteSelectedAppButton.Location = New-Object System.Drawing.Point(100,280)
 $deleteSelectedAppButton.Width = 250
 $tabUpdate.Controls.Add($deleteSelectedAppButton)
 $removeOldAppsButton = New-Object System.Windows.Forms.Button
-$removeOldAppsButton.Text = "Abgelöste Apps entfernen"
+$removeOldAppsButton.Text = "Delete all Superseded Apps"
 $removeOldAppsButton.Location = New-Object System.Drawing.Point(360,280)
 $removeOldAppsButton.Width = 250
 $tabUpdate.Controls.Add($removeOldAppsButton)
 # Hashtable zur Speicherung von AppName → {PackageID, Version}
 $global:packageMap = @{}
 # Modulprüfung
-Update-Status "Prüfe WinTuner Modul..."
+Update-Status "Checking WinTuner Modul..."
 if (Get-Module -ListAvailable -Name WinTuner) {
-    Update-Status "Modul gefunden, prüfe auf Updates..."
+    Update-Status "Module found, searching for updates..."
     Update-Module -Name WinTuner
 } else {
-    Update-Status "Modul nicht gefunden, installiere..."
+    Update-Status "Module not found, install..."
     Install-Module -Name WinTuner -Force
 }
 Import-Module WinTuner
-Update-Status "Modul importiert."
+Update-Status "Module imported."
 # Login button
 $loginButton = New-Object System.Windows.Forms.Button
 $loginButton.Text = "Login to Tenant"
@@ -417,30 +417,30 @@ $form.Controls.Add($loginButton)
 if (Test-ValidM365UserName -UserName $usernameBox.Text) { $loginButton.Enabled = $true } else { $loginButton.Enabled = $false }
 $loginButton.Add_Click({
     if (-not (Test-ValidM365UserName -UserName $usernameBox.Text)) {
-        [System.Windows.Forms.MessageBox]::Show("Bitte geben Sie einen gültigen M365-Benutzernamen (UPN) ein.","Ungültiger Benutzername")
+        [System.Windows.Forms.MessageBox]::Show("Please enter a valid M365 UPN.","Invalid Username")
         return
     }
     try {
-        Update-Status "Verbinde mit Tenant..."
+        Update-Status "Connecting to tenant..."
         $global:isConnected = $false
         $null = Connect-WtWinTuner -Username $usernameBox.Text -ErrorAction Stop
         if (-not (Test-WtConnected)) {
-            throw "Authentifizierung abgebrochen oder fehlgeschlagen."
+            throw "Authentication error or failed."
         }
         $global:isConnected = $true
-        Update-Status "Login erfolgreich."
+        Update-Status "Login success."
         Set-ConnectedUIState -Connected $true
     } catch {
-        Update-Status ("Login abgebrochen/fehlgeschlagen: {0}" -f $_.Exception.Message)
+        Update-Status ("Login cancled/failed: {0}" -f $_.Exception.Message)
         Set-ConnectedUIState -Connected $false
     }
 })
 $searchButton.Add_Click({
     if ($appSearchBox.Text -eq "") {
-        [System.Windows.Forms.MessageBox]::Show("Appsuche ist ein Pflichtfeld.")
+        [System.Windows.Forms.MessageBox]::Show("App Search can´t be empty.")
         return
     }
-    Update-Status "Suche läuft..."
+    Update-Status "Searching..."
     $results = Search-WtWinGetPackage -SearchQuery $appSearchBox.Text
     $dropdown.Items.Clear()
     $global:packageMap.Clear()
@@ -455,7 +455,7 @@ foreach ($result in @($results)) {
     if ($dropdown.Items.Count -gt 0) {
         $dropdown.SelectedIndex = 0
     }
-    Update-Status "Suche abgeschlossen."
+    Update-Status "Search completed."
 })
 $createButton.Add_Click({
     $appName = $dropdown.SelectedItem
@@ -466,14 +466,14 @@ $createButton.Add_Click({
         Update-Status "Paket existiert bereits."
         return
     }
-    Update-Status "Paket wird erstellt..."
+    Update-Status "Creating package..."
     $progressBar.Value = 0
     $progressBar.Visible = $true
     $progressBar.Value = 30
     Start-Sleep -Milliseconds 500
     New-WtWingetPackage -PackageId $packageID -PackageFolder $folder
     $progressBar.Value = 100
-    Update-Status "Paket erfolgreich erstellt."
+    Update-Status "Success creating package."
     $uploadButton.Visible = $true
 })
 $uploadButton.Add_Click({
@@ -482,22 +482,22 @@ $uploadButton.Add_Click({
     $version = $global:packageMap[$appName].Version
     $folder = $pathBox.Text
     if (-not $version) {
-        Update-Status "Version konnte nicht ermittelt werden."
+        Update-Status "Version could not be determined."
         return
     }
     $progressBar.Value = 0
     $progressBar.Visible = $true
-    Update-Status "Starte Upload..."
+    Update-Status "Starting Upload..."
     Start-Sleep -Milliseconds 500
     Deploy-WtWin32App -PackageId $packageID -Version $version -RootPackageFolder $folder
     $progressBar.Value = 100
-    Update-Status "Upload abgeschlossen."
+    Update-Status "Upload completed."
     $uploadButton.Visible = $false
     $appSearchBox.Text = ""
     $dropdown.Items.Clear()
 })
 $updateSearchButton.Add_Click({
-    Update-Status "Suche nach Updates..."
+    Update-Status "Search for updates..."
     try { $tempApps = @(Get-WtWin32Apps -Update $true -Superseded $false) } catch { Write-Verbose "Get-WtWin32Apps update threw: $($_)"; $tempApps = @() }
 $updateDropdown.Items.Clear()
     $global:updateApps = @()
@@ -509,17 +509,17 @@ $updateDropdown.Items.Clear()
     if ($updateDropdown.Items.Count -gt 0) {
         $updateDropdown.SelectedIndex = 0
     }
-    Update-Status "Updatesuche abgeschlossen."
+    Update-Status "Search updates completed"
 })
 $updateSelectedButton.Add_Click({
     $selectedAppName = $updateDropdown.SelectedItem
     $app = $global:updateApps | Where-Object { $_.Name -eq $selectedAppName }
     $rootPackageFolder = $pathBox.Text
     if (-not $app) {
-        Update-Status "Keine gültige App ausgewählt."
+        Update-Status "No valid app selected."
         return
     }
-    Update-Status "Update für $($app.Name) wird durchgeführt..."
+    Update-Status "Update for $($app.Name) is running..."
     $progressBar.Value = 0
     $progressBar.Visible = $true
     $progressBar.Value = 30
@@ -527,11 +527,11 @@ $updateSelectedButton.Add_Click({
     New-WtWingetPackage -PackageId $app.PackageId -PackageFolder $rootPackageFolder -Version $app.LatestVersion |
         Deploy-WtWin32App -GraphId $app.GraphId -KeepAssignments
     $progressBar.Value = 100
-    Update-Status "Update abgeschlossen."
+    Update-Status "Update completed."
 })
 $updateAllButton.Add_Click({
     $rootPackageFolder = $pathBox.Text
-    Update-Status "Starte Massen-Update..."
+    Update-Status "Starting mass update..."
     $progressBar.Value = 0
     $progressBar.Visible = $true
     $progressBar.Value = 10
@@ -544,16 +544,16 @@ $updatedApps = @(($updatedApps | Where-Object { $_.LatestVersion -and $_.Current
             Deploy-WtWin32App -GraphId $app.GraphId -KeepAssignments
     }
     $progressBar.Value = 100
-    Update-Status "Alle Updates abgeschlossen."
+    Update-Status "All Updates Completed"
 })
 $removeOldAppsButton.Add_Click({
     $oldApps = Get-WtWin32Apps -Superseded $true
     if ($oldApps.Count -eq 0) {
-        Update-Status "Keine abgelösten Apps gefunden."
+        Update-Status "No Superseded Apps Found"
         return
     }
     $appNames = ($oldApps | Select-Object -ExpandProperty Name) -join "`r`n"
-    $result = [System.Windows.Forms.MessageBox]::Show("Folgende veraltete Apps werden entfernt:`r`n$appNames", "Bestätigung", "YesNo")
+    $result = [System.Windows.Forms.MessageBox]::Show("The following outdated apps will be removed:`r`n$appNames", "Bestätigung", "YesNo")
     if ($result -eq "Yes") {
         $progressBar.Value = 0
         $progressBar.Visible = $true
@@ -562,15 +562,15 @@ $removeOldAppsButton.Add_Click({
             Update-Status "Entfernt: $($app.Name)"
         }
         $progressBar.Value = 100
-        Update-Status "Alle abgelösten Apps wurden entfernt."
+        Update-Status "Deleted all superseded Apps..."
     } else {
-        Update-Status "Entfernen abgebrochen."
+        Update-Status "Removal aborted."
     }
 })
 # Handler: Abgelöste Apps suchen
 $supersededSearchButton.Add_Click({
     try {
-        Update-Status "Suche nach abgelösten Apps..."
+        Update-Status "Search for superseded apps..."
         $global:supersededApps = Get-WtWin32Apps -Superseded $true
         $supersededDropdown.Items.Clear()
         foreach ($app in @($global:supersededApps)) {
@@ -582,39 +582,39 @@ $supersededSearchButton.Add_Click({
         if ($supersededDropdown.Items.Count -gt 0) { 
             $supersededDropdown.SelectedIndex = 0 
         }
-        Update-Status ("Suche abgeschlossen: {0} abgelöste Apps gefunden." -f $supersededDropdown.Items.Count)
+        Update-Status ("Search completed: {0} superseded Apps found." -f $supersededDropdown.Items.Count)
     } catch {
-        Update-Status ("Fehler bei der Suche: {0}" -f $_.Exception.Message)
+        Update-Status ("Error while search: {0}" -f $_.Exception.Message)
     }
 })
 # Handler: Ausgewählte App löschen
 $deleteSelectedAppButton.Add_Click({
     if (-not $global:supersededApps -or $supersededDropdown.SelectedIndex -lt 0) {
-        Update-Status "Bitte zuerst eine abgelöste App im Dropdown auswählen."
+        Update-Status "Please first select a superseded app from the dropdown."
         return
     }
     $app = $global:supersededApps[$supersededDropdown.SelectedIndex]
-    $result = [System.Windows.Forms.MessageBox]::Show("Soll die App '" + $app.Name + "' gelöscht werden?", "Bestätigung", "YesNo")
+    $result = [System.Windows.Forms.MessageBox]::Show("Delete App '" + $app.Name + "'?", "Bestätigung", "YesNo")
     if ($result -eq "Yes") {
         try {
             Remove-WtWin32App -AppId $app.GraphId
-            Update-Status ("Gelöscht: {0}" -f $app.Name)
+            Update-Status ("Deleted: {0}" -f $app.Name)
         } catch {
-            Update-Status ("Fehler beim Löschen: {0}" -f $_.Exception.Message)
+            Update-Status ("Error while removal: {0}" -f $_.Exception.Message)
         }
     } else {
-        Update-Status "Löschen abgebrochen."
+        Update-Status "Removal aborted."
     }
 })
 $logoutButton.Add_Click({
     Disconnect-WtWinTuner
     $global:isConnected = $false
-    Update-Status "Logout erfolgreich."
+    Update-Status "Logout success."
     Set-ConnectedUIState -Connected $false
 })
 $form.Add_FormClosing({
     Disconnect-WtWinTuner
-    Write-Log "Logout beim Schließen durchgeführt."
+    Write-Log "Logout while closing."
 })
 # Apply initial theme (Dark by default)
 Apply-Theme -control $form -theme $global:currentTheme
