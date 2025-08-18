@@ -367,7 +367,7 @@ $tabUpdate.Controls.Add($updateAllButton)
 #$tabUpdate.Controls.Add($supersededLabel)
 # Label über "Search Superseded Apps"
 $supersededHeaderLabel = New-Object System.Windows.Forms.Label
-$supersededHeaderLabel.Text = "Here you can Search for superseded Apps"
+$supersededHeaderLabel.Text = "Search for superseded Apps"
 $supersededHeaderLabel.Location = New-Object System.Drawing.Point(100,170)
 $supersededHeaderLabel.AutoSize = $true
 $supersededHeaderLabel.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
