@@ -1,6 +1,6 @@
 
 Execute the Powershell Script in Powershell 7.
-
+Or run Run_WinTuner.cmd
 First Login with your Intune Admin or Global Admin.
 
 <img width="1330" height="995" alt="image" src="https://github.com/user-attachments/assets/47e8fa98-b05f-423d-b787-6de9d06acc3f" />
