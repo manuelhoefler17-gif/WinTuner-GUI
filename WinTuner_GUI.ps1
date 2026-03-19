@@ -619,6 +619,7 @@ function Set-ConnectedUIState {
   }
   if ($rememberCheckBox) { $rememberCheckBox.Visible = -not $Connected }
   if ($updateSearchButton) { $updateSearchButton.Enabled = $Connected }
+  if ($scanDiscoveredButton) { $scanDiscoveredButton.Enabled = $Connected }
   if ($updateSelectedButton) { $updateSelectedButton.Enabled = $Connected }
   if ($updateAllButton) { $updateAllButton.Enabled = $Connected }
   if ($supersededSearchButton) { $supersededSearchButton.Enabled = $Connected }
@@ -947,6 +948,70 @@ $removeOldAppsButton.Width = 250
 $removeOldAppsButton.Enabled = $false
 $tabUpdate.Controls.Add($removeOldAppsButton)
 
+# ==================================================
+# Tab: Discovered Apps
+# ==================================================
+$tabDiscovered = New-Object System.Windows.Forms.TabPage
+$tabDiscovered.Text = "Discovered Apps"
+$tabControl.TabPages.Add($tabDiscovered)
+
+$discoveredHeaderLabel = New-Object System.Windows.Forms.Label
+$discoveredHeaderLabel.Text = "Discovered Apps in Intune"
+$discoveredHeaderLabel.Location = New-Object System.Drawing.Point(20,20)
+$discoveredHeaderLabel.AutoSize = $true
+$discoveredHeaderLabel.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
+$tabDiscovered.Controls.Add($discoveredHeaderLabel)
+
+$scanDiscoveredButton = New-Object System.Windows.Forms.Button
+$scanDiscoveredButton.Text = "1. Scan Discovered Apps"
+$scanDiscoveredButton.Location = New-Object System.Drawing.Point(20,50)
+$scanDiscoveredButton.Width = 200
+$scanDiscoveredButton.Enabled = $false
+$tabDiscovered.Controls.Add($scanDiscoveredButton)
+
+$deployDiscoveredButton = New-Object System.Windows.Forms.Button
+$deployDiscoveredButton.Text = "2. Deploy Checked Apps"
+$deployDiscoveredButton.Location = New-Object System.Drawing.Point(230,50)
+$deployDiscoveredButton.Width = 200
+$deployDiscoveredButton.Enabled = $false
+$tabDiscovered.Controls.Add($deployDiscoveredButton)
+
+# --- NEU: Filter & Sortierung ---
+$discoveredFilterLabel = New-Object System.Windows.Forms.Label
+$discoveredFilterLabel.Text = "Filter Publisher:"
+$discoveredFilterLabel.Location = New-Object System.Drawing.Point(440, 25)
+$discoveredFilterLabel.AutoSize = $true
+$tabDiscovered.Controls.Add($discoveredFilterLabel)
+
+$discoveredFilterBox = New-Object System.Windows.Forms.TextBox
+$discoveredFilterBox.Location = New-Object System.Drawing.Point(540, 22)
+$discoveredFilterBox.Width = 150
+$tabDiscovered.Controls.Add($discoveredFilterBox)
+
+$discoveredSortLabel = New-Object System.Windows.Forms.Label
+$discoveredSortLabel.Text = "Sort by:"
+$discoveredSortLabel.Location = New-Object System.Drawing.Point(440, 55)
+$discoveredSortLabel.AutoSize = $true
+$tabDiscovered.Controls.Add($discoveredSortLabel)
+
+$discoveredSortBox = New-Object System.Windows.Forms.ComboBox
+$discoveredSortBox.Location = New-Object System.Drawing.Point(540, 52)
+$discoveredSortBox.Width = 150
+$discoveredSortBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+[void]$discoveredSortBox.Items.Add("Device Count")
+[void]$discoveredSortBox.Items.Add("Alphabetical")
+$discoveredSortBox.SelectedIndex = 0
+$tabDiscovered.Controls.Add($discoveredSortBox)
+
+$discoveredListBox = New-Object System.Windows.Forms.CheckedListBox
+$discoveredListBox.Location = New-Object System.Drawing.Point(20,85)
+$discoveredListBox.Width = 710
+$discoveredListBox.Height = 350
+$discoveredListBox.CheckOnClick = $true
+$discoveredListBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right -bor [System.Windows.Forms.AnchorStyles]::Bottom
+$tabDiscovered.Controls.Add($discoveredListBox)
+
+$script:discoveredRaw = @()
 
 # ==================================================
 # Tab: Settings
@@ -1948,7 +2013,300 @@ $logoutButton.Add_Click({
   Update-Status "Logout success."
   Set-ConnectedUIState -Connected $false
 })
+# ==================================================
+# ==================================================
+# Discovered Apps Handlers
+# ==================================================
 
+# Handler für das Filtern / Sortieren
+function Update-DiscoveredListUI {
+    $discoveredListBox.BeginUpdate()
+    $discoveredListBox.Items.Clear()
+    
+    $filtered = $script:discoveredRaw
+    
+    # Filtern nach Publisher
+    if (-not [string]::IsNullOrWhiteSpace($discoveredFilterBox.Text)) {
+        $filterText = $discoveredFilterBox.Text
+        $filtered = $filtered | Where-Object { $_.Publisher -match $filterText }
+    }
+    
+    # Sortieren
+    if ($discoveredSortBox.Text -eq "Alphabetical") {
+        $filtered = $filtered | Sort-Object DisplayName
+    } else {
+        $filtered = $filtered | Sort-Object DeviceCount -Descending
+    }
+    
+    # Elemente wieder aufbauen
+    foreach ($obj in $filtered) {
+        $idx = $discoveredListBox.Items.Add($obj.DisplayText)
+        $discoveredListBox.SetItemChecked($idx, $obj.Checked)
+    }
+    $discoveredListBox.EndUpdate()
+}
+
+$discoveredFilterBox.Add_TextChanged({ Update-DiscoveredListUI })
+$discoveredSortBox.Add_SelectedIndexChanged({ Update-DiscoveredListUI })
+
+# Wenn ein Haken gesetzt/entfernt wird, Zustand im Array speichern (überlebt Filterung!)
+$discoveredListBox.Add_ItemCheck({
+    param($sender, $e)
+    $itemText = $discoveredListBox.Items[$e.Index]
+    $obj = $script:discoveredRaw | Where-Object { $_.DisplayText -eq $itemText } | Select-Object -First 1
+    if ($obj) {
+        $obj.Checked = ($e.NewValue -eq [System.Windows.Forms.CheckState]::Checked)
+    }
+})
+
+$scanDiscoveredButton.Add_Click({
+  if (-not $script:isConnected) { Update-Status "Please login first."; return }
+  
+  function Get-StringSimilarity {
+      param($str1, $str2)
+      if (-not $str1 -or -not $str2) { return 0 }
+      $clean1 = $str1.ToLower() -replace '[^\w\s]', ' '
+      $clean2 = $str2.ToLower() -replace '[^\w\s]', ' '
+      $words1 = @($clean1 -split '\s+' | Where-Object { $_.Trim() -ne '' })
+      $words2 = @($clean2 -split '\s+' | Where-Object { $_.Trim() -ne '' })
+      if ($words1.Count -eq 0 -or $words2.Count -eq 0) { return 0 }
+      
+      $matchCount = 0
+      foreach ($w in $words1) { if ($words2 -contains $w) { $matchCount++ } }
+      $minWords = [math]::Min($words1.Count, $words2.Count)
+      return [math]::Round(($matchCount / $minWords) * 100)
+  }
+  
+  # Speichere die originalen Streams und schalte sie stumm, um Threading-Crashes zu vermeiden
+  $oldProgress = $ProgressPreference
+  $oldInfo = $InformationPreference
+  $ProgressPreference = 'SilentlyContinue'
+  $InformationPreference = 'SilentlyContinue'
+
+  try {
+    $scanDiscoveredButton.Enabled = $false
+    $deployDiscoveredButton.Enabled = $false
+    $discoveredListBox.Items.Clear()
+    $script:discoveredRaw = @()
+    
+    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+    $progressBar.Visible = $true
+    [System.Windows.Forms.Application]::DoEvents()
+
+    # --- GRAPH-AUTH BLOCK ---
+    $requiredScope = "DeviceManagementApps.Read.All"
+    $mgContext = Get-MgContext -ErrorAction SilentlyContinue
+
+    $needsAuth = $false
+    if (-not $mgContext) {
+        $needsAuth = $true
+    } else {
+        $hasScope = ($mgContext.Scopes -contains $requiredScope) -or ($mgContext.Scopes -contains "DeviceManagementApps.ReadWrite.All")
+        $userMatch = ($mgContext.Account -eq $script:currentUserUpn)
+        if (-not $hasScope -or -not $userMatch) {
+            $needsAuth = $true
+            Update-Status "Clearing old Graph session (Scope missing or wrong Tenant)..."
+            [System.Windows.Forms.Application]::DoEvents()
+            try { Disconnect-MgGraph -ErrorAction SilentlyContinue } catch {}
+        }
+    }
+
+    if ($needsAuth) {
+        Update-Status "Authenticating with MS Graph for $($script:currentUserUpn)..."
+        [System.Windows.Forms.Application]::DoEvents()
+        $tenantDomain = $script:currentUserUpn.Split('@')[1]
+        $null = Connect-MgGraph -TenantId $tenantDomain -Scopes $requiredScope -NoWelcome -ErrorAction Stop *>&1
+    }
+
+    # 1. Vorhandene Apps checken (EXTREM SCHNELL DURCH "Resolve" STATT "Try-Resolve")
+    Update-Status "Loading existing managed apps to filter them out..."
+    [System.Windows.Forms.Application]::DoEvents()
+    $existingApps = @(Get-WtWin32Apps -Superseded:$false -ErrorAction SilentlyContinue 3>$null 4>$null)
+    $existingPackageIds = @()
+    foreach ($eApp in $existingApps) {
+        $id = Resolve-WtWingetId -AppOrResult $eApp
+        if ($id) { $existingPackageIds += $id }
+    }
+
+    # 2. Hole ALLE Discovered Apps aus Intune (inklusive Paginierung)
+    Update-Status "Fetching ALL detected apps from Intune API (this might take a moment)..."
+    [System.Windows.Forms.Application]::DoEvents()
+    
+    $uri = "https://graph.microsoft.com/beta/deviceManagement/detectedApps?`$top=500&`$orderby=deviceCount desc"
+    $detectedApps = @()
+    
+    do {
+        $response = Invoke-MgRestMethod -Uri $uri -Method GET -ErrorAction Stop
+        if ($response.value) { $detectedApps += $response.value }
+        $uri = $response.'@odata.nextLink'
+    } while ($uri)
+
+    if (-not $detectedApps -or $detectedApps.Count -eq 0) {
+        Update-Status "No discovered apps found in Intune."
+        return
+    }
+
+    $filteredApps = @($detectedApps | Where-Object { 
+        $_.publisher -notmatch "(?i)Intel|HP|Dell|Lenovo|AMD|NVIDIA|Realtek|Synaptics|VMware" 
+    })
+
+    $total = $filteredApps.Count
+    $current = 0
+    $matchCount = 0
+
+    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $progressBar.Maximum = $total
+    $progressBar.Value = 0
+
+    foreach ($app in $filteredApps) {
+        $current++
+        $progressBar.Value = $current
+        Update-Status "Analyzing ($current/$total): $($app.displayName)..."
+        [System.Windows.Forms.Application]::DoEvents()
+
+        try {
+            $searchName = $app.displayName -replace '(?i)\s*\(x64\)|\s*\(x86\)|\s*\(64-bit\)|\s*\(32-bit\)', ''
+            $searchName = $searchName -replace '\s+[\d\.]+', ''
+            $searchName = $searchName.Trim()
+
+            if ([string]::IsNullOrWhiteSpace($searchName)) { continue }
+
+            $wingetResults = @(Search-WtWinGetPackage -SearchQuery $searchName -ErrorAction SilentlyContinue 3>$null 4>$null)
+            
+            $bestMatch = $null
+            $highestScore = 0
+            
+            foreach ($wgApp in $wingetResults) {
+                $score = Get-StringSimilarity -str1 $app.displayName -str2 $wgApp.Name
+                if ($score -gt $highestScore) {
+                    $highestScore = $score
+                    $bestMatch = $wgApp
+                }
+            }
+
+            if ($bestMatch -and $highestScore -ge 50) {
+                if ($existingPackageIds -contains $bestMatch.PackageID) { continue }
+
+                # Bilde das Objekt für die Liste
+                $itemObj = [pscustomobject]@{
+                    DisplayName = $app.displayName
+                    Publisher   = $app.publisher
+                    DeviceCount = $app.deviceCount
+                    WingetApp   = $bestMatch
+                    Checked     = $false
+                    DisplayText = "[$($app.deviceCount) PCs] $($app.displayName) ($($app.publisher))  -->  Winget: $($bestMatch.Name)"
+                }
+                $script:discoveredRaw += $itemObj
+                $matchCount++
+            }
+        } catch {}
+    }
+    
+    # Befüllt die Liste initial mit Sortierung
+    Update-DiscoveredListUI
+
+    if ($matchCount -gt 0) {
+        Update-Status "Found $matchCount Winget match(es). Filter, sort, or deploy them!"
+        $deployDiscoveredButton.Enabled = $true
+    } else {
+        Update-Status "No Winget matches found (or all are already managed)."
+    }
+
+  } catch {
+    Update-Status "Error fetching discovered apps: $($_.Exception.Message)"
+    Write-Log "Scan Discovered Error: $($_.Exception.Message)"
+  } finally {
+    $ProgressPreference = $oldProgress
+    $InformationPreference = $oldInfo
+    $scanDiscoveredButton.Enabled = $true
+    $progressBar.Visible = $false
+  }
+})
+
+$deployDiscoveredButton.Add_Click({
+    $checkedItems = @($script:discoveredRaw | Where-Object { $_.Checked })
+    if ($checkedItems.Count -eq 0) { 
+        Update-Status "No apps checked."
+        return 
+    }
+
+    $rootFolder = $script:settings.DefaultPackagePath
+    if (-not $rootFolder) { $rootFolder = "C:\Temp" }
+    if (-not (Test-Path $rootFolder)) { New-Item -ItemType Directory -Path $rootFolder -Force | Out-Null }
+
+    $oldProgress = $ProgressPreference
+    $oldInfo = $InformationPreference
+    $ProgressPreference = 'SilentlyContinue'
+    $InformationPreference = 'SilentlyContinue'
+
+    try {
+        $deployDiscoveredButton.Enabled = $false
+        $scanDiscoveredButton.Enabled = $false
+        
+        $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+        $progressBar.Maximum = $checkedItems.Count
+        $progressBar.Value = 0
+        $progressBar.Visible = $true
+
+        $successCount = 0
+        $failedCount = 0
+        $i = 0
+
+        foreach ($item in $checkedItems) {
+            $i++
+            $progressBar.Value = $i
+            $wingetApp = $item.WingetApp
+            
+            Update-Status "Packaging & Deploying ($i/$($checkedItems.Count)): $($wingetApp.Name)..."
+            [System.Windows.Forms.Application]::DoEvents()
+
+            try {
+                $packageId = $wingetApp.PackageID
+                $version = $wingetApp.Version
+                
+                Write-Log "Creating package for discovered app: $packageId v$version"
+                $pkgRes = New-WingetPackageWithFallback `
+                    -PackageId $packageId `
+                    -PackageFolder $rootFolder `
+                    -LatestVersion $version `
+                    -ErrorAction Stop
+                
+                $effVersion = if ($pkgRes.EffectiveVersion) { $pkgRes.EffectiveVersion } else { $version }
+
+                Write-Log "Uploading new app to tenant: $packageId v$effVersion"
+                Deploy-WtWin32App `
+                    -PackageId $packageId `
+                    -Version $effVersion `
+                    -RootPackageFolder $rootFolder `
+                    -ErrorAction Stop
+                
+                $successCount++
+                Write-Log "Successfully deployed new app: $packageId"
+            } catch {
+                $failedCount++
+                Write-Log "Failed to deploy $($wingetApp.Name): $($_.Exception.Message)"
+            }
+        }
+
+        Update-Status "Deployment complete: $successCount successful, $failedCount failed."
+        [System.Windows.Forms.MessageBox]::Show(
+            "Deployment finished!`n`nSuccessful: $successCount`nFailed: $failedCount`n`nNewly deployed apps will now appear in your Intune tenant.",
+            "Deploy Complete",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+
+    } catch {
+        Update-Status "Deployment error: $($_.Exception.Message)"
+        Write-Log "Deploy Discovered Apps Error: $($_.Exception.Message)"
+    } finally {
+        $ProgressPreference = $oldProgress
+        $InformationPreference = $oldInfo
+        $deployDiscoveredButton.Enabled = $true
+        $scanDiscoveredButton.Enabled = $true
+        $progressBar.Visible = $false
+    }
+})
 # Apply initial theme (Dark by default)
 Apply-Theme -control $form -theme $script:currentTheme
 
