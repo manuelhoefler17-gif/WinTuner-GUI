@@ -624,7 +624,7 @@ function Set-ConnectedUIState {
   if ($supersededSearchButton) { $supersededSearchButton.Enabled = $Connected }
   if ($deleteSelectedAppButton) { $deleteSelectedAppButton.Enabled = $Connected }
   if ($removeOldAppsButton) { $removeOldAppsButton.Enabled = $Connected }
-  if ($loadRollbackAppsButton) { $loadRollbackAppsButton.Enabled = $Connected }
+  
   if ($mapWingetIdButton) { $mapWingetIdButton.Enabled = $Connected }
   if ($loginInfoLabel) {
     $loginInfoLabel.Visible = $Connected
@@ -650,6 +650,7 @@ $themeToggleButton.Text = "Light Mode"  # indicates action from dark -> light
 $themeToggleButton.Location = New-Object System.Drawing.Point(800, 5)
 $themeToggleButton.Size = New-Object System.Drawing.Size(80, 25)
 $themeToggleButton.Add_Click({ Toggle-Theme })
+$themeToggleButton.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
 $form.Controls.Add($themeToggleButton)
 
 # Username label and textbox
@@ -708,12 +709,14 @@ $statusLabel = New-Object System.Windows.Forms.Label
 $statusLabel.Text = ""
 $statusLabel.Location = New-Object System.Drawing.Point(10, 745)
 $statusLabel.Width = 750
+$statusLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $form.Controls.Add($statusLabel)
 
 # Output textbox (Log area below tabs and progress bar)
 $outputBox = New-Object System.Windows.Forms.TextBox
 $outputBox.Location = New-Object System.Drawing.Point(10, 680)
 $outputBox.Size = New-Object System.Drawing.Size(760, 60)
+$outputBox.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $outputBox.Multiline = $true
 $outputBox.ScrollBars = "Vertical"
 $outputBox.ReadOnly = $true
@@ -724,6 +727,7 @@ $progressBar = New-Object System.Windows.Forms.ProgressBar
 $progressBar.Location = New-Object System.Drawing.Point(10, 655)
 $progressBar.Width = 760
 $progressBar.Height = 20
+$progressBar.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $progressBar.Visible = $false
 $form.Controls.Add($progressBar)
 
@@ -747,6 +751,7 @@ $tabControl = New-Object System.Windows.Forms.TabControl
 $tabControl.Location = New-Object System.Drawing.Point(10, 90)
 $tabControl.Size = New-Object System.Drawing.Size(760, 560)
 $tabControl.Visible = $true
+$tabControl.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right -bor [System.Windows.Forms.AnchorStyles]::Bottom
 $form.Controls.Add($tabControl)
 
 # Tab: WinGet Apps
@@ -942,101 +947,6 @@ $removeOldAppsButton.Width = 250
 $removeOldAppsButton.Enabled = $false
 $tabUpdate.Controls.Add($removeOldAppsButton)
 
-# ==================================================
-# Rollback Section
-# ==================================================
-$rollbackHeaderLabel = New-Object System.Windows.Forms.Label
-$rollbackHeaderLabel.Text = "Rollback to previous version"
-$rollbackHeaderLabel.Location = New-Object System.Drawing.Point(100,430)
-$rollbackHeaderLabel.AutoSize = $true
-$rollbackHeaderLabel.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
-$tabUpdate.Controls.Add($rollbackHeaderLabel)
-
-# Dropdown: Select app to rollback (shows all versions)
-$rollbackAppDropdown = New-Object System.Windows.Forms.ComboBox
-$rollbackAppDropdown.Location = New-Object System.Drawing.Point(100,460)
-$rollbackAppDropdown.Width = 300
-$rollbackAppDropdown.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
-$tabUpdate.Controls.Add($rollbackAppDropdown)
-
-# Dropdown for available versions
-$rollbackVersionLabel = New-Object System.Windows.Forms.Label
-$rollbackVersionLabel.Text = "Keep Version:"
-$rollbackVersionLabel.Location = New-Object System.Drawing.Point(410,463)
-$rollbackVersionLabel.AutoSize = $true
-$tabUpdate.Controls.Add($rollbackVersionLabel)
-
-$rollbackVersionDropdown = New-Object System.Windows.Forms.ComboBox
-$rollbackVersionDropdown.Location = New-Object System.Drawing.Point(510,460)
-$rollbackVersionDropdown.Width = 240
-$rollbackVersionDropdown.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
-$tabUpdate.Controls.Add($rollbackVersionDropdown)
-
-# Event: When app selected, load versions
-$rollbackAppDropdown.Add_SelectedIndexChanged({
-  if ($rollbackAppDropdown.SelectedIndex -ge 0) {
-    # Extract app name (remove "(X versions)" suffix)
-    $selectedText = $rollbackAppDropdown.Text
-    $selectedAppName = $selectedText -replace ' \(\d+ versions\)$', ''
-    Update-Status "Loading versions for $selectedAppName..."
-    
-    # Get all versions of this app from Intune
-    $allVersions = @(Get-WtWin32Apps -Superseded:$false) + @(Get-WtWin32Apps -Superseded:$true) | Where-Object { $_.Name -eq $selectedAppName }
-    $script:rollbackVersions = @($allVersions)
-    
-    $rollbackVersionDropdown.Items.Clear()
-    
-    if ($allVersions.Count -eq 0) {
-      [void]$rollbackVersionDropdown.Items.Add("No versions found")
-      $executeRollbackButton.Enabled = $false
-      Update-Status "No versions found for $selectedAppName"
-      return
-    }
-    
-    # Sort by version descending (newest first)
-    $sortedVersions = $allVersions | Sort-Object { 
-      try { [version]$_.CurrentVersion } catch { $_.CurrentVersion }
-    } -Descending
-    
-    $script:rollbackVersions = @($sortedVersions)
-    
-    # Mark newest as NEW, all others as OLD
-    $isFirst = $true
-    foreach ($ver in $sortedVersions) {
-      if ($isFirst) {
-        $status = "Current (NEW)"
-        $isFirst = $false
-      } else {
-        $status = "Old (ROLLBACK)"
-      }
-      $display = "$($ver.CurrentVersion) — $status"
-      [void]$rollbackVersionDropdown.Items.Add($display)
-    }
-    
-    if ($rollbackVersionDropdown.Items.Count -gt 0) {
-      $rollbackVersionDropdown.SelectedIndex = 0
-      $executeRollbackButton.Enabled = $true
-    }
-    
-    Update-Status "Loaded $($allVersions.Count) version(s) for $selectedAppName"
-  }
-})
-
-# Load Apps button
-$loadRollbackAppsButton = New-Object System.Windows.Forms.Button
-$loadRollbackAppsButton.Text = "Load Apps for Rollback"
-$loadRollbackAppsButton.Location = New-Object System.Drawing.Point(100,495)
-$loadRollbackAppsButton.Width = 200
-$loadRollbackAppsButton.Enabled = $false
-$tabUpdate.Controls.Add($loadRollbackAppsButton)
-
-# Execute Rollback button
-$executeRollbackButton = New-Object System.Windows.Forms.Button
-$executeRollbackButton.Text = "🔄 Execute Rollback"
-$executeRollbackButton.Location = New-Object System.Drawing.Point(310,495)
-$executeRollbackButton.Width = 190
-$executeRollbackButton.Enabled = $false
-$tabUpdate.Controls.Add($executeRollbackButton)
 
 # ==================================================
 # Tab: Settings
@@ -2001,327 +1911,8 @@ $supersededSearchButton.Add_Click({
   }
 })
 
-# ==================================================
-# Rollback Handlers
-# ==================================================
-$script:rollbackApps = @()
 
-# Load apps for rollback
-$loadRollbackAppsButton.Add_Click({
-  try {
-    Update-Status "Loading apps with multiple versions..."
-    
-    # Get all apps (current + superseded)
-    $allApps = @(Get-WtWin32Apps -Superseded:$false) + @(Get-WtWin32Apps -Superseded:$true)
-    
-    # Group by name and filter those with > 1 version
-    $appsGrouped = $allApps | Group-Object -Property Name
-    $appsWithMultipleVersions = @($appsGrouped | Where-Object { $_.Count -gt 1 } | Select-Object -ExpandProperty Name | Sort-Object)
-    
-    $rollbackAppDropdown.Items.Clear()
-    foreach ($appName in $appsWithMultipleVersions) {
-      $versionCount = ($appsGrouped | Where-Object { $_.Name -eq $appName }).Count
-      $display = "$appName ($versionCount versions)"
-      [void]$rollbackAppDropdown.Items.Add($display)
-    }
-    
-    if ($rollbackAppDropdown.Items.Count -gt 0) {
-      $rollbackAppDropdown.SelectedIndex = 0
-    } else {
-      Update-Status "No apps with multiple versions found."
-    }
-    
-    Update-Status ("Loaded {0} apps with multiple versions." -f $rollbackAppDropdown.Items.Count)
-  } catch {
-    Update-Status ("Error loading apps: {0}" -f $_.Exception.Message)
-  }
-})
-
-# Execute rollback - Delete all versions except the selected one
-$script:rollbackVersions = @()
-$script:allAppVersions = @()
-
-$executeRollbackButton.Add_Click({
-  if ($rollbackAppDropdown.SelectedIndex -lt 0) {
-    Update-Status "Please select an app first."
-    return
-  }
-  
-  if ($rollbackVersionDropdown.SelectedIndex -lt 0) {
-    Update-Status "Please select version to keep."
-    return
-  }
-  
-  # Extract app name (remove "(X versions)" suffix)
-  $selectedText = $rollbackAppDropdown.Text
-  $appName = $selectedText -replace ' \(\d+ versions\)$', ''
-  $selectedIndex = $rollbackVersionDropdown.SelectedIndex
-  $targetVersion = $script:rollbackVersions[$selectedIndex]
-  $targetVersionNumber = $targetVersion.CurrentVersion
-  
-  # If index > 0, it's an old version (needs full rollback)
-  # If index = 0, it's the newest version (just cleanup)
-  $isOldVersion = ($selectedIndex -gt 0)
-  
-  Write-Log "Rollback: App='$appName', Target='v$targetVersionNumber', Index=$selectedIndex, IsOld=$isOldVersion"
-  
-  # Get all other versions
-  $allVersions = @($script:rollbackVersions)
-  $otherVersions = @($allVersions | Where-Object { $_.GraphId -ne $targetVersion.GraphId })
-  
-  if ($otherVersions.Count -eq 0) {
-    Update-Status "Only one version exists - rollback not needed."
-    [System.Windows.Forms.MessageBox]::Show(
-      "$appName has only one version (v$targetVersionNumber).`n`nRollback is not needed.",
-      "Single Version",
-      [System.Windows.Forms.MessageBoxButtons]::OK,
-      [System.Windows.Forms.MessageBoxIcon]::Information
-    )
-    return
-  }
-  
-  # Confirmation dialog - different message based on old/new
-  $confirmMsg = "Rollback: $appName → v$targetVersionNumber`n`n"
-  
-  if ($isOldVersion) {
-    $confirmMsg += "🔄 Target is OLD version (Rollback)`n`n"
-    $confirmMsg += "This will:`n"
-    $confirmMsg += "1. Delete ALL versions:`n"
-    foreach ($v in $allVersions) {
-      $confirmMsg += "   - $($v.CurrentVersion)`n"
-    }
-    $confirmMsg += "2. Re-deploy v$targetVersionNumber`n`n"
-    $confirmMsg += "❌ ALL ASSIGNMENTS WILL BE LOST!`n"
-    $confirmMsg += "⚠️ You must RE-ASSIGN after rollback!`n`n"
-  } else {
-    $confirmMsg += "✅ Target is NEWEST version (Cleanup)`n`n"
-    $confirmMsg += "This will:`n"
-    $confirmMsg += "1. Delete older versions:`n"
-    foreach ($v in $otherVersions) {
-      $confirmMsg += "   - $($v.CurrentVersion)`n"
-    }
-    $confirmMsg += "2. Keep v$targetVersionNumber`n`n"
-    $confirmMsg += "✅ Assignments will be PRESERVED!`n`n"
-  }
-  
-  $confirmMsg += "Continue?"
-  
-  $confirm = [System.Windows.Forms.MessageBox]::Show(
-    $confirmMsg,
-    "Confirm Rollback",
-    [System.Windows.Forms.MessageBoxButtons]::YesNo,
-    [System.Windows.Forms.MessageBoxIcon]::Warning
-  )
-  
-  if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) {
-    Update-Status "Rollback canceled."
-    return
-  }
-  
-  try {
-    $executeRollbackButton.Enabled = $false
-    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-    $progressBar.Visible = $true
-    
-    if ($isOldVersion) {
-      # Scenario A: Target is old version - REMOVE SUPERSEDENCE and DELETE NEWER
-      Update-Status "Rollback to OLD version: Removing supersedence relationship..."
-      Write-Log "Rollback: Target is old version - removing supersedence and deleting newer versions"
-      
-      # Step 1: Remove supersedence relationships to make old version standalone
-      $newerVersions = @($allVersions | Where-Object { $_.GraphId -ne $targetVersion.GraphId })
-      
-      foreach ($newerVer in $newerVersions) {
-        try {
-          Update-Status "Removing supersedence from v$($newerVer.CurrentVersion)..."
-          Write-Log "Removing supersedence relationship for $($newerVer.Name) v$($newerVer.CurrentVersion) (GraphId: $($newerVer.GraphId))"
-          
-          # Try direct REST API call using Invoke-RestMethod with existing token
-          $uri = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$($newerVer.GraphId)"
-          
-          # Get current app details first to preserve properties
-          $currentAppArray = @(Get-WtWin32Apps | Where-Object { $_.GraphId -eq $newerVer.GraphId })
-          $currentApp = if ($currentAppArray.Count -gt 0) { $currentAppArray[0] } else { $null }
-          
-          if ($currentApp) {
-            # Create minimal update body to clear relationships
-            $updateBody = @{
-              "@odata.type" = "#microsoft.graph.win32LobApp"
-              supersedingAppRelationships = @()
-              supersededAppRelationships = @()
-            } | ConvertTo-Json -Depth 10
-            
-            # Get auth token from WinTuner session
-            try {
-              $token = Get-MgContext | Select-Object -ExpandProperty AuthType
-              if (-not $token) {
-                throw "No auth token available"
-              }
-              
-              $headers = @{
-                "Authorization" = "Bearer $token"
-                "Content-Type" = "application/json"
-              }
-              
-              Invoke-RestMethod -Uri $uri -Method PATCH -Headers $headers -Body $updateBody -ErrorAction Stop
-              Write-Log "Supersedence relationship removed from v$($newerVer.CurrentVersion) via REST API"
-              
-            } catch {
-              Write-Log "Direct REST API failed: $($_.Exception.Message)"
-              Write-Log "Supersedence removal may have failed - will try to delete anyway"
-            }
-          } else {
-            Write-Log "Could not find app details for GraphId $($newerVer.GraphId)"
-          }
-          
-        } catch {
-          Write-Log "Could not remove supersedence from v$($newerVer.CurrentVersion): $($_.Exception.Message)"
-          Write-Log "Will attempt deletion anyway (may fail if still parent)"
-        }
-      }
-      
-      # Small delay to let relationship updates propagate
-      Start-Sleep -Seconds 2
-      
-      # Step 2: Delete ALL versions in correct order (oldest to newest = children before parents)
-      # This includes the target version temporarily, then we'll redeploy it
-      Update-Status "Deleting all versions in correct order..."
-      Write-Log "Since supersedence removal may have failed, deleting all versions and redeploying target"
-      
-      # Sort all versions: oldest first (so children get deleted before parents)
-      $allVersionsSorted = @($allVersions | Sort-Object { try { [version]$_.CurrentVersion } catch { $_.CurrentVersion } })
-      
-      $deletedCount = 0
-      $failedCount = 0
-      
-      foreach ($ver in $allVersionsSorted) {
-        try {
-          Update-Status "Deleting v$($ver.CurrentVersion)..."
-          Remove-WtWin32App -GraphId $ver.GraphId -ErrorAction Stop
-          Write-Log "Deleted: v$($ver.CurrentVersion)"
-          $deletedCount++
-        } catch {
-          Write-Log "Failed to delete v$($ver.CurrentVersion): $($_.Exception.Message)"
-          $failedCount++
-        }
-      }
-      
-      # Step 3: Re-deploy the target version
-      if ($deletedCount -gt 0) {
-        Update-Status "Re-deploying target version v$targetVersionNumber..."
-        Write-Log "Re-deploying $appName v$targetVersionNumber"
-        
-        try {
-          $wingetId = Try-ResolveWingetIdForApp -App $targetVersion
-          if ([string]::IsNullOrWhiteSpace($wingetId)) {
-            throw "Cannot determine WingetId for $appName"
-          }
-          
-          $rootFolder = $pathBox.Text
-          $resPkg = New-WingetPackageWithFallback `
-            -PackageId $wingetId `
-            -PackageFolder $rootFolder `
-            -DesiredVersion $targetVersionNumber `
-            -LatestVersion $targetVersionNumber `
-            -InstalledVersion "" `
-            -ErrorAction Stop
-          
-          if (-not $resPkg -or -not $resPkg.Succeeded) {
-            throw "Package creation failed"
-          }
-          
-          Deploy-WtWin32App `
-            -PackageId $wingetId `
-            -Version $targetVersionNumber `
-            -RootPackageFolder $rootFolder `
-            -ErrorAction Stop
-          
-          Write-Log "Target version v$targetVersionNumber re-deployed successfully"
-          
-        } catch {
-          Write-Log "ERROR: Failed to re-deploy v${targetVersionNumber}: $($_.Exception.Message)"
-          throw "Rollback partially completed but re-deployment failed. You may need to manually deploy v$targetVersionNumber"
-        }
-      }
-      
-      Update-Status "Rollback completed: $appName v$targetVersionNumber deployed"
-      Write-Log "Rollback completed: Deleted $deletedCount version(s), $failedCount failed, re-deployed v$targetVersionNumber"
-      
-      [System.Windows.Forms.MessageBox]::Show(
-        "Rollback successful!`n`n$appName v$targetVersionNumber has been deployed.`n`nDeleted: $deletedCount version(s)`nFailed: $failedCount`n`n⚠️ You need to RE-ASSIGN this app to groups!",
-        "Rollback Complete - Re-assign Required",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Warning
-      )
-      
-    } else {
-      # Scenario B: Target is current (new) - DELETE OTHERS, KEEP TARGET
-      Update-Status "Keeping v$targetVersionNumber, deleting others..."
-      Write-Log "Rollback: Target is current - deleting $($otherVersions.Count) other versions, keeping v$targetVersionNumber"
-      
-      $deletedCount = 0
-      $failedCount = 0
-      
-      # Delete superseded first (children), then current (parents)
-      $supersededToDelete = @($otherVersions | Where-Object { $_.Superseded })
-      $currentToDelete = @($otherVersions | Where-Object { -not $_.Superseded })
-      
-      foreach ($ver in $supersededToDelete) {
-        try {
-          Update-Status "Deleting old version $($ver.CurrentVersion)..."
-          Remove-WtWin32App -GraphId $ver.GraphId -ErrorAction Stop
-          Write-Log "Deleted: $($ver.CurrentVersion) (superseded)"
-          $deletedCount++
-        } catch {
-          Write-Log "Failed to delete $($ver.CurrentVersion): $($_.Exception.Message)"
-          $failedCount++
-        }
-      }
-      
-      foreach ($ver in $currentToDelete) {
-        try {
-          Update-Status "Deleting version $($ver.CurrentVersion)..."
-          Remove-WtWin32App -GraphId $ver.GraphId -ErrorAction Stop
-          Write-Log "Deleted: $($ver.CurrentVersion) (current)"
-          $deletedCount++
-        } catch {
-          Write-Log "Failed to delete $($ver.CurrentVersion): $($_.Exception.Message)"
-          $failedCount++
-        }
-      }
-      
-      Update-Status "Rollback completed: $appName v$targetVersionNumber is now the only version"
-      Write-Log "Rollback completed: Deleted $deletedCount, failed $failedCount, kept v$targetVersionNumber"
-      
-      [System.Windows.Forms.MessageBox]::Show(
-        "Rollback successful!`n`n$appName v$targetVersionNumber is now the only version.`n`nDeleted: $deletedCount`nFailed: $failedCount`n`n✅ Assignments preserved!",
-        "Rollback Complete",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Information
-      )
-    }
-    
-    # Refresh lists
-    $rollbackAppDropdown.Items.Clear()
-    $rollbackVersionDropdown.Items.Clear()
-    $executeRollbackButton.Enabled = $false
-    
-  } catch {
-    $errorMsg = $_.Exception.Message
-    Update-Status "Rollback failed: $errorMsg"
-    Write-Log "Rollback error: $errorMsg"
-    
-    [System.Windows.Forms.MessageBox]::Show(
-      "Rollback failed!`n`n$errorMsg",
-      "Rollback Error",
-      [System.Windows.Forms.MessageBoxButtons]::OK,
-      [System.Windows.Forms.MessageBoxIcon]::Error
-    )
-  } finally {
-    $progressBar.Visible = $false
-    $executeRollbackButton.Enabled = $true
-  }
-})
+ 
 
 # Handler: Delete selected superseded app
 $deleteSelectedAppButton.Add_Click({
