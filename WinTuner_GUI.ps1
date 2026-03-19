@@ -91,9 +91,11 @@ function Try-ResolveWingetIdForApp {
     $res = @(Search-WtWinGetPackage -SearchQuery $App.Name)
   } catch { $res = @() }
   if ($res -and $res.Count -gt 0) {
-    $exact = $res | Where-Object { $_.Name -and ($_.Name -eq $App.Name) } | Select-Object -First 1
-    if ($exact -and $exact.PackageID) { return [string]$exact.PackageID }
-    $first = $res | Select-Object -First 1
+    # OHNE Select-Object -First 1, stattdessen Array-Zugriff [0]
+    $exact = @($res | Where-Object { $_.Name -and ($_.Name -eq $App.Name) })
+    if ($exact.Count -gt 0 -and $exact[0].PackageID) { return [string]$exact[0].PackageID }
+    
+    $first = $res[0]
     if ($first -and $first.PackageID) { return [string]$first.PackageID }
   }
   return $null
@@ -588,8 +590,12 @@ function Test-ValidM365UserName {
 # Helper: check if WinTuner is connected (simple smoke test)
 function Test-WtConnected {
   try {
-    $null = Get-WtWin32Apps -Update:$false -Superseded:$false -ErrorAction Stop | Select-Object -First 1 | Out-Null
-    return $true
+    # OHNE Select-Object -First 1, um den WinForms Pipeline Crash beim Login zu vermeiden
+    $apps = Get-WtWin32Apps -Update:$false -Superseded:$false -ErrorAction Stop
+    foreach ($app in $apps) {
+        return $true # Verlässt die Überprüfung sicher beim ersten gefundenen Element
+    }
+    return $true # Falls 0 Apps vorhanden sind, aber auch kein Fehler auftrat
   } catch { return $false }
 }
 
@@ -2125,7 +2131,8 @@ $executeRollbackButton.Add_Click({
           $uri = "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$($newerVer.GraphId)"
           
           # Get current app details first to preserve properties
-          $currentApp = Get-WtWin32Apps | Where-Object { $_.GraphId -eq $newerVer.GraphId } | Select-Object -First 1
+          $currentAppArray = @(Get-WtWin32Apps | Where-Object { $_.GraphId -eq $newerVer.GraphId })
+          $currentApp = if ($currentAppArray.Count -gt 0) { $currentAppArray[0] } else { $null }
           
           if ($currentApp) {
             # Create minimal update body to clear relationships
