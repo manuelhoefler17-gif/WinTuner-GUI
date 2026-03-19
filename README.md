@@ -27,7 +27,6 @@
 
 - 🔍 **Search & Deploy**: Search WinGet packages and deploy them to Intune
 - 🔄 **Update Management**: Check for and deploy updates to existing Intune apps
-- ⏮️ **Version Rollback**: Roll back apps to previous versions
 - ⚙️ **Persistent Settings**: Save your preferences and configurations
 - 🤖 **Auto-Update Check**: Automatically check for updates on login
 
@@ -47,16 +46,6 @@
 - Check All / Uncheck All functionality
 - Detailed progress indication
 - Auto-check for updates on login (optional)
-
-### ⏮️ Rollback Functionality
-- View all versions of an app in Intune
-- Select which version to keep
-- Two rollback modes:
-  - **Old Version Rollback**: Delete all versions and redeploy an older version
-  - **Cleanup Mode**: Keep newest version, remove all others
-- Smart deletion order (prevents parent-child conflicts)
-- Clear warnings about assignment loss
-- Only shows apps with multiple versions
 
 ### ⚙️ Settings & Configuration
 - **Default Package Path**: Set your preferred package storage location
