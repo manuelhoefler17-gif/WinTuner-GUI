@@ -20,22 +20,22 @@ Add-Type -AssemblyName System.Drawing
 
 # Configure error handling for WinForms event handlers
 # Suppress Write-* cmdlet errors that occur from non-pipeline threads
-$ErrorActionPreference = 'SilentlyContinue'
-$WarningPreference = 'SilentlyContinue'
-$InformationPreference = 'SilentlyContinue'
-$VerbosePreference = 'SilentlyContinue'
-$DebugPreference = 'SilentlyContinue'
-$ProgressPreference = 'SilentlyContinue'
+#$ErrorActionPreference = 'SilentlyContinue'
+#$WarningPreference = 'SilentlyContinue'
+#$InformationPreference = 'SilentlyContinue'
+#$VerbosePreference = 'SilentlyContinue'
+#$DebugPreference = 'SilentlyContinue'
+#$ProgressPreference = 'SilentlyContinue'
 
 # Redirect all output streams to prevent threading issues
-$PSDefaultParameterValues = @{
-  '*:ErrorAction' = 'SilentlyContinue'
-  '*:WarningAction' = 'SilentlyContinue'
-  '*:InformationAction' = 'SilentlyContinue'
-  '*:ProgressAction' = 'SilentlyContinue'
-  '*:Verbose' = $false
-  '*:Debug' = $false
-}
+#$PSDefaultParameterValues = @{
+#  '*:ErrorAction' = 'SilentlyContinue'
+#  '*:WarningAction' = 'SilentlyContinue'
+#  '*:InformationAction' = 'SilentlyContinue'
+#  '*:ProgressAction' = 'SilentlyContinue'
+#  '*:Verbose' = $false
+#  '*:Debug' = $false
+#}
 
 # Version comparison helper: returns $true if Latest > Current
 function Test-IsNewerVersion {
@@ -130,8 +130,8 @@ function Get-WingetVersions {
   param([string]$PackageId)
   
   # Check cache first (speeds up repeated searches)
-  if ($global:wingetVersionCache.ContainsKey($PackageId)) {
-    return $global:wingetVersionCache[$PackageId]
+  if ($script:wingetVersionCache.ContainsKey($PackageId)) {
+    return $script:wingetVersionCache[$PackageId]
   }
   
   # Query winget
@@ -160,7 +160,7 @@ function Get-WingetVersions {
   }
   
   # Cache result for future use
-  $global:wingetVersionCache[$PackageId] = $result
+  $script:wingetVersionCache[$PackageId] = $result
   
   return $result
 }
@@ -359,7 +359,7 @@ function Update-SingleApp {
 }
 
 # Dark mode theme colors
-$global:darkTheme = @{
+$script:darkTheme = @{
   BackColor       = [System.Drawing.Color]::FromArgb(32, 32, 32)
   ForeColor       = [System.Drawing.Color]::FromArgb(255, 255, 255)
   ButtonBackColor = [System.Drawing.Color]::FromArgb(64, 64, 64)
@@ -370,7 +370,7 @@ $global:darkTheme = @{
   TabForeColor    = [System.Drawing.Color]::FromArgb(255, 255, 255)
 }
 # Light mode theme colors
-$global:lightTheme = @{
+$script:lightTheme = @{
   BackColor       = [System.Drawing.Color]::FromArgb(240, 240, 240)
   ForeColor       = [System.Drawing.Color]::FromArgb(0, 0, 0)
   ButtonBackColor = [System.Drawing.Color]::FromArgb(225, 225, 225)
@@ -381,8 +381,8 @@ $global:lightTheme = @{
   TabForeColor    = [System.Drawing.Color]::FromArgb(0, 0, 0)
 }
 
-$global:isDarkMode   = $true
-$global:currentTheme = $global:darkTheme
+$script:isDarkMode   = $true
+$script:currentTheme = $script:darkTheme
 
 # Function to apply theme to all controls
 function Apply-Theme {
@@ -432,11 +432,11 @@ function Apply-Theme {
 
 # Function to toggle theme
 function Toggle-Theme {
-  $global:isDarkMode   = -not $global:isDarkMode
-  $global:currentTheme = if ($global:isDarkMode) { $global:darkTheme } else { $global:lightTheme }
-  Apply-Theme -control $form -theme $global:currentTheme
+  $script:isDarkMode   = -not $script:isDarkMode
+  $script:currentTheme = if ($script:isDarkMode) { $script:darkTheme } else { $script:lightTheme }
+  Apply-Theme -control $form -theme $script:currentTheme
   # Button text indicates the action (target)
-  $themeToggleButton.Text = if ($global:isDarkMode) { "Light Mode" } else { "Dark Mode" }
+  $themeToggleButton.Text = if ($script:isDarkMode) { "Light Mode" } else { "Dark Mode" }
   $form.Refresh()
 }
 
@@ -628,15 +628,15 @@ function Set-ConnectedUIState {
   if ($mapWingetIdButton) { $mapWingetIdButton.Enabled = $Connected }
   if ($loginInfoLabel) {
     $loginInfoLabel.Visible = $Connected
-    if ($Connected -and $global:currentUserUpn) { $loginInfoLabel.Text = "Logged in as: $($global:currentUserUpn)" }
+    if ($Connected -and $script:currentUserUpn) { $loginInfoLabel.Text = "Logged in as: $($script:currentUserUpn)" }
   }
 }
 
-$global:isConnected = $false
-$global:currentUserUpn = ""
+$script:isConnected = $false
+$script:currentUserUpn = ""
 
 # Track effective built versions per PackageId
-$global:builtVersions = @{}
+$script:builtVersions = @{}
 
 # Create form
 $form = New-Object System.Windows.Forms.Form
@@ -982,7 +982,7 @@ $rollbackAppDropdown.Add_SelectedIndexChanged({
     
     # Get all versions of this app from Intune
     $allVersions = @(Get-WtWin32Apps -Superseded:$false) + @(Get-WtWin32Apps -Superseded:$true) | Where-Object { $_.Name -eq $selectedAppName }
-    $global:rollbackVersions = @($allVersions)
+    $script:rollbackVersions = @($allVersions)
     
     $rollbackVersionDropdown.Items.Clear()
     
@@ -998,7 +998,7 @@ $rollbackAppDropdown.Add_SelectedIndexChanged({
       try { [version]$_.CurrentVersion } catch { $_.CurrentVersion }
     } -Descending
     
-    $global:rollbackVersions = @($sortedVersions)
+    $script:rollbackVersions = @($sortedVersions)
     
     # Mark newest as NEW, all others as OLD
     $isFirst = $true
@@ -1063,7 +1063,7 @@ $tabSettings.Controls.Add($defaultPathLabel)
 $defaultPathTextBox = New-Object System.Windows.Forms.TextBox
 $defaultPathTextBox.Location = New-Object System.Drawing.Point(200,57)
 $defaultPathTextBox.Width = 400
-$defaultPathTextBox.Text = if ($global:settings.DefaultPackagePath) { $global:settings.DefaultPackagePath } else { "C:\Temp" }
+$defaultPathTextBox.Text = if ($script:settings.DefaultPackagePath) { $script:settings.DefaultPackagePath } else { "C:\Temp" }
 $tabSettings.Controls.Add($defaultPathTextBox)
 
 $browsePathButton = New-Object System.Windows.Forms.Button
@@ -1077,7 +1077,7 @@ $autoCheckUpdatesCheckbox = New-Object System.Windows.Forms.CheckBox
 $autoCheckUpdatesCheckbox.Text = "Check for updates on login"
 $autoCheckUpdatesCheckbox.Location = New-Object System.Drawing.Point(20,100)
 $autoCheckUpdatesCheckbox.AutoSize = $true
-$autoCheckUpdatesCheckbox.Checked = if ($global:settings.AutoCheckUpdates) { $global:settings.AutoCheckUpdates } else { $false }
+$autoCheckUpdatesCheckbox.Checked = if ($script:settings.AutoCheckUpdates) { $script:settings.AutoCheckUpdates } else { $false }
 $tabSettings.Controls.Add($autoCheckUpdatesCheckbox)
 
 # RememberMe Checkbox (moved to settings)
@@ -1085,7 +1085,7 @@ $rememberMeCheckbox = New-Object System.Windows.Forms.CheckBox
 $rememberMeCheckbox.Text = "Remember last username"
 $rememberMeCheckbox.Location = New-Object System.Drawing.Point(20,130)
 $rememberMeCheckbox.AutoSize = $true
-$rememberMeCheckbox.Checked = if ($global:settings.RememberMe) { $global:settings.RememberMe } else { $false }
+$rememberMeCheckbox.Checked = if ($script:settings.RememberMe) { $script:settings.RememberMe } else { $false }
 $tabSettings.Controls.Add($rememberMeCheckbox)
 
 # Save Settings Button
@@ -1111,13 +1111,13 @@ $browsePathButton.Add_Click({
 # Save Settings Button Handler
 $saveSettingsButton.Add_Click({
   try {
-    $global:settings.DefaultPackagePath = $defaultPathTextBox.Text
-    $global:settings.AutoCheckUpdates = $autoCheckUpdatesCheckbox.Checked
-    $global:settings.RememberMe = $rememberMeCheckbox.Checked
+    $script:settings.DefaultPackagePath = $defaultPathTextBox.Text
+    $script:settings.AutoCheckUpdates = $autoCheckUpdatesCheckbox.Checked
+    $script:settings.RememberMe = $rememberMeCheckbox.Checked
     
     # Update pathBox on WinGet Apps tab with new default
     if ($pathBox) {
-      $pathBox.Text = $global:settings.DefaultPackagePath
+      $pathBox.Text = $script:settings.DefaultPackagePath
     }
     
     Save-Settings
@@ -1143,14 +1143,14 @@ $saveSettingsButton.Add_Click({
 })
 
 # Hashtable: AppName -> {PackageID, Version}
-$global:packageMap = @{}
+$script:packageMap = @{}
 
 # Optional: user-chosen versions per PackageID
-$global:selectedPackageVersions = @{}
+$script:selectedPackageVersions = @{}
 
 # Cache for winget searches to speed up repeated searches
-$global:wingetVersionCache = @{}  # PackageId -> @(versions)
-$global:lastUpdateSearch = $null  # Timestamp of last update search
+$script:wingetVersionCache = @{}  # PackageId -> @(versions)
+$script:lastUpdateSearch = $null  # Timestamp of last update search
 
 # Module check
 Update-Status "Checking WinTuner Module..."
@@ -1227,8 +1227,8 @@ $rememberCheckBox.AutoSize = $true
 $rememberCheckBox.Checked = $false
 $form.Controls.Add($rememberCheckBox)
 
-$global:settingsPath = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'WinTunerGUI\settings.json'
-$global:settings = @{ 
+$script:settingsPath = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'WinTunerGUI\settings.json'
+$script:settings = @{ 
   RememberMe = $false
   LastUser = ""
   WingetOverrides = @{}
@@ -1238,57 +1238,57 @@ $global:settings = @{
 
 function Load-Settings {
   try {
-    if (Test-Path $global:settingsPath) {
-      $o = Get-Content -Path $global:settingsPath -Raw -ErrorAction Stop | ConvertFrom-Json
+    if (Test-Path $script:settingsPath) {
+      $o = Get-Content -Path $script:settingsPath -Raw -ErrorAction Stop | ConvertFrom-Json
       if ($o) {
-        $global:settings.RememberMe = [bool]$o.RememberMe
-        $global:settings.LastUser = [string]$o.LastUser
+        $script:settings.RememberMe = [bool]$o.RememberMe
+        $script:settings.LastUser = [string]$o.LastUser
         
         # New settings with defaults
         if ($o.PSObject.Properties['DefaultPackagePath']) {
-          $global:settings.DefaultPackagePath = [string]$o.DefaultPackagePath
+          $script:settings.DefaultPackagePath = [string]$o.DefaultPackagePath
         } else {
-          $global:settings.DefaultPackagePath = "C:\Temp"
+          $script:settings.DefaultPackagePath = "C:\Temp"
         }
         
         if ($o.PSObject.Properties['AutoCheckUpdates']) {
-          $global:settings.AutoCheckUpdates = [bool]$o.AutoCheckUpdates
+          $script:settings.AutoCheckUpdates = [bool]$o.AutoCheckUpdates
         } else {
-          $global:settings.AutoCheckUpdates = $false
+          $script:settings.AutoCheckUpdates = $false
         }
         
         if ($o.PSObject.Properties['WingetOverrides']) {
           # Convert PSCustomObject to hashtable
           $ht = @{}
           foreach ($p in $o.WingetOverrides.PSObject.Properties) { $ht[$p.Name] = [string]$p.Value }
-          $global:settings.WingetOverrides = $ht
-        } else { $global:settings.WingetOverrides = @{} }
+          $script:settings.WingetOverrides = $ht
+        } else { $script:settings.WingetOverrides = @{} }
       }
     }
   } catch {
-    Write-Log "Warning: Failed to load settings from $($global:settingsPath): $($_.Exception.Message)"
+    Write-Log "Warning: Failed to load settings from $($script:settingsPath): $($_.Exception.Message)"
     # Continue with default settings
   }
 }
 
 function Save-Settings {
   try {
-    $dir = Split-Path -Parent $global:settingsPath
+    $dir = Split-Path -Parent $script:settingsPath
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    ($global:settings | ConvertTo-Json -Compress) | Set-Content -Path $global:settingsPath -Encoding utf8
+    ($script:settings | ConvertTo-Json -Compress) | Set-Content -Path $script:settingsPath -Encoding utf8
   } catch {
-    Write-Log "Error: Failed to save settings to $($global:settingsPath): $($_.Exception.Message)"
+    Write-Log "Error: Failed to save settings to $($script:settingsPath): $($_.Exception.Message)"
   }
 }
 
 Load-Settings
-$rememberCheckBox.Checked = [bool]$global:settings.RememberMe
-if ($global:settings.RememberMe -and $global:settings.LastUser) { $usernameBox.Text = $global:settings.LastUser } else { $usernameBox.Text = "" }
+$rememberCheckBox.Checked = [bool]$script:settings.RememberMe
+if ($script:settings.RememberMe -and $script:settings.LastUser) { $usernameBox.Text = $script:settings.LastUser } else { $usernameBox.Text = "" }
 
 # Initialize pathBox with saved default package path
 if ($pathBox) {
-  if ($global:settings.DefaultPackagePath) {
-    $pathBox.Text = $global:settings.DefaultPackagePath
+  if ($script:settings.DefaultPackagePath) {
+    $pathBox.Text = $script:settings.DefaultPackagePath
   } else {
     $pathBox.Text = "C:\Temp"
   }
@@ -1296,8 +1296,8 @@ if ($pathBox) {
 
 $rememberCheckBox.Add_CheckedChanged({
   try {
-    $global:settings.RememberMe = [bool]$rememberCheckBox.Checked
-    if ($global:settings.RememberMe) { $global:settings.LastUser = $usernameBox.Text } else { $global:settings.LastUser = "" }
+    $script:settings.RememberMe = [bool]$rememberCheckBox.Checked
+    if ($script:settings.RememberMe) { $script:settings.LastUser = $usernameBox.Text } else { $script:settings.LastUser = "" }
     Save-Settings
   } catch {
     Write-Log "Error in RememberMe checkbox handler: $($_.Exception.Message)"
@@ -1316,20 +1316,20 @@ $loginButton.Add_Click({
   }
   try {
     Update-Status "Connecting to tenant..."
-    $global:isConnected = $false
+    $script:isConnected = $false
     $null = Connect-WtWinTuner -Username $usernameBox.Text -ErrorAction Stop
     if (-not (Test-WtConnected)) { throw "Authentication error or failed." }
-    $global:isConnected = $true
+    $script:isConnected = $true
     Update-Status "Login success."
-    $global:currentUserUpn = $usernameBox.Text
-    if ($loginInfoLabel) { $loginInfoLabel.Text = "Logged in as: $($global:currentUserUpn)" }
-    if ($rememberCheckBox) { $global:settings.RememberMe = [bool]$rememberCheckBox.Checked }
-    if ($global:settings.RememberMe) { $global:settings.LastUser = $usernameBox.Text } else { $global:settings.LastUser = "" }
+    $script:currentUserUpn = $usernameBox.Text
+    if ($loginInfoLabel) { $loginInfoLabel.Text = "Logged in as: $($script:currentUserUpn)" }
+    if ($rememberCheckBox) { $script:settings.RememberMe = [bool]$rememberCheckBox.Checked }
+    if ($script:settings.RememberMe) { $script:settings.LastUser = $usernameBox.Text } else { $script:settings.LastUser = "" }
     Save-Settings
     Set-ConnectedUIState -Connected $true
     
     # Auto-check for updates if enabled
-    if ($global:settings.AutoCheckUpdates) {
+    if ($script:settings.AutoCheckUpdates) {
       Write-Log "Auto-check for updates enabled - triggering update search"
       Update-Status "Auto-checking for updates..."
       try {
@@ -1362,11 +1362,11 @@ $searchButton.Add_Click({
     Update-Status "Searching..."
     $results = Search-WtWinGetPackage -SearchQuery $appSearchBox.Text
     $dropdown.Items.Clear()
-    $global:packageMap.Clear()
+    $script:packageMap.Clear()
     foreach ($result in @($results)) {
       $displayText = "$($result.Name) — $($result.PackageID)"
       [void]$dropdown.Items.Add($displayText)
-      $global:packageMap[$displayText] = @{
+      $script:packageMap[$displayText] = @{
         PackageID = $result.PackageID
         Version   = $result.Version
       }
@@ -1381,14 +1381,14 @@ $searchButton.Add_Click({
 $versionsButton.Add_Click({
   if (-not $dropdown.SelectedItem) { Update-Status "Please select a package first."; return }
   $appName  = $dropdown.SelectedItem
-  $package  = $global:packageMap[$appName]
+  $package  = $script:packageMap[$appName]
   if (-not $package -or -not $package.PackageID) { Update-Status "Selected item is invalid."; return }
   $packageID = $package.PackageID
   $versions = @(Get-WingetVersions -PackageId $packageID)
   if (-not $versions -or $versions.Count -eq 0) { Update-Status "No versions found for the selected package."; return }
   $chosen = Show-VersionPickerDialog -Title ("Select version for {0}" -f $packageID) -Versions $versions
   if ($chosen) {
-    $global:selectedPackageVersions[$packageID] = $chosen
+    $script:selectedPackageVersions[$packageID] = $chosen
     Update-Status ("Selected version for {0}: {1}" -f $packageID, $chosen)
   } else {
     Update-Status "Version selection canceled."
@@ -1398,7 +1398,7 @@ $versionsButton.Add_Click({
 $createButton.Add_Click({
   if (-not $dropdown.SelectedItem) { Update-Status "Please select a package."; return }
   $appName  = $dropdown.SelectedItem
-  $package  = $global:packageMap[$appName]
+  $package  = $script:packageMap[$appName]
   if (-not $package -or -not $package.PackageID) { Update-Status "Selected item is invalid."; return }
   $packageID = $package.PackageID
   $folder    = $pathBox.Text
@@ -1428,8 +1428,8 @@ $createButton.Add_Click({
     [System.Windows.Forms.Application]::DoEvents()  # Update UI
     
     $desired = $null
-    if ($global:selectedPackageVersions.ContainsKey($packageID)) { 
-      $desired = $global:selectedPackageVersions[$packageID] 
+    if ($script:selectedPackageVersions.ContainsKey($packageID)) { 
+      $desired = $script:selectedPackageVersions[$packageID] 
     }
     
     $resPkg = New-WingetPackageWithFallback `
@@ -1445,7 +1445,7 @@ $createButton.Add_Click({
       if (-not $effectiveVersion) { $effectiveVersion = $package.Version }
       Update-Status ("Package created successfully (version {0})" -f $effectiveVersion)
       $uploadButton.Visible = $true
-      if ($effectiveVersion) { $global:builtVersions[$packageID] = $effectiveVersion }
+      if ($effectiveVersion) { $script:builtVersions[$packageID] = $effectiveVersion }
     } else {
       Update-Status "Package creation failed"
     }
@@ -1460,7 +1460,7 @@ $createButton.Add_Click({
 })
 
 $uploadButton.Add_Click({
-    if (-not $global:isConnected) {
+    if (-not $script:isConnected) {
         [void][System.Windows.Forms.MessageBox]::Show(
             "Please login to your tenant first.",
             "Information",
@@ -1471,12 +1471,12 @@ $uploadButton.Add_Click({
     }
     if (-not $dropdown.SelectedItem) { Update-Status "Please select a package."; return }
     $appName  = $dropdown.SelectedItem
-    $package  = $global:packageMap[$appName]
+    $package  = $script:packageMap[$appName]
     if (-not $package) { Update-Status "Selected item is invalid."; return }
     $packageID = $package.PackageID
     $version   = $null
-    if ($global:builtVersions -and $global:builtVersions.ContainsKey($packageID)) { 
-        $version = $global:builtVersions[$packageID] 
+    if ($script:builtVersions -and $script:builtVersions.ContainsKey($packageID)) { 
+        $version = $script:builtVersions[$packageID] 
     } else { 
         $version = $package.Version 
     }
@@ -1506,8 +1506,8 @@ $uploadButton.Add_Click({
         $dropdown.Items.Clear()
         
         # Clear version cache for this package so updates will use latest version
-        if ($global:selectedPackageVersions.ContainsKey($packageID)) {
-            $global:selectedPackageVersions.Remove($packageID)
+        if ($script:selectedPackageVersions.ContainsKey($packageID)) {
+            $script:selectedPackageVersions.Remove($packageID)
             Write-Log "Cleared cached version for $packageID after upload"
         }
     } catch {
@@ -1565,19 +1565,20 @@ $uncheckAllButton.Add_Click({
 $updateFilterBox.Add_TextChanged({
   $filterText = $updateFilterBox.Text.Trim()
   
-  # Clear and repopulate list with filtered items
+   # Clear and repopulate list with filtered items
+  $updateListBox.BeginUpdate()
   $updateListBox.Items.Clear()
   
   if ([string]::IsNullOrWhiteSpace($filterText)) {
     # No filter - show all apps
-    foreach ($app in @($global:updateApps)) {
+    foreach ($app in @($script:updateApps)) {
       if ($app -and $app.Name) {
         [void]$updateListBox.Items.Add($app.Name)
       }
     }
   } else {
     # Filter apps by name (case-insensitive)
-    $filtered = $global:updateApps | Where-Object { 
+    $filtered = $script:updateApps | Where-Object { 
       $_.Name -like "*$filterText*" 
     }
     foreach ($app in @($filtered)) {
@@ -1586,7 +1587,8 @@ $updateFilterBox.Add_TextChanged({
       }
     }
   }
-  
+  $updateListBox.EndUpdate()
+  $updateListBox.EndUpdate()
   # Update status with filter info
   if (-not [string]::IsNullOrWhiteSpace($filterText)) {
     $statusLabel.Text = "Filter: $($updateListBox.Items.Count) apps match '$filterText'"
@@ -1598,7 +1600,7 @@ $updateFilterBox.Add_TextChanged({
 # UPDATED: Robust & verbose "Search Updates"
 # ----------------------------------------------
 $updateSearchButton.Add_Click({
-  if (-not $global:isConnected) { 
+  if (-not $script:isConnected) { 
     Update-Status "Please login to your tenant first."; 
     return 
   }
@@ -1610,7 +1612,7 @@ $updateSearchButton.Add_Click({
     # Reset UI / cache
     $updateFilterBox.Text = ""  # Clear filter
     $updateListBox.Items.Clear()
-    $global:updateApps = @()
+    $script:updateApps = @()
 
     # 1) Load all apps
     $all = @()
@@ -1687,15 +1689,22 @@ $updateSearchButton.Add_Click({
         }
       }
     }
-
-    # 3) Populate dropdown and cache
+       # 3) Populate dropdown and cache
     $count = 0
+    $updateListBox.BeginUpdate()
+    
+    # Explizite Array-Initialisierung, damit der op_Addition Fehler nie wieder auftritt
+    $script:updateApps = @()
+    
     foreach ($app in ($candidates | Sort-Object Name)) {
       if (-not $app -or -not $app.Name) { continue }
       [void]$updateListBox.Items.Add($app.Name)
-      $global:updateApps += $app
+      # @(...) erzwingt, dass PowerShell es als Array-Element behandelt
+      $script:updateApps += @($app)
       $count++
     }
+    $updateListBox.EndUpdate()
+    $updateListBox.EndUpdate()
 
     if ($count -gt 0) {
       Update-Status ("Search updates completed: {0} candidate(s) found. Check items to update." -f $count)
@@ -1722,14 +1731,14 @@ $updateSelectedButton.Add_Click({
     $checkedApps = @()
     
     Write-Log "Processing $($updateListBox.CheckedItems.Count) checked items from UI"
-    Write-Log "global:updateApps cache has $($global:updateApps.Count) apps"
+    Write-Log "global:updateApps cache has $($script:updateApps.Count) apps"
     
     foreach ($itemName in $updateListBox.CheckedItems) {
         Write-Log "Looking for app: '$itemName'"
         
         # Find matching app in cache
         $foundApp = $null
-        foreach ($cachedApp in $global:updateApps) {
+        foreach ($cachedApp in $script:updateApps) {
             if ($cachedApp -and $cachedApp.Name -eq $itemName) {
                 $foundApp = $cachedApp
                 break
@@ -1741,7 +1750,7 @@ $updateSelectedButton.Add_Click({
             $checkedApps += $foundApp
         } else {
             Write-Log "WARNING: Could not find '$itemName' in cache!"
-            Write-Log "Available apps in cache: $($global:updateApps.Name -join ', ')"
+            Write-Log "Available apps in cache: $($script:updateApps.Name -join ', ')"
         }
     }
     
@@ -1973,13 +1982,13 @@ $removeOldAppsButton.Add_Click({
 })
 
 # Handler: Search superseded apps
-$global:supersededApps = @()
+$script:supersededApps = @()
 $supersededSearchButton.Add_Click({
   try {
     Update-Status "Search for superseded apps..."
-    $global:supersededApps = Get-WtWin32Apps -Superseded $true
+    $script:supersededApps = Get-WtWin32Apps -Superseded $true
     $supersededDropdown.Items.Clear()
-    foreach ($app in @($global:supersededApps)) {
+    foreach ($app in @($script:supersededApps)) {
       $name = $app.Name
       $version = $app.CurrentVersion
       $display = "$name — $version"
@@ -1995,7 +2004,7 @@ $supersededSearchButton.Add_Click({
 # ==================================================
 # Rollback Handlers
 # ==================================================
-$global:rollbackApps = @()
+$script:rollbackApps = @()
 
 # Load apps for rollback
 $loadRollbackAppsButton.Add_Click({
@@ -2029,8 +2038,8 @@ $loadRollbackAppsButton.Add_Click({
 })
 
 # Execute rollback - Delete all versions except the selected one
-$global:rollbackVersions = @()
-$global:allAppVersions = @()
+$script:rollbackVersions = @()
+$script:allAppVersions = @()
 
 $executeRollbackButton.Add_Click({
   if ($rollbackAppDropdown.SelectedIndex -lt 0) {
@@ -2047,7 +2056,7 @@ $executeRollbackButton.Add_Click({
   $selectedText = $rollbackAppDropdown.Text
   $appName = $selectedText -replace ' \(\d+ versions\)$', ''
   $selectedIndex = $rollbackVersionDropdown.SelectedIndex
-  $targetVersion = $global:rollbackVersions[$selectedIndex]
+  $targetVersion = $script:rollbackVersions[$selectedIndex]
   $targetVersionNumber = $targetVersion.CurrentVersion
   
   # If index > 0, it's an old version (needs full rollback)
@@ -2057,7 +2066,7 @@ $executeRollbackButton.Add_Click({
   Write-Log "Rollback: App='$appName', Target='v$targetVersionNumber', Index=$selectedIndex, IsOld=$isOldVersion"
   
   # Get all other versions
-  $allVersions = @($global:rollbackVersions)
+  $allVersions = @($script:rollbackVersions)
   $otherVersions = @($allVersions | Where-Object { $_.GraphId -ne $targetVersion.GraphId })
   
   if ($otherVersions.Count -eq 0) {
@@ -2316,11 +2325,11 @@ $executeRollbackButton.Add_Click({
 
 # Handler: Delete selected superseded app
 $deleteSelectedAppButton.Add_Click({
-  if (-not $global:supersededApps -or $supersededDropdown.SelectedIndex -lt 0) {
+  if (-not $script:supersededApps -or $supersededDropdown.SelectedIndex -lt 0) {
     Update-Status "Please first select a superseded app from the dropdown."
     return
   }
-  $app = $global:supersededApps[$supersededDropdown.SelectedIndex]
+  $app = $script:supersededApps[$supersededDropdown.SelectedIndex]
   $result = [System.Windows.Forms.MessageBox]::Show(
     "Delete App '" + $app.Name + "'?",
     "Bestätigung",
@@ -2342,15 +2351,15 @@ $deleteSelectedAppButton.Add_Click({
 
 $logoutButton.Add_Click({
   Disconnect-WtWinTuner
-  $global:isConnected = $false
-  $global:currentUserUpn = ""
+  $script:isConnected = $false
+  $script:currentUserUpn = ""
   if ($loginInfoLabel) { $loginInfoLabel.Text = "" }
   Update-Status "Logout success."
   Set-ConnectedUIState -Connected $false
 })
 
 # Apply initial theme (Dark by default)
-Apply-Theme -control $form -theme $global:currentTheme
+Apply-Theme -control $form -theme $script:currentTheme
 
 # Safe logger for closing context
 function Write-FileLog {
@@ -2359,15 +2368,15 @@ function Write-FileLog {
 }
 
 # Re-entrancy protection for closing
-$global:_closingInProgress = $false
+$script:_closingInProgress = $false
 $form.Add_FormClosing({
   param($sender, [System.Windows.Forms.FormClosingEventArgs]$e)
-  try { if ($global:settings) { if ($global:settings.RememberMe) { $global:settings.LastUser = $usernameBox.Text } else { $global:settings.LastUser = "" }; Save-Settings } } catch {}
-  if ($global:_closingInProgress) { return }
-  if (-not $global:isConnected) { return }
+  try { if ($script:settings) { if ($script:settings.RememberMe) { $script:settings.LastUser = $usernameBox.Text } else { $script:settings.LastUser = "" }; Save-Settings } } catch {}
+  if ($script:_closingInProgress) { return }
+  if (-not $script:isConnected) { return }
 
   $e.Cancel = $true
-  $global:_closingInProgress = $true
+  $script:_closingInProgress = $true
   try {
     $form.Enabled = $false
     if ($statusLabel) { $statusLabel.Text = "Closing... signing out from tenant" }
@@ -2398,7 +2407,7 @@ $form.Add_FormClosing({
   $bw.Add_RunWorkerCompleted({
     try { Write-FileLog 'Shutdown: disconnect finished. Closing form.' } catch {}
     try { if ($script:_wtCloseTimer) { $script:_wtCloseTimer.Stop() } } catch {}
-    $global:isConnected = $false
+    $script:isConnected = $false
     try { $form.Close() } catch {}
   })
   $bw.RunWorkerAsync()
