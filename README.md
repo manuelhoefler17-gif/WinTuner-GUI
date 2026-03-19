@@ -4,7 +4,7 @@
 
 [![PowerShell Version](https://img.shields.io/badge/PowerShell-7.0%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.0-orange.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.1-orange.svg)](CHANGELOG.md)
 
 ## 📋 Table of Contents
 
@@ -21,12 +21,13 @@
 
 ## 🎯 Overview
 
-**WinTuner GUI** is a comprehensive graphical interface built on top of the [WinTuner PowerShell module](https://github.com/svrooij/WinTuner) by Sander Rozemuller. It simplifies the process of packaging and deploying WinGet applications to Microsoft Intune, managing app updates, and performing version rollbacks.
+**WinTuner GUI** is a comprehensive graphical interface built on top of the [WinTuner PowerShell module](https://github.com/svrooij/WinTuner) by Sander Rozemuller. It simplifies the process of packaging and deploying WinGet applications to Microsoft Intune and managing app updates.
 
 ### Key Capabilities
 
 - 🔍 **Search & Deploy**: Search WinGet packages and deploy them to Intune
 - 🔄 **Update Management**: Check for and deploy updates to existing Intune apps
+- 📊 **App Discovery**: Filter, sort, and match discovered apps using fuzzy matching
 - ⚙️ **Persistent Settings**: Save your preferences and configurations
 - 🤖 **Auto-Update Check**: Automatically check for updates on login
 
@@ -41,7 +42,8 @@
 
 ### 🔄 Updates Tab
 - Scan all Intune Win32 apps for available updates
-- Filter apps by name
+- Enhanced app discovery with fuzzy string matching
+- Filter and sort discovered apps
 - Bulk select apps for update
 - Check All / Uncheck All functionality
 - Detailed progress indication
@@ -55,7 +57,7 @@
 - Settings persist across sessions
 
 ### 🔐 Authentication
-- Interactive Microsoft 365 login
+- Interactive Microsoft 365 login with improved auth handling
 - Remember last username
 - Secure credential handling
 - Session management
@@ -91,7 +93,7 @@
 
 ### Option 2: Git Clone
 ```powershell
-git clone https://github.com/yourusername/WinTuner-GUI.git
+git clone https://github.com/manuelhoefler17-gif/WinTuner-GUI.git
 cd WinTuner-GUI
 .\WinTuner_GUI.ps1
 ```
@@ -129,19 +131,10 @@ On first run, the script will:
 ```
 1. Go to "Updates" tab
 2. Click "Search Updates"
-3. Review apps with available updates
-4. Check apps to update
-5. Click "Update Checked Apps"
-```
-
-#### 4. Rollback App Version
-```
-1. Go to "Updates" tab → Rollback section
-2. Click "Load Apps for Rollback"
-3. Select app from dropdown (only apps with 2+ versions shown)
-4. Select version to keep
-5. Click "Execute Rollback"
-6. Confirm the action
+3. Use the filter and sort options to find specific apps
+4. Review apps with available updates
+5. Check apps to update
+6. Click "Update Checked Apps"
 ```
 
 ### Settings Configuration
@@ -185,7 +178,6 @@ Log includes:
 - Package creation
 - Deployment operations
 - Update checks
-- Rollback operations
 - Errors and warnings
 
 ## 📸 Screenshots
@@ -194,10 +186,7 @@ Log includes:
 *Search for WinGet packages and deploy to Intune*
 
 ### Updates Tab
-*Check for and deploy updates to existing apps*
-
-### Rollback Section
-*Manage app versions and perform rollbacks*
+*Check for and deploy updates to existing apps, filter and sort discovered apps*
 
 ### Settings Tab
 *Configure application preferences*
@@ -224,11 +213,6 @@ Log includes:
 - Settings must be saved (click "Save Settings")
 - Check log file for errors
 
-**Rollback fails with "Cannot delete parent" error**
-- This is a known Intune limitation with supersedence relationships
-- The GUI handles this by deleting in correct order (oldest first)
-- If still failing, manually delete versions in Intune portal
-
 **Default package path resets to C:\Temp**
 - Ensure you clicked "Save Settings" after changing path
 - Check if settings file exists: `%LOCALAPPDATA%\WinTuner_Settings.json`
@@ -238,12 +222,12 @@ Log includes:
 
 See [CHANGELOG.md](CHANGELOG.md) for a detailed list of changes between versions.
 
-### Latest Version: 2.0
-- Complete rollback system for app versions
-- Auto-check for updates on login
-- Persistent settings system
-- All UI text translated to English
-- 10+ bug fixes and improvements
+### Latest Updates
+- Implemented filtering and sorting for discovered apps
+- Enhanced app discovery with fuzzy matching and improved authentication
+- Fixed 'Update All' functionality and refactored package updates
+- Removed rollback functionality from GUI
+- Translated remaining UI text to English
 
 ## 🙏 Credits
 
@@ -279,8 +263,8 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## 📞 Support
 
 For issues, questions, or suggestions:
-- Open an [Issue](https://github.com/yourusername/WinTuner-GUI/issues)
-- Check existing [Discussions](https://github.com/yourusername/WinTuner-GUI/discussions)
+- Open an [Issue](https://github.com/manuelhoefler17-gif/WinTuner-GUI/issues)
+- Check existing [Discussions](https://github.com/manuelhoefler17-gif/WinTuner-GUI/discussions)
 - Review the [Changelog](CHANGELOG.md)
 
 ## 🔗 Links
