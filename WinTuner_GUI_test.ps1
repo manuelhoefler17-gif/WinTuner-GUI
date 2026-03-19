@@ -1993,6 +1993,27 @@ $logoutButton.Add_Click({
 $scanDiscoveredButton.Add_Click({
   if (-not $script:isConnected) { Update-Status "Please login first."; return }
   
+  # --- HILFSFUNKTION FÜR NAMENS-MATCHING (Fuzzy Match) ---
+  function Get-StringSimilarity {
+      param($str1, $str2)
+      if (-not $str1 -or -not $str2) { return 0 }
+      # Sonderzeichen entfernen und in Kleinbuchstaben umwandeln
+      $clean1 = $str1.ToLower() -replace '[^\w\s]', ' '
+      $clean2 = $str2.ToLower() -replace '[^\w\s]', ' '
+      # In Wörter aufteilen
+      $words1 = @($clean1 -split '\s+' | Where-Object { $_.Trim() -ne '' })
+      $words2 = @($clean2 -split '\s+' | Where-Object { $_.Trim() -ne '' })
+      if ($words1.Count -eq 0 -or $words2.Count -eq 0) { return 0 }
+      
+      $matchCount = 0
+      foreach ($w in $words1) {
+          if ($words2 -contains $w) { $matchCount++ }
+      }
+      # Prozentsatz berechnen
+      $minWords = [math]::Min($words1.Count, $words2.Count)
+      return [math]::Round(($matchCount / $minWords) * 100)
+  }
+  
   try {
     $scanDiscoveredButton.Enabled = $false
     $deployDiscoveredButton.Enabled = $false
@@ -2004,8 +2025,34 @@ $scanDiscoveredButton.Add_Click({
     Update-Status "Fetching detected apps from Intune API..."
     [System.Windows.Forms.Application]::DoEvents()
 
-    # Hole die Top 100 Discovered Apps aus Intune via MS Graph API
-    $uri = "https://graph.microsoft.com/beta/deviceManagement/detectedApps?`$top=100&`$orderby=deviceCount desc"
+    # --- NEUER GRAPH-AUTH BLOCK ---
+    $requiredScope = "DeviceManagementApps.Read.All"
+    $mgContext = Get-MgContext -ErrorAction SilentlyContinue
+
+    $needsAuth = $false
+    if (-not $mgContext) {
+        $needsAuth = $true
+    } else {
+        $hasScope = ($mgContext.Scopes -contains $requiredScope) -or ($mgContext.Scopes -contains "DeviceManagementApps.ReadWrite.All")
+        $userMatch = ($mgContext.Account -eq $script:currentUserUpn)
+        if (-not $hasScope -or -not $userMatch) {
+            $needsAuth = $true
+            Update-Status "Clearing old Graph session (Scope missing or wrong Tenant)..."
+            [System.Windows.Forms.Application]::DoEvents()
+            try { Disconnect-MgGraph -ErrorAction SilentlyContinue } catch {}
+        }
+    }
+
+    if ($needsAuth) {
+        Update-Status "Authenticating with MS Graph for $($script:currentUserUpn)..."
+        [System.Windows.Forms.Application]::DoEvents()
+        $tenantDomain = $script:currentUserUpn.Split('@')[1]
+        Connect-MgGraph -TenantId $tenantDomain -Scopes $requiredScope -NoWelcome -ErrorAction Stop
+    }
+    # --- ENDE GRAPH-AUTH BLOCK ---
+
+    # Hole die Top 200 Discovered Apps aus Intune
+    $uri = "https://graph.microsoft.com/beta/deviceManagement/detectedApps?`$top=200&`$orderby=deviceCount desc"
     $response = Invoke-MgRestMethod -Uri $uri -Method GET -ErrorAction Stop
     $detectedApps = $response.value
 
@@ -2014,9 +2061,8 @@ $scanDiscoveredButton.Add_Click({
         return
     }
 
-    # Filtere Standard-Microsoft/Treiber-Apps aus, um Zeit beim Winget-Suchen zu sparen
     $filteredApps = @($detectedApps | Where-Object { 
-        $_.publisher -notmatch "(?i)Microsoft|Intel|HP|Dell|Lenovo|AMD|NVIDIA|Realtek|Synaptics|VMware" 
+        $_.publisher -notmatch "(?i)Intel|HP|Dell|Lenovo|AMD|NVIDIA|Realtek|Synaptics|VMware" 
     })
 
     $total = $filteredApps.Count
@@ -2031,30 +2077,36 @@ $scanDiscoveredButton.Add_Click({
     foreach ($app in $filteredApps) {
         $current++
         $progressBar.Value = $current
-        Update-Status "Searching Winget Repo for ($current/$total): $($app.displayName)..."
+        Update-Status "Analyzing ($current/$total): $($app.displayName)..."
         [System.Windows.Forms.Application]::DoEvents()
 
         try {
-            # Name bereinigen (Versionsnummern und "(x64)" abschneiden für bessere Suche)
-            $searchName = $app.displayName -replace '\s+[\d\.]+', '' -replace '\s*\(.*\)', ''
+            $searchName = $app.displayName -replace '(?i)\s*\(x64\)|\s*\(x86\)|\s*\(64-bit\)|\s*\(32-bit\)', ''
+            $searchName = $searchName -replace '\s+[\d\.]+', ''
             $searchName = $searchName.Trim()
 
             if ([string]::IsNullOrWhiteSpace($searchName)) { continue }
 
             $wingetResults = @(Search-WtWinGetPackage -SearchQuery $searchName -ErrorAction SilentlyContinue)
             
-            if ($wingetResults.Count -gt 0) {
-                # Besten/ersten Treffer nehmen
-                $bestMatch = $wingetResults[0]
-                $displayText = "$($app.displayName)  -->  Winget: $($bestMatch.Name) ($($bestMatch.PackageID))"
-                
+            $bestMatch = $null
+            $highestScore = 0
+            
+            foreach ($wgApp in $wingetResults) {
+                $score = Get-StringSimilarity -str1 $app.displayName -str2 $wgApp.Name
+                if ($score -gt $highestScore) {
+                    $highestScore = $score
+                    $bestMatch = $wgApp
+                }
+            }
+
+            if ($bestMatch -and $highestScore -ge 50) {
+                $displayText = "$($app.displayName)  -->  Winget: $($bestMatch.Name) ($($bestMatch.PackageID)) [Match: $highestScore%]"
                 [void]$discoveredListBox.Items.Add($displayText)
                 $script:discoveredAppMap[$displayText] = $bestMatch
                 $matchCount++
             }
-        } catch { 
-            # Silently continue on single search errors
-        }
+        } catch {}
     }
     $discoveredListBox.EndUpdate()
 
@@ -2081,7 +2133,6 @@ $deployDiscoveredButton.Add_Click({
         return 
     }
 
-    # Greift auf den Default Package Path aus den Settings zurück
     $rootFolder = $script:settings.DefaultPackagePath
     if (-not $rootFolder) { $rootFolder = "C:\Temp" }
     if (-not (Test-Path $rootFolder)) { New-Item -ItemType Directory -Path $rootFolder -Force | Out-Null }
@@ -2111,7 +2162,6 @@ $deployDiscoveredButton.Add_Click({
                 $packageId = $wingetApp.PackageID
                 $version = $wingetApp.Version
                 
-                # 1. Package erstellen
                 Write-Log "Creating package for discovered app: $packageId v$version"
                 $pkgRes = New-WingetPackageWithFallback `
                     -PackageId $packageId `
@@ -2121,7 +2171,6 @@ $deployDiscoveredButton.Add_Click({
                 
                 $effVersion = if ($pkgRes.EffectiveVersion) { $pkgRes.EffectiveVersion } else { $version }
 
-                # 2. Upload / Neues Deployment (ohne GraphId wird eine neue App in Intune angelegt)
                 Write-Log "Uploading new app to tenant: $packageId v$effVersion"
                 Deploy-WtWin32App `
                     -PackageId $packageId `
@@ -2133,7 +2182,8 @@ $deployDiscoveredButton.Add_Click({
                 Write-Log "Successfully deployed new app: $packageId"
             } catch {
                 $failedCount++
-                Write-Log "Failed to deploy $item: $($_.Exception.Message)"
+                # HIER WURDE DER PARSER FEHLER BEHOBEN:
+                Write-Log "Failed to deploy $($item): $($_.Exception.Message)"
             }
         }
 
