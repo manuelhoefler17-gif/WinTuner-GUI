@@ -956,7 +956,7 @@ $tabDiscovered.Text = "Discovered Apps"
 $tabControl.TabPages.Add($tabDiscovered)
 
 $discoveredHeaderLabel = New-Object System.Windows.Forms.Label
-$discoveredHeaderLabel.Text = "Discovered Apps in Intune (Top 100)"
+$discoveredHeaderLabel.Text = "Discovered Apps in Intune"
 $discoveredHeaderLabel.Location = New-Object System.Drawing.Point(20,20)
 $discoveredHeaderLabel.AutoSize = $true
 $discoveredHeaderLabel.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
@@ -969,6 +969,40 @@ $scanDiscoveredButton.Width = 200
 $scanDiscoveredButton.Enabled = $false
 $tabDiscovered.Controls.Add($scanDiscoveredButton)
 
+$deployDiscoveredButton = New-Object System.Windows.Forms.Button
+$deployDiscoveredButton.Text = "2. Deploy Checked Apps"
+$deployDiscoveredButton.Location = New-Object System.Drawing.Point(230,50)
+$deployDiscoveredButton.Width = 200
+$deployDiscoveredButton.Enabled = $false
+$tabDiscovered.Controls.Add($deployDiscoveredButton)
+
+# --- NEU: Filter & Sortierung ---
+$discoveredFilterLabel = New-Object System.Windows.Forms.Label
+$discoveredFilterLabel.Text = "Filter Publisher:"
+$discoveredFilterLabel.Location = New-Object System.Drawing.Point(440, 25)
+$discoveredFilterLabel.AutoSize = $true
+$tabDiscovered.Controls.Add($discoveredFilterLabel)
+
+$discoveredFilterBox = New-Object System.Windows.Forms.TextBox
+$discoveredFilterBox.Location = New-Object System.Drawing.Point(540, 22)
+$discoveredFilterBox.Width = 150
+$tabDiscovered.Controls.Add($discoveredFilterBox)
+
+$discoveredSortLabel = New-Object System.Windows.Forms.Label
+$discoveredSortLabel.Text = "Sort by:"
+$discoveredSortLabel.Location = New-Object System.Drawing.Point(440, 55)
+$discoveredSortLabel.AutoSize = $true
+$tabDiscovered.Controls.Add($discoveredSortLabel)
+
+$discoveredSortBox = New-Object System.Windows.Forms.ComboBox
+$discoveredSortBox.Location = New-Object System.Drawing.Point(540, 52)
+$discoveredSortBox.Width = 150
+$discoveredSortBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+[void]$discoveredSortBox.Items.Add("Device Count")
+[void]$discoveredSortBox.Items.Add("Alphabetical")
+$discoveredSortBox.SelectedIndex = 0
+$tabDiscovered.Controls.Add($discoveredSortBox)
+
 $discoveredListBox = New-Object System.Windows.Forms.CheckedListBox
 $discoveredListBox.Location = New-Object System.Drawing.Point(20,85)
 $discoveredListBox.Width = 710
@@ -977,15 +1011,7 @@ $discoveredListBox.CheckOnClick = $true
 $discoveredListBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right -bor [System.Windows.Forms.AnchorStyles]::Bottom
 $tabDiscovered.Controls.Add($discoveredListBox)
 
-$deployDiscoveredButton = New-Object System.Windows.Forms.Button
-$deployDiscoveredButton.Text = "2. Deploy Checked Apps"
-$deployDiscoveredButton.Location = New-Object System.Drawing.Point(20,450)
-$deployDiscoveredButton.Width = 200
-$deployDiscoveredButton.Enabled = $false
-$deployDiscoveredButton.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left
-$tabDiscovered.Controls.Add($deployDiscoveredButton)
-
-$script:discoveredAppMap = @{}
+$script:discoveredRaw = @()
 
 # ==================================================
 # Tab: Settings
@@ -1990,26 +2016,62 @@ $logoutButton.Add_Click({
 # ==================================================
 # Discovered Apps Handlers
 # ==================================================
+
+# Handler für das Filtern / Sortieren
+function Update-DiscoveredListUI {
+    $discoveredListBox.BeginUpdate()
+    $discoveredListBox.Items.Clear()
+    
+    $filtered = $script:discoveredRaw
+    
+    # Filtern nach Publisher
+    if (-not [string]::IsNullOrWhiteSpace($discoveredFilterBox.Text)) {
+        $filterText = $discoveredFilterBox.Text
+        $filtered = $filtered | Where-Object { $_.Publisher -match $filterText }
+    }
+    
+    # Sortieren
+    if ($discoveredSortBox.Text -eq "Alphabetical") {
+        $filtered = $filtered | Sort-Object DisplayName
+    } else {
+        $filtered = $filtered | Sort-Object DeviceCount -Descending
+    }
+    
+    # Elemente wieder aufbauen
+    foreach ($obj in $filtered) {
+        $idx = $discoveredListBox.Items.Add($obj.DisplayText)
+        $discoveredListBox.SetItemChecked($idx, $obj.Checked)
+    }
+    $discoveredListBox.EndUpdate()
+}
+
+$discoveredFilterBox.Add_TextChanged({ Update-DiscoveredListUI })
+$discoveredSortBox.Add_SelectedIndexChanged({ Update-DiscoveredListUI })
+
+# Wenn ein Haken gesetzt/entfernt wird, Zustand im Array speichern (überlebt Filterung!)
+$discoveredListBox.Add_ItemCheck({
+    param($sender, $e)
+    $itemText = $discoveredListBox.Items[$e.Index]
+    $obj = $script:discoveredRaw | Where-Object { $_.DisplayText -eq $itemText } | Select-Object -First 1
+    if ($obj) {
+        $obj.Checked = ($e.NewValue -eq [System.Windows.Forms.CheckState]::Checked)
+    }
+})
+
 $scanDiscoveredButton.Add_Click({
   if (-not $script:isConnected) { Update-Status "Please login first."; return }
   
-  # --- HILFSFUNKTION FÜR NAMENS-MATCHING (Fuzzy Match) ---
   function Get-StringSimilarity {
       param($str1, $str2)
       if (-not $str1 -or -not $str2) { return 0 }
-      # Sonderzeichen entfernen und in Kleinbuchstaben umwandeln
       $clean1 = $str1.ToLower() -replace '[^\w\s]', ' '
       $clean2 = $str2.ToLower() -replace '[^\w\s]', ' '
-      # In Wörter aufteilen
       $words1 = @($clean1 -split '\s+' | Where-Object { $_.Trim() -ne '' })
       $words2 = @($clean2 -split '\s+' | Where-Object { $_.Trim() -ne '' })
       if ($words1.Count -eq 0 -or $words2.Count -eq 0) { return 0 }
       
       $matchCount = 0
-      foreach ($w in $words1) {
-          if ($words2 -contains $w) { $matchCount++ }
-      }
-      # Prozentsatz berechnen
+      foreach ($w in $words1) { if ($words2 -contains $w) { $matchCount++ } }
       $minWords = [math]::Min($words1.Count, $words2.Count)
       return [math]::Round(($matchCount / $minWords) * 100)
   }
@@ -2018,14 +2080,13 @@ $scanDiscoveredButton.Add_Click({
     $scanDiscoveredButton.Enabled = $false
     $deployDiscoveredButton.Enabled = $false
     $discoveredListBox.Items.Clear()
-    $script:discoveredAppMap.Clear()
+    $script:discoveredRaw = @()
     
     $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
     $progressBar.Visible = $true
-    Update-Status "Fetching detected apps from Intune API..."
     [System.Windows.Forms.Application]::DoEvents()
 
-    # --- NEUER GRAPH-AUTH BLOCK ---
+    # --- GRAPH-AUTH BLOCK ---
     $requiredScope = "DeviceManagementApps.Read.All"
     $mgContext = Get-MgContext -ErrorAction SilentlyContinue
 
@@ -2049,12 +2110,29 @@ $scanDiscoveredButton.Add_Click({
         $tenantDomain = $script:currentUserUpn.Split('@')[1]
         Connect-MgGraph -TenantId $tenantDomain -Scopes $requiredScope -NoWelcome -ErrorAction Stop
     }
-    # --- ENDE GRAPH-AUTH BLOCK ---
 
-    # Hole die Top 200 Discovered Apps aus Intune
-    $uri = "https://graph.microsoft.com/beta/deviceManagement/detectedApps?`$top=200&`$orderby=deviceCount desc"
-    $response = Invoke-MgRestMethod -Uri $uri -Method GET -ErrorAction Stop
-    $detectedApps = $response.value
+    # 1. Vorhandene Apps checken (EXTREM SCHNELL DURCH "Resolve" STATT "Try-Resolve")
+    Update-Status "Loading existing managed apps to filter them out..."
+    [System.Windows.Forms.Application]::DoEvents()
+    $existingApps = @(Get-WtWin32Apps -Superseded:$false -ErrorAction SilentlyContinue)
+    $existingPackageIds = @()
+    foreach ($eApp in $existingApps) {
+        $id = Resolve-WtWingetId -AppOrResult $eApp
+        if ($id) { $existingPackageIds += $id }
+    }
+
+    # 2. Hole ALLE Discovered Apps aus Intune (inklusive Paginierung)
+    Update-Status "Fetching ALL detected apps from Intune API (this might take a moment)..."
+    [System.Windows.Forms.Application]::DoEvents()
+    
+    $uri = "https://graph.microsoft.com/beta/deviceManagement/detectedApps?`$top=500&`$orderby=deviceCount desc"
+    $detectedApps = @()
+    
+    do {
+        $response = Invoke-MgRestMethod -Uri $uri -Method GET -ErrorAction Stop
+        if ($response.value) { $detectedApps += $response.value }
+        $uri = $response.'@odata.nextLink'
+    } while ($uri)
 
     if (-not $detectedApps -or $detectedApps.Count -eq 0) {
         Update-Status "No discovered apps found in Intune."
@@ -2073,7 +2151,6 @@ $scanDiscoveredButton.Add_Click({
     $progressBar.Maximum = $total
     $progressBar.Value = 0
 
-    $discoveredListBox.BeginUpdate()
     foreach ($app in $filteredApps) {
         $current++
         $progressBar.Value = $current
@@ -2101,20 +2178,31 @@ $scanDiscoveredButton.Add_Click({
             }
 
             if ($bestMatch -and $highestScore -ge 50) {
-                $displayText = "$($app.displayName)  -->  Winget: $($bestMatch.Name) ($($bestMatch.PackageID)) [Match: $highestScore%]"
-                [void]$discoveredListBox.Items.Add($displayText)
-                $script:discoveredAppMap[$displayText] = $bestMatch
+                if ($existingPackageIds -contains $bestMatch.PackageID) { continue }
+
+                # Bilde das Objekt für die Liste
+                $itemObj = [pscustomobject]@{
+                    DisplayName = $app.displayName
+                    Publisher   = $app.publisher
+                    DeviceCount = $app.deviceCount
+                    WingetApp   = $bestMatch
+                    Checked     = $false
+                    DisplayText = "[$($app.deviceCount) PCs] $($app.displayName) ($($app.publisher))  -->  Winget: $($bestMatch.Name)"
+                }
+                $script:discoveredRaw += $itemObj
                 $matchCount++
             }
         } catch {}
     }
-    $discoveredListBox.EndUpdate()
+    
+    # Befüllt die Liste initial mit Sortierung
+    Update-DiscoveredListUI
 
     if ($matchCount -gt 0) {
-        Update-Status "Found $matchCount Winget match(es). Check the ones you want to deploy."
+        Update-Status "Found $matchCount Winget match(es). Filter, sort, or deploy them!"
         $deployDiscoveredButton.Enabled = $true
     } else {
-        Update-Status "No Winget matches found for the discovered apps."
+        Update-Status "No Winget matches found (or all are already managed)."
     }
 
   } catch {
@@ -2127,7 +2215,8 @@ $scanDiscoveredButton.Add_Click({
 })
 
 $deployDiscoveredButton.Add_Click({
-    $checkedItems = @($discoveredListBox.CheckedItems)
+    # Hole alle markierten Items direkt aus unserem sicheren Objekt-Array!
+    $checkedItems = @($script:discoveredRaw | Where-Object { $_.Checked })
     if ($checkedItems.Count -eq 0) { 
         Update-Status "No apps checked."
         return 
@@ -2153,7 +2242,7 @@ $deployDiscoveredButton.Add_Click({
         foreach ($item in $checkedItems) {
             $i++
             $progressBar.Value = $i
-            $wingetApp = $script:discoveredAppMap[$item]
+            $wingetApp = $item.WingetApp
             
             Update-Status "Packaging & Deploying ($i/$($checkedItems.Count)): $($wingetApp.Name)..."
             [System.Windows.Forms.Application]::DoEvents()
@@ -2182,8 +2271,7 @@ $deployDiscoveredButton.Add_Click({
                 Write-Log "Successfully deployed new app: $packageId"
             } catch {
                 $failedCount++
-                # HIER WURDE DER PARSER FEHLER BEHOBEN:
-                Write-Log "Failed to deploy $($item): $($_.Exception.Message)"
+                Write-Log "Failed to deploy $($wingetApp.Name): $($_.Exception.Message)"
             }
         }
 
