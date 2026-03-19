@@ -1889,8 +1889,23 @@ $updateAllButton.Add_Click({
             
             Write-Log "Processing update for: $($app.Name)"
             
+            # Extract properties from WtWin32App object
+            $appName = $app.Name
+            $appCurrentVersion = $app.CurrentVersion
+            $appLatestVersion = $app.LatestVersion
+            $appGraphId = $app.GraphId
+            
+            # Get PackageIdentifier - use Try-ResolveWingetIdForApp
+            $appPackageId = Try-ResolveWingetIdForApp -App $app
+            
             # Execute update workflow using shared function
-            $result = Update-SingleApp -App $app -RootPackageFolder $rootPackageFolder
+            $result = Update-SingleApp `
+                -AppName $appName `
+                -CurrentVersion $appCurrentVersion `
+                -LatestVersion $appLatestVersion `
+                -GraphId $appGraphId `
+                -PackageIdentifier $appPackageId `
+                -RootPackageFolder $rootPackageFolder
             
             if ($result.Success) {
                 $successCount++
