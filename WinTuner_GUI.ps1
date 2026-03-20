@@ -20,22 +20,20 @@ Add-Type -AssemblyName System.Drawing
 
 # Configure error handling for WinForms event handlers
 # Suppress Write-* cmdlet errors that occur from non-pipeline threads
-#$ErrorActionPreference = 'SilentlyContinue'
-#$WarningPreference = 'SilentlyContinue'
-#$InformationPreference = 'SilentlyContinue'
-#$VerbosePreference = 'SilentlyContinue'
-#$DebugPreference = 'SilentlyContinue'
-#$ProgressPreference = 'SilentlyContinue'
+$WarningPreference = 'SilentlyContinue'
+$InformationPreference = 'SilentlyContinue'
+$VerbosePreference = 'SilentlyContinue'
+$DebugPreference = 'SilentlyContinue'
+$ProgressPreference = 'SilentlyContinue'
 
 # Redirect all output streams to prevent threading issues
-#$PSDefaultParameterValues = @{
-#  '*:ErrorAction' = 'SilentlyContinue'
-#  '*:WarningAction' = 'SilentlyContinue'
-#  '*:InformationAction' = 'SilentlyContinue'
-#  '*:ProgressAction' = 'SilentlyContinue'
-#  '*:Verbose' = $false
-#  '*:Debug' = $false
-#}
+$PSDefaultParameterValues = @{
+  '*:WarningAction' = 'SilentlyContinue'
+  '*:InformationAction' = 'SilentlyContinue'
+  '*:ProgressAction' = 'SilentlyContinue'
+  '*:Verbose' = $false
+  '*:Debug' = $false
+}
 
 # Version comparison helper: returns $true if Latest > Current
 function Test-IsNewerVersion {
@@ -453,6 +451,19 @@ function Write-Log {
     try {
       $base = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation -and $MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
       $logPath = Join-Path $base 'WinTuner_GUI.log'
+      
+      # --- NEU: Log-Größe begrenzen (Log Rotation) ---
+      $maxLogSize = 2MB # Maximale Dateigröße (kannst du nach Belieben anpassen)
+      if (Test-Path $logPath) {
+          $logFile = Get-Item $logPath
+          if ($logFile.Length -gt $maxLogSize) {
+              $oldLogPath = Join-Path $base 'WinTuner_GUI_old.log'
+              # Verschiebt das aktuelle Log ins Backup (überschreibt ein evtl. vorhandenes altes Backup)
+              Move-Item -Path $logPath -Destination $oldLogPath -Force -ErrorAction SilentlyContinue
+          }
+      }
+      # -----------------------------------------------
+
       Add-Content -Path $logPath -Value $logLine -Encoding utf8 -ErrorAction SilentlyContinue
     } catch {
       # Silently ignore file write errors
@@ -977,25 +988,39 @@ $deployDiscoveredButton.Enabled = $false
 $tabDiscovered.Controls.Add($deployDiscoveredButton)
 
 # --- NEU: Filter & Sortierung ---
-$discoveredFilterLabel = New-Object System.Windows.Forms.Label
-$discoveredFilterLabel.Text = "Filter Publisher:"
-$discoveredFilterLabel.Location = New-Object System.Drawing.Point(440, 25)
-$discoveredFilterLabel.AutoSize = $true
-$tabDiscovered.Controls.Add($discoveredFilterLabel)
+$discoveredAppSearchLabel = New-Object System.Windows.Forms.Label
+$discoveredAppSearchLabel.Text = "Search App:"
+$discoveredAppSearchLabel.Location = New-Object System.Drawing.Point(440, 15)
+$discoveredAppSearchLabel.AutoSize = $true
+$tabDiscovered.Controls.Add($discoveredAppSearchLabel)
 
-$discoveredFilterBox = New-Object System.Windows.Forms.TextBox
-$discoveredFilterBox.Location = New-Object System.Drawing.Point(540, 22)
-$discoveredFilterBox.Width = 150
-$tabDiscovered.Controls.Add($discoveredFilterBox)
+$discoveredAppSearchBox = New-Object System.Windows.Forms.TextBox
+$discoveredAppSearchBox.Location = New-Object System.Drawing.Point(540, 12)
+$discoveredAppSearchBox.Width = 150
+$tabDiscovered.Controls.Add($discoveredAppSearchBox)
+
+$discoveredPublisherLabel = New-Object System.Windows.Forms.Label
+$discoveredPublisherLabel.Text = "Publisher:"
+$discoveredPublisherLabel.Location = New-Object System.Drawing.Point(440, 42)
+$discoveredPublisherLabel.AutoSize = $true
+$tabDiscovered.Controls.Add($discoveredPublisherLabel)
+
+$discoveredPublisherBox = New-Object System.Windows.Forms.ComboBox
+$discoveredPublisherBox.Location = New-Object System.Drawing.Point(540, 39)
+$discoveredPublisherBox.Width = 150
+$discoveredPublisherBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+[void]$discoveredPublisherBox.Items.Add("<All Publishers>")
+$discoveredPublisherBox.SelectedIndex = 0
+$tabDiscovered.Controls.Add($discoveredPublisherBox)
 
 $discoveredSortLabel = New-Object System.Windows.Forms.Label
 $discoveredSortLabel.Text = "Sort by:"
-$discoveredSortLabel.Location = New-Object System.Drawing.Point(440, 55)
+$discoveredSortLabel.Location = New-Object System.Drawing.Point(440, 69)
 $discoveredSortLabel.AutoSize = $true
 $tabDiscovered.Controls.Add($discoveredSortLabel)
 
 $discoveredSortBox = New-Object System.Windows.Forms.ComboBox
-$discoveredSortBox.Location = New-Object System.Drawing.Point(540, 52)
+$discoveredSortBox.Location = New-Object System.Drawing.Point(540, 66)
 $discoveredSortBox.Width = 150
 $discoveredSortBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 [void]$discoveredSortBox.Items.Add("Device Count")
@@ -1004,9 +1029,9 @@ $discoveredSortBox.SelectedIndex = 0
 $tabDiscovered.Controls.Add($discoveredSortBox)
 
 $discoveredListBox = New-Object System.Windows.Forms.CheckedListBox
-$discoveredListBox.Location = New-Object System.Drawing.Point(20,85)
+$discoveredListBox.Location = New-Object System.Drawing.Point(20,100)
 $discoveredListBox.Width = 710
-$discoveredListBox.Height = 350
+$discoveredListBox.Height = 335
 $discoveredListBox.CheckOnClick = $true
 $discoveredListBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right -bor [System.Windows.Forms.AnchorStyles]::Bottom
 $tabDiscovered.Controls.Add($discoveredListBox)
@@ -2046,7 +2071,8 @@ function Update-DiscoveredListUI {
     $discoveredListBox.EndUpdate()
 }
 
-$discoveredFilterBox.Add_TextChanged({ Update-DiscoveredListUI })
+$discoveredAppSearchBox.Add_TextChanged({ Update-DiscoveredListUI })
+$discoveredPublisherBox.Add_SelectedIndexChanged({ Update-DiscoveredListUI })
 $discoveredSortBox.Add_SelectedIndexChanged({ Update-DiscoveredListUI })
 
 # Wenn ein Haken gesetzt/entfernt wird, Zustand im Array speichern (überlebt Filterung!)
@@ -2165,7 +2191,9 @@ $scanDiscoveredButton.Add_Click({
         [System.Windows.Forms.Application]::DoEvents()
 
         try {
-            $searchName = $app.displayName -replace '(?i)\s*\(x64\)|\s*\(x86\)|\s*\(64-bit\)|\s*\(32-bit\)', ''
+            # 1. Entfernt restlos alles, was in Klammern steht (z.B. "(x64 de)", "(x86 en-US)")
+            $searchName = $app.displayName -replace '\s*\([^)]*\)', ''
+            # 2. Entfernt typische Versionsnummern, die aus Zahlen und Punkten bestehen
             $searchName = $searchName -replace '\s+[\d\.]+', ''
             $searchName = $searchName.Trim()
 
@@ -2187,21 +2215,60 @@ $scanDiscoveredButton.Add_Click({
             if ($bestMatch -and $highestScore -ge 50) {
                 if ($existingPackageIds -contains $bestMatch.PackageID) { continue }
 
-                # Bilde das Objekt für die Liste
-                $itemObj = [pscustomobject]@{
-                    DisplayName = $app.displayName
-                    Publisher   = $app.publisher
-                    DeviceCount = $app.deviceCount
-                    WingetApp   = $bestMatch
-                    Checked     = $false
-                    DisplayText = "[$($app.deviceCount) PCs] $($app.displayName) ($($app.publisher))  -->  Winget: $($bestMatch.Name)"
+                # NEU: Prüfen, ob wir diese Winget-App (PackageID) schon in der Liste haben
+                $existingEntry = $script:discoveredRaw | Where-Object { $_.WingetApp.PackageID -eq $bestMatch.PackageID } | Select-Object -First 1
+
+                if ($existingEntry) {
+                    # App existiert bereits in der Liste: Wir addieren die Geräteanzahl (DeviceCount)
+                    $existingEntry.DeviceCount += $app.deviceCount
+                    # Den Anzeigetext mit der neuen, kombinierten Anzahl aktualisieren
+                    $existingEntry.DisplayText = "[$($existingEntry.DeviceCount) PCs] $($existingEntry.DisplayName) ($($existingEntry.Publisher))  -->  Winget: $($existingEntry.WingetApp.Name)"
+                } else {
+                    # App ist neu: Wir nutzen den sauberen Winget-Namen (ohne Versionsnummern aus Intune)
+                    $cleanName = $bestMatch.Name 
+                    $itemObj = [pscustomobject]@{
+                        DisplayName = $cleanName
+                        Publisher   = $app.publisher
+                        DeviceCount = $app.deviceCount
+                        WingetApp   = $bestMatch
+                        Checked     = $false
+                        DisplayText = "[$($app.deviceCount) PCs] $cleanName ($($app.publisher))  -->  Winget: $($bestMatch.Name)"
+                    }
+                    $script:discoveredRaw += $itemObj
+                    $matchCount++
                 }
-                $script:discoveredRaw += $itemObj
-                $matchCount++
             }
         } catch {}
     }
     
+# --- NEU: Befülle das Publisher-Dropdown mit eindeutigen Werten ---
+    $uniquePublishers = $script:discoveredRaw | Select-Object -ExpandProperty Publisher -Unique | Sort-Object
+    
+    $discoveredPublisherBox.BeginUpdate()
+    $discoveredPublisherBox.Items.Clear()
+    [void]$discoveredPublisherBox.Items.Add("<All Publishers>")
+    foreach ($pub in $uniquePublishers) {
+        if (-not [string]::IsNullOrWhiteSpace($pub)) {
+            [void]$discoveredPublisherBox.Items.Add($pub)
+        }
+    }
+    $discoveredPublisherBox.SelectedIndex = 0
+    $discoveredPublisherBox.EndUpdate()
+    
+    # --- NEU: Befülle das Publisher-Dropdown mit eindeutigen Werten ---
+    $uniquePublishers = $script:discoveredRaw | Select-Object -ExpandProperty Publisher -Unique | Sort-Object
+    
+    $discoveredPublisherBox.BeginUpdate()
+    $discoveredPublisherBox.Items.Clear()
+    [void]$discoveredPublisherBox.Items.Add("<All Publishers>")
+    foreach ($pub in $uniquePublishers) {
+        if (-not [string]::IsNullOrWhiteSpace($pub)) {
+            [void]$discoveredPublisherBox.Items.Add($pub)
+        }
+    }
+    $discoveredPublisherBox.SelectedIndex = 0
+    $discoveredPublisherBox.EndUpdate()
+
     # Befüllt die Liste initial mit Sortierung
     Update-DiscoveredListUI
 
@@ -2362,5 +2429,33 @@ $form.Add_FormClosing({
   $bw.RunWorkerAsync()
 })
 
-# Run the form
-[System.Windows.Forms.Application]::Run($form)
+# ==================================================
+# Globale Fehlererfassung (Crashes & unhandled Exceptions)
+# ==================================================
+try {
+    # Fängt Abstürze ab, die direkt durch die Benutzeroberfläche (Klicks etc.) passieren
+    [System.Windows.Forms.Application]::add_ThreadException({
+        param($sender, $e)
+        $ex = $e.Exception
+        $errMsg = "FATAL UI ERROR: $($ex.Message)`n$($ex.StackTrace)"
+        Write-FileLog $errMsg
+    })
+    
+    # Fängt tieferliegende System- und PowerShell-Abstürze ab
+    [System.AppDomain]::CurrentDomain.add_UnhandledException({
+        param($sender, $e)
+        $ex = $e.ExceptionObject
+        $errMsg = "FATAL APP ERROR: $($ex.Message)`n$($ex.StackTrace)"
+        Write-FileLog $errMsg
+    })
+} catch {
+    # Ignoriere Fehler, falls die Event-Registrierung in älteren PS-Versionen zickt
+}
+
+# Run the form mit finalem Sicherheitsnetz
+try {
+    [System.Windows.Forms.Application]::Run($form)
+} catch {
+    # Fängt ab, falls das Skript als Ganzes unerwartet beendet wird
+    Write-FileLog "FATAL SCRIPT CRASH: $($_.Exception.Message)`n$($_.ScriptStackTrace)"
+}
