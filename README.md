@@ -157,7 +157,7 @@ Click **"Save Settings"** to persist changes.
 ### Settings File Structure
 ```json
 {
-  "DefaultPackagePath": "C:\\Packages",
+  "DefaultPackagePath": "C:\Packages",
   "AutoCheckUpdates": true,
   "RememberMe": true,
   "LastUser": "admin@contoso.com",
@@ -179,6 +179,8 @@ Log includes:
 - Deployment operations
 - Update checks
 - Errors and warnings
+- **Log Rotation**: The file automatically rotates, keeping size under 2MB by renaming to `WinTuner_GUI_old.log` and overwriting previous backups.
+- **Crash Reports**: Unhandled exceptions and UI crashes are logged.
 
 ## 📸 Screenshots
 
@@ -223,11 +225,11 @@ Log includes:
 See [CHANGELOG.md](CHANGELOG.md) for a detailed list of changes between versions.
 
 ### Latest Updates
-- Implemented filtering and sorting for discovered apps
-- Enhanced app discovery with fuzzy matching and improved authentication
-- Fixed 'Update All' functionality and refactored package updates
-- Removed rollback functionality from GUI
-- Translated remaining UI text to English
+- Re-enabled and configured `WarningPreference`/`InformationPreference` globals to prevent threading crashes from PowerShell streams in WinForms.
+- Enhanced Intune Discovered App parsing by aggressively trimming version strings and parenthesis values before searching Winget.
+- Reduced duplicate update list items by consolidating them per `PackageID` with combined device counts.
+- Added global unhandled exception and WinForms thread crash handlers to cleanly write fatal errors to the main log.
+- Introduced a 2MB log rotation limit to ensure `WinTuner_GUI.log` remains lightweight.
 
 ## 🙏 Credits
 
