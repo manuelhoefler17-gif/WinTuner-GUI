@@ -2044,36 +2044,55 @@ $logoutButton.Add_Click({
 # ==================================================
 
 # Handler für das Filtern / Sortieren
-# Handler für das Filtern / Sortieren
 function Update-DiscoveredListUI {
     $discoveredListBox.BeginUpdate()
     $discoveredListBox.Items.Clear()
     
-    $filtered = @($script:discoveredRaw)
-    
-    # 1. Filtern nach App Name (Search Box Textfeld)
-    if (-not [string]::IsNullOrWhiteSpace($discoveredAppSearchBox.Text)) {
-        $searchText = [regex]::Escape($discoveredAppSearchBox.Text)
-        $filtered = $filtered | Where-Object { $_.DisplayName -match "(?i)$searchText" -or $_.WingetApp.Name -match "(?i)$searchText" }
-    }
+    $searchText = $discoveredAppSearchBox.Text
+    $pubText = $discoveredPublisherBox.Text
+    $sortType = $discoveredSortBox.Text
 
-    # 2. Filtern nach Publisher (Dropdown)
-    if (-not [string]::IsNullOrWhiteSpace($discoveredPublisherBox.Text) -and $discoveredPublisherBox.Text -ne "<All Publishers>") {
-        $pubText = [regex]::Escape($discoveredPublisherBox.Text)
-        $filtered = $filtered | Where-Object { $_.Publisher -match "(?i)$pubText" }
+    # Wir nutzen ein neues leeres Array für die gefilterten Ergebnisse
+    $newFiltered = @()
+
+    foreach ($item in $script:discoveredRaw) {
+        $match = $true
+
+        # 1. Filtern nach Textfeld (DisplayName oder Winget-Name)
+        if (-not [string]::IsNullOrWhiteSpace($searchText)) {
+            $escapedSearch = [regex]::Escape($searchText)
+            # Wenn der Text weder im Anzeigenamen noch im Winget-Namen vorkommt, ist es kein Match
+            if (($item.DisplayName -notmatch "(?i)$escapedSearch") -and ($item.WingetApp.Name -notmatch "(?i)$escapedSearch")) {
+                $match = $false
+            }
+        }
+
+        # 2. Filtern nach Publisher (Dropdown)
+        if ($match -and -not [string]::IsNullOrWhiteSpace($pubText) -and $pubText -ne "<All Publishers>") {
+            $escapedPub = [regex]::Escape($pubText)
+            if ($item.Publisher -notmatch "(?i)$escapedPub") {
+                $match = $false
+            }
+        }
+
+        # Wenn die App beide Filter übersteht, zum neuen Array hinzufügen
+        if ($match) {
+            $newFiltered += $item
+        }
     }
     
     # 3. Sortieren
-    if ($discoveredSortBox.Text -eq "Alphabetical") {
-        $filtered = $filtered | Sort-Object DisplayName
+    if ($sortType -eq "Alphabetical") {
+        $newFiltered = $newFiltered | Sort-Object DisplayName
     } else {
-        $filtered = $filtered | Sort-Object DeviceCount -Descending
+        $newFiltered = $newFiltered | Sort-Object DeviceCount -Descending
     }
     
-    # 4. Elemente wieder aufbauen
-    if ($filtered) {
-        foreach ($obj in $filtered) {
+    # 4. In die sichtbare ListBox einfügen
+    if ($newFiltered) {
+        foreach ($obj in $newFiltered) {
             $idx = $discoveredListBox.Items.Add($obj.DisplayText)
+            # Stellt den Haken (Checked-Status) wieder her, falls er vorher gesetzt war
             $discoveredListBox.SetItemChecked($idx, $obj.Checked)
         }
     }
@@ -2163,6 +2182,7 @@ $scanDiscoveredButton.Add_Click({
     $existingApps = @(Get-WtWin32Apps -Superseded:$false -ErrorAction SilentlyContinue 3>$null 4>$null)
     $existingPackageIds = @()
     foreach ($eApp in $existingApps) {
+		[System.Windows.Forms.Application]::DoEvents()
         $id = Resolve-WtWingetId -AppOrResult $eApp
         if ($id) { $existingPackageIds += $id }
     }
@@ -2198,6 +2218,7 @@ $scanDiscoveredButton.Add_Click({
     $progressBar.Value = 0
 
     foreach ($app in $filteredApps) {
+		[System.Windows.Forms.Application]::DoEvents()
         $current++
         $progressBar.Value = $current
         Update-Status "Analyzing ($current/$total): $($app.displayName)..."
@@ -2218,6 +2239,7 @@ $scanDiscoveredButton.Add_Click({
             $highestScore = 0
             
             foreach ($wgApp in $wingetResults) {
+				[System.Windows.Forms.Application]::DoEvents()
                 $score = Get-StringSimilarity -str1 $app.displayName -str2 $wgApp.Name
                 if ($score -gt $highestScore) {
                     $highestScore = $score
