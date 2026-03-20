@@ -2044,35 +2044,48 @@ $logoutButton.Add_Click({
 # ==================================================
 
 # Handler für das Filtern / Sortieren
+# Handler für das Filtern / Sortieren
 function Update-DiscoveredListUI {
     $discoveredListBox.BeginUpdate()
     $discoveredListBox.Items.Clear()
     
-    $filtered = $script:discoveredRaw
+    $filtered = @($script:discoveredRaw)
     
-    # Filtern nach Publisher
-    if (-not [string]::IsNullOrWhiteSpace($discoveredFilterBox.Text)) {
-        $filterText = $discoveredFilterBox.Text
-        $filtered = $filtered | Where-Object { $_.Publisher -match $filterText }
+    # 1. Filtern nach App Name (Search Box Textfeld)
+    if (-not [string]::IsNullOrWhiteSpace($discoveredAppSearchBox.Text)) {
+        $searchText = [regex]::Escape($discoveredAppSearchBox.Text)
+        $filtered = $filtered | Where-Object { $_.DisplayName -match "(?i)$searchText" -or $_.WingetApp.Name -match "(?i)$searchText" }
+    }
+
+    # 2. Filtern nach Publisher (Dropdown)
+    if (-not [string]::IsNullOrWhiteSpace($discoveredPublisherBox.Text) -and $discoveredPublisherBox.Text -ne "<All Publishers>") {
+        $pubText = [regex]::Escape($discoveredPublisherBox.Text)
+        $filtered = $filtered | Where-Object { $_.Publisher -match "(?i)$pubText" }
     }
     
-    # Sortieren
+    # 3. Sortieren
     if ($discoveredSortBox.Text -eq "Alphabetical") {
         $filtered = $filtered | Sort-Object DisplayName
     } else {
         $filtered = $filtered | Sort-Object DeviceCount -Descending
     }
     
-    # Elemente wieder aufbauen
-    foreach ($obj in $filtered) {
-        $idx = $discoveredListBox.Items.Add($obj.DisplayText)
-        $discoveredListBox.SetItemChecked($idx, $obj.Checked)
+    # 4. Elemente wieder aufbauen
+    if ($filtered) {
+        foreach ($obj in $filtered) {
+            $idx = $discoveredListBox.Items.Add($obj.DisplayText)
+            $discoveredListBox.SetItemChecked($idx, $obj.Checked)
+        }
     }
     $discoveredListBox.EndUpdate()
 }
 
-$discoveredAppSearchBox.Add_TextChanged({ Update-DiscoveredListUI })
-$discoveredPublisherBox.Add_SelectedIndexChanged({ Update-DiscoveredListUI })
+# Wenn dein Feld noch eine TextBox ist, greift TextChanged:
+$discoveredFilterBox.Add_TextChanged({ Update-DiscoveredListUI })
+
+# WICHTIG: Wenn dein Publisher-Feld eine ComboBox/Dropdown ist, musst du diesen Listener hinzufügen!
+$discoveredFilterBox.Add_SelectedIndexChanged({ Update-DiscoveredListUI })
+
 $discoveredSortBox.Add_SelectedIndexChanged({ Update-DiscoveredListUI })
 
 # Wenn ein Haken gesetzt/entfernt wird, Zustand im Array speichern (überlebt Filterung!)
@@ -2386,47 +2399,44 @@ function Write-FileLog {
 # Re-entrancy protection for closing
 $script:_closingInProgress = $false
 $form.Add_FormClosing({
-  param($sender, [System.Windows.Forms.FormClosingEventArgs]$e)
-  try { if ($script:settings) { if ($script:settings.RememberMe) { $script:settings.LastUser = $usernameBox.Text } else { $script:settings.LastUser = "" }; Save-Settings } } catch {}
-  if ($script:_closingInProgress) { return }
-  if (-not $script:isConnected) { return }
-
-  $e.Cancel = $true
-  $script:_closingInProgress = $true
-  try {
-    $form.Enabled = $false
-    if ($statusLabel) { $statusLabel.Text = "Closing... signing out from tenant" }
-  } catch {}
-
-  Write-FileLog 'Shutdown: starting tenant disconnect (BackgroundWorker).'
-
-  # 5s Timeout on UI thread
-  $script:_wtCloseTimer = New-Object System.Windows.Forms.Timer
-  $script:_wtCloseTimer.Interval = 5000
-  $script:_wtCloseTimer.Add_Tick({
-    $script:_wtCloseTimer.Stop()
-    try { Write-FileLog 'Shutdown: disconnect timeout after 5s. Forcing close.' } catch {}
-    try { $form.Close() } catch {}
-  })
-  $script:_wtCloseTimer.Start()
-
-  # Disconnect in background
-  $bw = New-Object System.ComponentModel.BackgroundWorker
-  $bw.WorkerSupportsCancellation = $false
-  $bw.Add_DoWork({ 
+    param($sender, [System.Windows.Forms.FormClosingEventArgs]$e)
+    
+    # 1. Einstellungen speichern
     try { 
-      Disconnect-WtWinTuner 
-    } catch { 
-      try { Write-FileLog "Warning: Disconnect-WtWinTuner failed: $($_.Exception.Message)" } catch {}
-    } 
-  })
-  $bw.Add_RunWorkerCompleted({
-    try { Write-FileLog 'Shutdown: disconnect finished. Closing form.' } catch {}
-    try { if ($script:_wtCloseTimer) { $script:_wtCloseTimer.Stop() } } catch {}
-    $script:isConnected = $false
-    try { $form.Close() } catch {}
-  })
-  $bw.RunWorkerAsync()
+        if ($script:settings) { 
+            if ($script:settings.RememberMe) { $script:settings.LastUser = $usernameBox.Text } 
+            else { $script:settings.LastUser = "" }
+            Save-Settings 
+        } 
+    } catch {}
+
+    # 2. Wenn bereits geschlossen wird, ignorieren
+    if ($script:_closingInProgress) { return }
+    $script:_closingInProgress = $true
+
+    # 3. Falls verbunden, regulär abmelden
+    if ($script:isConnected) {
+        try {
+            $form.Enabled = $false
+            if ($statusLabel) { 
+                $statusLabel.Text = "Closing... signing out from tenant" 
+                # Zwingt die UI, sich noch einmal schnell zu aktualisieren, bevor sie blockiert wird
+                [System.Windows.Forms.Application]::DoEvents() 
+            }
+        } catch {}
+
+        Write-FileLog 'Shutdown: starting tenant disconnect.'
+
+        try {
+            # Synchrones Disconnect - HIER lag das Problem mit dem BackgroundWorker!
+            Disconnect-WtWinTuner -ErrorAction SilentlyContinue
+        } catch {
+            Write-FileLog "Warning: Disconnect-WtWinTuner failed: $($_.Exception.Message)"
+        }
+        
+        Write-FileLog 'Shutdown: disconnect finished. Closing form.'
+        $script:isConnected = $false
+    }
 })
 
 # ==================================================
