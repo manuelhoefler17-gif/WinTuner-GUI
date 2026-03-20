@@ -237,7 +237,7 @@ See [CHANGELOG.md](CHANGELOG.md) for a detailed list of changes between versions
 
 ### WinTuner Module
 This GUI is built on top of the excellent [WinTuner](https://github.com/svrooij/WinTuner) PowerShell module by:
-- **[Sander Rozemuller](https://github.com/svrooij)** - WinTuner module creator
+- **[Stephan van Rooij](https://github.com/svrooij)** - WinTuner module creator
 
 ### GUI Development
 - **Manuel Höfler** - WinTuner GUI development
