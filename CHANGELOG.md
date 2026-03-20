@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Global error handler for Windows Forms and AppDomain to log unhandled exceptions.
+- Log rotation (2MB limit) for the log file.
+
+### Changed
+- Improved update list search filtering to use new UI input fields (`discoveredAppSearchBox`, `discoveredPublisherBox`).
+- Enhanced regex to remove all text in parentheses and version numbers from Intune discovered app names, improving Winget matching (e.g., for Mozilla Firefox).
+- Consolidated discovered apps list so multiple versions of the same app are grouped by Winget PackageID with a summed device count and clean name.
+
+### Fixed
+- Fixed PowerShell stream preferences (`WarningPreference`, etc.) at the top of the script to prevent thread crashes from `WriteObject`/`WriteError` calls.
+
+---
+
 ### Added / Changed / Fixed
 * [8c27006](https://github.com/manuelhoefler17-gif/WinTuner-GUI/commit/8c2700650dc3303eefc15f707dfe4805065c35a4) - Latest updates by @manuelhoefler17-gif
 * [d42ef12](https://github.com/manuelhoefler17-gif/WinTuner-GUI/commit/d42ef12df3ccb00177d9bb60cee3f25d0038e14d) - Update by @manuelhoefler17-gif
