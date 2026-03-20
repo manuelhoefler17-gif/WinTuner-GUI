@@ -21,7 +21,7 @@
 
 ## 🎯 Overview
 
-**WinTuner GUI** is a comprehensive graphical interface built on top of the [WinTuner PowerShell module](https://github.com/svrooij/WinTuner) by Sander Rozemuller. It simplifies the process of packaging and deploying WinGet applications to Microsoft Intune and managing app updates.
+**WinTuner GUI** is a comprehensive graphical interface built on top of the [WinTuner PowerShell module] by Stephan van Rooij. It simplifies the process of packaging and deploying WinGet applications to Microsoft Intune and managing app updates.
 
 ### Key Capabilities
 
