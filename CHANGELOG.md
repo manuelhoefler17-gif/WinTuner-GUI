@@ -14,6 +14,8 @@ All notable changes to this project will be documented in this file.
 - Consolidated discovered apps list so multiple versions of the same app are grouped by Winget PackageID with a summed device count and clean name.
 
 ### Fixed
+- Fixed UI freezing and "Not Responding" state during long operations (like Discovered Apps scanning) by implementing `[System.Windows.Forms.Application]::DoEvents()`. 
+- Corrected event listener variable names for Discovered Apps filtering (`$discoveredAppSearchBox` and `$discoveredPublisherBox`) so the UI updates immediately on input.
 - Fixed PowerShell stream preferences (`WarningPreference`, etc.) at the top of the script to prevent thread crashes from `WriteObject`/`WriteError` calls.
 
 ---
@@ -51,4 +53,4 @@ All notable changes to this project will be documented in this file.
 * [bacc708](https://github.com/manuelhoefler17-gif/WinTuner-GUI/commit/bacc708ec74013d3402ddaeb438f8e448b43ef81) - Initial / earlier updates by @manuelhoefler17-gif
 
 ---
-*Note: You can view the full commit history and find more details on GitHub at [manuelhoefler17-gif/WinTuner-GUI/commits](https://github.com/manuelhoefler17-gif/WinTuner-GUI/commits/main).*
+*Note: You can view the full commit history and find more details on GitHub at [manuelhoefler17-gif/WinTuner-GUI/commits](https://github.com/manuelhoefler17-gif/WinTuner-GUI/commits/main).
