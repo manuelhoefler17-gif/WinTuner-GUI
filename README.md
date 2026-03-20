@@ -225,6 +225,8 @@ Log includes:
 See [CHANGELOG.md](CHANGELOG.md) for a detailed list of changes between versions.
 
 ### Latest Updates
+- Fixed UI freezing and "Not Responding" state during long operations (like Discovered Apps scanning) by implementing `[System.Windows.Forms.Application]::DoEvents()`. 
+- Corrected event listener variable names for Discovered Apps filtering (`$discoveredAppSearchBox` and `$discoveredPublisherBox`) so the UI updates immediately on input.
 - Re-enabled and configured `WarningPreference`/`InformationPreference` globals to prevent threading crashes from PowerShell streams in WinForms.
 - Enhanced Intune Discovered App parsing by aggressively trimming version strings and parenthesis values before searching Winget.
 - Reduced duplicate update list items by consolidating them per `PackageID` with combined device counts.
