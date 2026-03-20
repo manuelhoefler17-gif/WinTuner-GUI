@@ -2099,12 +2099,13 @@ function Update-DiscoveredListUI {
     $discoveredListBox.EndUpdate()
 }
 
-# Wenn dein Feld noch eine TextBox ist, greift TextChanged:
-$discoveredFilterBox.Add_TextChanged({ Update-DiscoveredListUI })
+# Listener für das Suchfeld (Text-Eingabe)
+$discoveredAppSearchBox.Add_TextChanged({ Update-DiscoveredListUI })
 
-# WICHTIG: Wenn dein Publisher-Feld eine ComboBox/Dropdown ist, musst du diesen Listener hinzufügen!
-$discoveredFilterBox.Add_SelectedIndexChanged({ Update-DiscoveredListUI })
+# Listener für das Publisher-Dropdown
+$discoveredPublisherBox.Add_SelectedIndexChanged({ Update-DiscoveredListUI })
 
+# Listener für das Sortierungs-Dropdown
 $discoveredSortBox.Add_SelectedIndexChanged({ Update-DiscoveredListUI })
 
 # Wenn ein Haken gesetzt/entfernt wird, Zustand im Array speichern (überlebt Filterung!)
