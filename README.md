@@ -36,7 +36,7 @@
 ### 📦 WinGet App Management
 - Search the WinGet repository for applications
 - Select specific versions or use latest
-- Create `.wtpackage` files locally
+- Create `.intune` files locally
 - Deploy packages directly to Microsoft Intune
 - Override WinGet versions per app
 
