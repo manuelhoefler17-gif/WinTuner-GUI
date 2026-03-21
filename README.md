@@ -41,7 +41,7 @@
 - Override WinGet versions per app
 
 ### 🔄 Updates Tab
-- Scan all Intune Win32 apps for available updates
+- Scan all Intune Win32 apps deployed with WinTuner for available updates
 - Enhanced app discovery with fuzzy string matching
 - Filter and sort discovered apps
 - Bulk select apps for update
