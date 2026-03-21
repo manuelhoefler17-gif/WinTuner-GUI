@@ -49,6 +49,19 @@
 - Detailed progress indication
 - Auto-check for updates on login (optional)
 
+### 🔍 Discovered Apps Tab
+- Scan all Intune Discovered Apps and automatically match them to WinGet packages using fuzzy string matching
+- Intelligent name parsing: strips version numbers and parenthesis values from Intune app names for improved matching
+- Consolidates duplicate entries per WinGet Package ID with combined device counts
+- Filter discovered apps by name or WinGet package name in real time
+- Filter by publisher using a dynamically populated dropdown
+- Sort results by device count (descending) or alphabetically
+- Checkbox list with per-item selection for deployment
+- One-click bulk packaging and deployment of checked apps directly to Intune
+- Displays device count per app for prioritization (e.g., `[42 PCs] App Name`)
+- Progress bar with detailed status updates during scan and deployment
+- Non-blocking UI during long scan operations
+
 ### ⚙️ Settings & Configuration
 - **Default Package Path**: Set your preferred package storage location
 - **Auto-Check Updates**: Enable automatic update checking after login
