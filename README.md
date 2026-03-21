@@ -5,6 +5,7 @@
 [![PowerShell Version](https://img.shields.io/badge/PowerShell-7.0%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.4-orange.svg)](CHANGELOG.md)
+[![GitHub Downloads](https://img.shields.io/github/downloads/manuelhoefler17-gif/WinTuner-GUI/total?label=Downloads&color=brightgreen)](https://github.com/manuelhoefler17-gif/WinTuner-GUI/releases)
 
 ## 📋 Table of Contents
 
