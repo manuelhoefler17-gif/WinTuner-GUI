@@ -8,16 +8,16 @@
 
 ## 📋 Table of Contents
 
-- [Overview](#overview)
-- [Features](#features)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Configuration](#configuration)
-- [Screenshots](#screenshots)
-- [Changelog](#changelog)
-- [Credits](#credits)
-- [License](#license)
+- [Overview](#-overview)
+- [Features](#-features)
+- [Requirements](#-requirements)
+- [Installation](#-installation)
+- [Usage](#-usage)
+- [Configuration](#️-configuration)
+- [Screenshots](#-screenshots)
+- [Changelog](#-changelog)
+- [Credits](#-credits)
+- [License](#-license)
 
 ## 🎯 Overview
 
