@@ -141,7 +141,7 @@ On first run, the script will:
 
 Navigate to **Settings** tab:
 
-- **Default Package Folder**: Set where `.wtpackage` files are stored
+- **Default Package Folder**: Set where `.intune` files are stored
 - **Check for updates on login**: Auto-trigger update search after login
 - **Remember last username**: Save username for next session
 
@@ -186,12 +186,21 @@ Log includes:
 
 ### Main Interface - WinGet Apps Tab
 *Search for WinGet packages and deploy to Intune*
+<img width="886" height="843" alt="image" src="https://github.com/user-attachments/assets/990f0de4-a5d3-4462-851d-686618faa02f" />
+
 
 ### Updates Tab
 *Check for and deploy updates to existing apps, filter and sort discovered apps*
+<img width="886" height="843" alt="image" src="https://github.com/user-attachments/assets/ef03ac45-d9ac-49eb-84b6-e1abc4265c96" />
+
+
+### Discover Apps Tab
+*Scan discovered Intune Apps and compare them with the WinGet repo. package them directly*
+<img width="886" height="843" alt="image" src="https://github.com/user-attachments/assets/c8bdb7ec-476b-465d-83ab-4fa369120a91" />
 
 ### Settings Tab
 *Configure application preferences*
+<img width="886" height="843" alt="image" src="https://github.com/user-attachments/assets/ad101628-3a72-4b5e-b550-0e531e0e983a" />
 
 ## 🔧 Troubleshooting
 
