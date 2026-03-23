@@ -265,6 +265,7 @@ This GUI is built on top of the excellent [WinTuner](https://github.com/svrooij/
 - **Manuel Höfler** - WinTuner GUI development
 
 ### Special Thanks
+- Julian Hilgenberg for the initial idea [@ju](https://github.com/jhilgenberg)
 - The WinGet community for package repository
 - Microsoft Graph API team
 - PowerShell community
