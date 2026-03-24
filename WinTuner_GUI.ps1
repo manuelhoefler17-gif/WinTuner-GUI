@@ -2204,9 +2204,9 @@ $updateSelectedButton.Add_Click({
         if ($result -and $result.Error) {
           Update-Status "Update error: $($result.Error)"
         } else {
-          $s = if ($result) { $result.Success } else { 0 }
-          $f = if ($result) { $result.Failed  } else { 0 }
-          Update-Status "Checked apps updated: $s successful, $f failed"
+          $successCount = if ($result) { $result.Success } else { 0 }
+          $failedCount  = if ($result) { $result.Failed  } else { 0 }
+          Update-Status "Checked apps updated: $successCount successful, $failedCount failed"
         }
         try { $updateSearchButton.PerformClick() } catch {}
       }
@@ -2311,9 +2311,9 @@ $updateAllButton.Add_Click({
         if ($result -and $result.Error) {
           Update-Status "Mass update error: $($result.Error)"
         } else {
-          $s = if ($result) { $result.Success } else { 0 }
-          $f = if ($result) { $result.Failed  } else { 0 }
-          Update-Status "All Updates Completed: $s successful, $f failed"
+          $successCount = if ($result) { $result.Success } else { 0 }
+          $failedCount  = if ($result) { $result.Failed  } else { 0 }
+          Update-Status "All Updates Completed: $successCount successful, $failedCount failed"
         }
         try { $updateSearchButton.PerformClick() } catch {}
       }
@@ -2742,9 +2742,9 @@ $deployDiscoveredButton.Add_Click({
           Write-Log "Deploy Discovered Apps Error: $($result.Error)"
           return
         }
-        $s = if ($result) { $result.Success } else { 0 }
-        $f = if ($result) { $result.Failed  } else { 0 }
-        Update-Status "Deployment complete: $s successful, $f failed."
+        $successCount = if ($result) { $result.Success } else { 0 }
+        $failedCount  = if ($result) { $result.Failed  } else { 0 }
+        Update-Status "Deployment complete: $successCount successful, $failedCount failed."
         [System.Windows.Forms.MessageBox]::Show(
           "Deployment finished!`n`nSuccessful: $s`nFailed: $f`n`nNewly deployed apps will now appear in your Intune tenant.",
           "Deploy Complete",
