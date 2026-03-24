@@ -2770,24 +2770,24 @@ try {
 }
 
 # Auto-check for GUI updates on startup with interactive dialog
-if ($script:settings.CheckGuiUpdateOnStartup) {
+if ($script:settings.ContainsKey('CheckGuiUpdateOnStartup') -and $script:settings.CheckGuiUpdateOnStartup) {
   try {
     Write-Log "Startup update check: enabled (appVersion=$($script:appVersion))"
-    $startupUpdate = Test-AppUpdateAvailable
-    Write-Log "Startup update check result: UpdateAvailable=$($startupUpdate.UpdateAvailable), LatestVersion=$($startupUpdate.LatestVersion), DownloadUrl=$($startupUpdate.DownloadUrl), Error=$($startupUpdate.ErrorMessage)"
+    $script:startupUpdateInfo = Test-AppUpdateAvailable
+    Write-Log "Startup update check result: UpdateAvailable=$($script:startupUpdateInfo.UpdateAvailable), LatestVersion=$($script:startupUpdateInfo.LatestVersion), DownloadUrl=$($script:startupUpdateInfo.DownloadUrl), Error=$($script:startupUpdateInfo.ErrorMessage)"
     
-    if ($startupUpdate.ErrorMessage) {
-      Write-Log "Startup update check had error: $($startupUpdate.ErrorMessage) — skipping update dialog"
+    if ($script:startupUpdateInfo.ErrorMessage) {
+      Write-Log "Startup update check had error: $($script:startupUpdateInfo.ErrorMessage) — skipping update dialog"
     }
-    elseif ($startupUpdate.UpdateAvailable) {
+    elseif ($script:startupUpdateInfo.UpdateAvailable) {
       Write-Log "Startup update: registering Add_Shown handler for update dialog"
       $form.Add_Shown({
         try {
           $msg  = "A new version of WinTuner GUI is available!`n`n"
           $msg += "Current version: v$($script:appVersion)`n"
-          $msg += "Latest version:  v$($startupUpdate.LatestVersion)`n`n"
+          $msg += "Latest version:  v$($script:startupUpdateInfo.LatestVersion)`n`n"
           
-          if ($startupUpdate.DownloadUrl) {
+          if ($script:startupUpdateInfo.DownloadUrl) {
             $msg += "Do you want to download and install the update now?`n`n"
             $msg += "(A backup of your current version will be created)"
             
@@ -2802,7 +2802,7 @@ if ($script:settings.CheckGuiUpdateOnStartup) {
               Update-Status "Downloading update..."
               [System.Windows.Forms.Application]::DoEvents()
               
-              $success = Invoke-AppSelfUpdate -DownloadUrl $startupUpdate.DownloadUrl
+              $success = Invoke-AppSelfUpdate -DownloadUrl $script:startupUpdateInfo.DownloadUrl
               
               if ($success) {
                 $restartMsg  = "Update installed successfully!`n`n"
@@ -2819,11 +2819,11 @@ if ($script:settings.CheckGuiUpdateOnStartup) {
                 $form.Close()
               }
             } else {
-              Update-Status "Update available: v$($startupUpdate.LatestVersion) - Go to Settings to update later."
+              Update-Status "Update available: v$($script:startupUpdateInfo.LatestVersion) - Go to Settings to update later."
             }
           } else {
             $msg += "No direct download available for this release.`n"
-            $msg += "Please download manually from:`n$($startupUpdate.ReleaseUrl)"
+            $msg += "Please download manually from:`n$($script:startupUpdateInfo.ReleaseUrl)"
             
             [System.Windows.Forms.MessageBox]::Show(
               $msg,
@@ -2833,12 +2833,12 @@ if ($script:settings.CheckGuiUpdateOnStartup) {
             )
           }
         } catch {
-          Write-Log "Startup update dialog error: $($_.Exception.Message)"
+          # Use Write-FileLog as fallback since Write-Log may be unavailable in edge cases
+          try { Write-Log "Startup update dialog error: $($_.Exception.Message)" } catch { Write-FileLog "Startup update dialog error: $($_.Exception.Message)" }
         }
-      }.GetNewClosure())
+      })
     } else {
-      $latestForLog = if ($startupUpdate.LatestVersion) { $startupUpdate.LatestVersion } else { 'unknown' }
-      Write-Log "Startup update check: no update available (current=$($script:appVersion), latest=$latestForLog)"
+      Write-Log "Startup update check: no update available (current=$($script:appVersion), latest=$($script:startupUpdateInfo.LatestVersion))"
     }
   } catch {
     Write-Log "Startup update check failed: $($_.Exception.Message)"
