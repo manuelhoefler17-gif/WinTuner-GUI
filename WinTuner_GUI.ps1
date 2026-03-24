@@ -98,7 +98,7 @@ function Test-AppUpdateAvailable {
 
     $savedDefaults = $PSDefaultParameterValues.Clone()
     try {
-      $PSDefaultParameterValues.Clear()
+      $PSDefaultParameterValues = @{}
       $response = Invoke-RestMethod -Uri $script:githubApiUrl -Headers $headers -TimeoutSec 10 -ErrorAction Stop
     } finally {
       $PSDefaultParameterValues = $savedDefaults
@@ -170,7 +170,7 @@ function Invoke-AppSelfUpdate {
     # (wildcard entries like '*:ProgressAction' can corrupt URI resolution in some PS7 builds)
     $savedDefaults = $PSDefaultParameterValues.Clone()
     try {
-      $PSDefaultParameterValues.Clear()
+      $PSDefaultParameterValues = @{}
       $headers = @{ 'User-Agent' = 'WinTuner-GUI-UpdateCheck' }
       Invoke-WebRequest -Uri $DownloadUrl -OutFile $tempFile -Headers $headers -TimeoutSec 60 -UseBasicParsing -ErrorAction Stop
     } finally {
@@ -2756,14 +2756,66 @@ try {
 # Auto-check for app updates on startup (silent, non-blocking)
 if ($script:settings.AutoCheckUpdates) {
   try {
-    $startupUpdate = Test-AppUpdateAvailable
-    if ($startupUpdate.UpdateAvailable -and -not $startupUpdate.ErrorMessage) {
+    $script:startupUpdateInfo = Test-AppUpdateAvailable
+    if ($script:startupUpdateInfo -and $script:startupUpdateInfo.UpdateAvailable -and -not $script:startupUpdateInfo.ErrorMessage) {
       $form.Add_Shown({
-        Update-Status "WinTuner GUI v$($startupUpdate.LatestVersion) is available! (You have v$($script:appVersion)) - Open Settings to update."
-      }.GetNewClosure())
+        try {
+          $msg  = "A new version of WinTuner GUI is available!`n`n"
+          $msg += "Current version: v$($script:appVersion)`n"
+          $msg += "Latest version:  v$($script:startupUpdateInfo.LatestVersion)`n`n"
+
+          if ($script:startupUpdateInfo.DownloadUrl) {
+            $msg += "Do you want to download and install the update now?`n`n"
+            $msg += "(A backup of your current version will be created)"
+
+            $answer = [System.Windows.Forms.MessageBox]::Show(
+              $msg,
+              "Update Available",
+              [System.Windows.Forms.MessageBoxButtons]::YesNo,
+              [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+
+            if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
+              Update-Status "Downloading update..."
+              [System.Windows.Forms.Application]::DoEvents()
+
+              $success = Invoke-AppSelfUpdate -DownloadUrl $script:startupUpdateInfo.DownloadUrl
+
+              if ($success) {
+                $restartMsg  = "Update installed successfully!`n`n"
+                $restartMsg += "WinTuner GUI needs to restart to apply the update.`n"
+                $restartMsg += "Click OK to close. Please start the script again manually."
+
+                [System.Windows.Forms.MessageBox]::Show(
+                  $restartMsg,
+                  "Update Complete",
+                  [System.Windows.Forms.MessageBoxButtons]::OK,
+                  [System.Windows.Forms.MessageBoxIcon]::Information
+                )
+
+                $form.Close()
+              }
+            } else {
+              Update-Status "Update available: v$($script:startupUpdateInfo.LatestVersion) - Go to Settings to update later."
+            }
+          } else {
+            $msg += "No direct download available for this release.`n"
+            $msg += "Please download manually from:`n$($script:startupUpdateInfo.ReleaseUrl)"
+
+            [System.Windows.Forms.MessageBox]::Show(
+              $msg,
+              "Update Available",
+              [System.Windows.Forms.MessageBoxButtons]::OK,
+              [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+          }
+        } catch {
+          try { Write-Log "Startup update dialog error: $($_.Exception.Message)" } catch {}
+        }
+      })
     }
   } catch {
-    # Silent fail - don't block startup
+    try { Write-Log "Startup update check failed: $($_.Exception.Message)" } catch {}
   }
 }
 
