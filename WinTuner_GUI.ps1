@@ -35,6 +35,13 @@ $PSDefaultParameterValues = @{
   '*:Debug' = $false
 }
 
+# ============================================
+# App version (used for self-update check)
+# ============================================
+$script:appVersion = "0.4.0"
+$script:githubRepo = "manuelhoefler17-gif/WinTuner-GUI"
+$script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
+
 # Version comparison helper: returns $true if Latest > Current
 function Test-IsNewerVersion {
     param([string]$Latest, [string]$Current)
@@ -62,6 +69,142 @@ function Test-IsNewerVersion {
     }
 }
 
+
+function Test-AppUpdateAvailable {
+  <#
+  .SYNOPSIS
+    Checks GitHub for a newer release of WinTuner GUI
+  .OUTPUTS
+    PSCustomObject with properties: UpdateAvailable, LatestVersion, DownloadUrl, ReleaseUrl, ReleaseNotes, ErrorMessage
+  #>
+  $result = [pscustomobject]@{
+    UpdateAvailable = $false
+    LatestVersion   = $null
+    DownloadUrl     = $null
+    ReleaseUrl      = $null
+    ReleaseNotes    = $null
+    ErrorMessage    = $null
+  }
+
+  try {
+    Write-Log "Checking for app updates from GitHub..."
+
+    $headers = @{
+      'Accept'     = 'application/vnd.github.v3+json'
+      'User-Agent' = 'WinTuner-GUI-UpdateCheck'
+    }
+
+    $response = Invoke-RestMethod -Uri $script:githubApiUrl -Headers $headers -TimeoutSec 10 -ErrorAction Stop
+
+    # Extract version from tag_name (strip leading "v" and any suffix like "-Beta")
+    $remoteTag = $response.tag_name
+    $remoteVersionStr = $remoteTag -replace '^v', ''
+    $cleanVersion = $remoteVersionStr -replace '-.*$', ''  # Remove "-Beta", "-RC1" etc.
+
+    $result.LatestVersion = $cleanVersion
+    $result.ReleaseUrl    = $response.html_url
+    $result.ReleaseNotes  = $response.body
+
+    # Find the .ps1 download asset
+    $ps1Asset = $response.assets | Where-Object { $_.name -like '*.ps1' } | Select-Object -First 1
+    if ($ps1Asset) {
+      $result.DownloadUrl = $ps1Asset.browser_download_url
+    }
+
+    # Compare versions using existing function
+    if (Test-IsNewerVersion -Latest $cleanVersion -Current $script:appVersion) {
+      $result.UpdateAvailable = $true
+      Write-Log "Update available: $($script:appVersion) -> $cleanVersion"
+    } else {
+      Write-Log "App is up to date (v$($script:appVersion), latest: v$cleanVersion)"
+    }
+
+  } catch {
+    $result.ErrorMessage = $_.Exception.Message
+    Write-Log "Update check failed: $($_.Exception.Message)"
+  }
+
+  return $result
+}
+
+function Invoke-AppSelfUpdate {
+  param(
+    [Parameter(Mandatory=$true)]
+    [string]$DownloadUrl
+  )
+
+  try {
+    # Determine current script path
+    $currentPath = $null
+    if ($PSCommandPath) {
+      $currentPath = $PSCommandPath
+    } elseif ($MyInvocation.ScriptName) {
+      $currentPath = $MyInvocation.ScriptName
+    } else {
+      $sfd = New-Object System.Windows.Forms.SaveFileDialog
+      $sfd.Title = "Save updated WinTuner GUI"
+      $sfd.Filter = "PowerShell Script (*.ps1)|*.ps1"
+      $sfd.FileName = "WinTuner_GUI.ps1"
+      if ($sfd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        $currentPath = $sfd.FileName
+      } else {
+        Write-Log "Update canceled: no save path selected"
+        return $false
+      }
+    }
+
+    Write-Log "Downloading update from: $DownloadUrl"
+    Update-Status "Downloading update..."
+
+    $tempFile = [System.IO.Path]::GetTempFileName() + ".ps1"
+
+    $headers = @{ 'User-Agent' = 'WinTuner-GUI-UpdateCheck' }
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $tempFile -Headers $headers -TimeoutSec 60 -ErrorAction Stop
+
+    # Validate download
+    if (-not (Test-Path $tempFile)) {
+      throw "Download failed: temp file not found"
+    }
+    $fileSize = (Get-Item $tempFile).Length
+    if ($fileSize -lt 1000) {
+      throw "Download failed: file too small ($fileSize bytes)"
+    }
+    $content = Get-Content $tempFile -Raw -ErrorAction Stop
+    if ($content -notmatch 'WinTuner GUI') {
+      throw "Download validation failed: file doesn't appear to be WinTuner GUI"
+    }
+
+    Write-Log "Download complete ($fileSize bytes). Replacing script..."
+
+    # Create backup
+    $backupPath = "$currentPath.backup"
+    try {
+      Copy-Item -Path $currentPath -Destination $backupPath -Force -ErrorAction Stop
+      Write-Log "Backup created: $backupPath"
+    } catch {
+      Write-Log "Warning: Could not create backup: $($_.Exception.Message)"
+    }
+
+    # Replace current script
+    Move-Item -Path $tempFile -Destination $currentPath -Force -ErrorAction Stop
+
+    Write-Log "Script replaced successfully. Restart required."
+    return $true
+
+  } catch {
+    Write-Log "Self-update failed: $($_.Exception.Message)"
+    if ($tempFile -and (Test-Path $tempFile)) {
+      Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+    }
+    [System.Windows.Forms.MessageBox]::Show(
+      "Update failed: $($_.Exception.Message)`n`nYou can update manually from:`nhttps://github.com/$($script:githubRepo)/releases/latest",
+      "Update Failed",
+      [System.Windows.Forms.MessageBoxButtons]::OK,
+      [System.Windows.Forms.MessageBoxIcon]::Error
+    )
+    return $false
+  }
+}
 
 # Helper: resolve Winget Package Identifier across possible property names
 function Resolve-WtWingetId {
@@ -1143,6 +1286,118 @@ $saveSettingsButton.Add_Click({
       [System.Windows.Forms.MessageBoxButtons]::OK,
       [System.Windows.Forms.MessageBoxIcon]::Error
     )
+  }
+})
+
+# --- Self-Update Section in Settings Tab ---
+$updateSectionLabel = New-Object System.Windows.Forms.Label
+$updateSectionLabel.Text = "Application Updates"
+$updateSectionLabel.Location = New-Object System.Drawing.Point(20, 240)
+$updateSectionLabel.AutoSize = $true
+$updateSectionLabel.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
+$tabSettings.Controls.Add($updateSectionLabel)
+
+$currentVersionLabel = New-Object System.Windows.Forms.Label
+$currentVersionLabel.Text = "Current version: v$($script:appVersion)"
+$currentVersionLabel.Location = New-Object System.Drawing.Point(20, 270)
+$currentVersionLabel.AutoSize = $true
+$tabSettings.Controls.Add($currentVersionLabel)
+
+$checkUpdateButton = New-Object System.Windows.Forms.Button
+$checkUpdateButton.Text = "🔄 Check for Updates"
+$checkUpdateButton.Location = New-Object System.Drawing.Point(20, 300)
+$checkUpdateButton.Width = 180
+$checkUpdateButton.Height = 35
+$tabSettings.Controls.Add($checkUpdateButton)
+
+$checkUpdateButton.Add_Click({
+  try {
+    $checkUpdateButton.Enabled = $false
+    Update-Status "Checking for updates..."
+    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+    $progressBar.Visible = $true
+    [System.Windows.Forms.Application]::DoEvents()
+
+    $updateInfo = Test-AppUpdateAvailable
+
+    if ($updateInfo.ErrorMessage) {
+      [System.Windows.Forms.MessageBox]::Show(
+        "Could not check for updates.`n`nError: $($updateInfo.ErrorMessage)`n`nCheck your internet connection and try again.",
+        "Update Check Failed",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+      )
+      Update-Status "Update check failed"
+      return
+    }
+
+    if ($updateInfo.UpdateAvailable) {
+      $msg  = "A new version of WinTuner GUI is available!`n`n"
+      $msg += "Current version: v$($script:appVersion)`n"
+      $msg += "Latest version:  v$($updateInfo.LatestVersion)`n`n"
+
+      if ($updateInfo.DownloadUrl) {
+        $msg += "Do you want to download and install the update now?`n`n"
+        $msg += "(A backup of your current version will be created)"
+
+        $answer = [System.Windows.Forms.MessageBox]::Show(
+          $msg,
+          "Update Available",
+          [System.Windows.Forms.MessageBoxButtons]::YesNo,
+          [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+
+        if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
+          Update-Status "Downloading update..."
+          [System.Windows.Forms.Application]::DoEvents()
+
+          $success = Invoke-AppSelfUpdate -DownloadUrl $updateInfo.DownloadUrl
+
+          if ($success) {
+            $restartMsg  = "Update installed successfully!`n`n"
+            $restartMsg += "WinTuner GUI needs to restart to apply the update.`n"
+            $restartMsg += "Click OK to close. Please start the script again manually."
+
+            [System.Windows.Forms.MessageBox]::Show(
+              $restartMsg,
+              "Update Complete",
+              [System.Windows.Forms.MessageBoxButtons]::OK,
+              [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+
+            $form.Close()
+          }
+        } else {
+          Update-Status "Update postponed by user"
+        }
+      } else {
+        $msg += "No direct download available for this release.`n"
+        $msg += "Please download manually from:`n$($updateInfo.ReleaseUrl)"
+
+        [System.Windows.Forms.MessageBox]::Show(
+          $msg,
+          "Update Available",
+          [System.Windows.Forms.MessageBoxButtons]::OK,
+          [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+      }
+    } else {
+      [System.Windows.Forms.MessageBox]::Show(
+        "You are running the latest version (v$($script:appVersion)).",
+        "No Update Available",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Information
+      )
+      Update-Status "App is up to date (v$($script:appVersion))"
+    }
+
+  } catch {
+    Write-Log "Update check UI error: $($_.Exception.Message)"
+    Update-Status "Update check error"
+  } finally {
+    $checkUpdateButton.Enabled = $true
+    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $progressBar.Visible = $false
   }
 })
 
@@ -2480,6 +2735,20 @@ try {
     })
 } catch {
     # Ignoriere Fehler, falls die Event-Registrierung in älteren PS-Versionen zickt
+}
+
+# Auto-check for app updates on startup (silent, non-blocking)
+if ($script:settings.AutoCheckUpdates) {
+  try {
+    $startupUpdate = Test-AppUpdateAvailable
+    if ($startupUpdate.UpdateAvailable -and -not $startupUpdate.ErrorMessage) {
+      $form.Add_Shown({
+        Update-Status "WinTuner GUI v$($startupUpdate.LatestVersion) is available! (You have v$($script:appVersion)) - Open Settings to update."
+      }.GetNewClosure())
+    }
+  } catch {
+    # Silent fail - don't block startup
+  }
 }
 
 # Run the form mit finalem Sicherheitsnetz
