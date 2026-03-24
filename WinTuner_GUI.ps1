@@ -2772,8 +2772,15 @@ try {
 # Auto-check for GUI updates on startup with interactive dialog
 if ($script:settings.CheckGuiUpdateOnStartup) {
   try {
+    Write-Log "Startup update check: enabled (appVersion=$($script:appVersion))"
     $startupUpdate = Test-AppUpdateAvailable
-    if ($startupUpdate.UpdateAvailable -and -not $startupUpdate.ErrorMessage) {
+    Write-Log "Startup update check result: UpdateAvailable=$($startupUpdate.UpdateAvailable), LatestVersion=$($startupUpdate.LatestVersion), DownloadUrl=$($startupUpdate.DownloadUrl), Error=$($startupUpdate.ErrorMessage)"
+    
+    if ($startupUpdate.ErrorMessage) {
+      Write-Log "Startup update check had error: $($startupUpdate.ErrorMessage) — skipping update dialog"
+    }
+    elseif ($startupUpdate.UpdateAvailable) {
+      Write-Log "Startup update: registering Add_Shown handler for update dialog"
       $form.Add_Shown({
         try {
           $msg  = "A new version of WinTuner GUI is available!`n`n"
@@ -2829,10 +2836,15 @@ if ($script:settings.CheckGuiUpdateOnStartup) {
           Write-Log "Startup update dialog error: $($_.Exception.Message)"
         }
       }.GetNewClosure())
+    } else {
+      $latestForLog = if ($startupUpdate.LatestVersion) { $startupUpdate.LatestVersion } else { 'unknown' }
+      Write-Log "Startup update check: no update available (current=$($script:appVersion), latest=$latestForLog)"
     }
   } catch {
-    # Silent fail - don't block startup
+    Write-Log "Startup update check failed: $($_.Exception.Message)"
   }
+} else {
+  Write-Log "Startup update check: disabled by settings"
 }
 
 # Run the form mit finalem Sicherheitsnetz
