@@ -239,7 +239,7 @@ function Get-UpdateCandidates {
     Write-Log ("Get-WtWin32Apps (all) failed: {0}" -f $_.Exception.Message)
     $all = @()
   }
-  $candidates = @()
+  $candidates = [System.Collections.Generic.List[object]]::new()
   foreach ($app in @($all)) {
     if (-not $app -or -not $app.CurrentVersion) { continue }
     $wingetId = Try-ResolveWingetIdForApp -App $app
@@ -255,10 +255,10 @@ function Get-UpdateCandidates {
       } catch {
         Write-Log "Warning: Could not update LatestVersion property for $($app.Name): $($_.Exception.Message)"
       }
-      $candidates += $app
+      $candidates.Add($app)
     }
   }
-  return ,$candidates
+  return @($candidates)
 }
 
 # Performs update workflow for a single app (create package + deploy)
@@ -450,6 +450,10 @@ function Write-Log {
     # Write to file
     try {
       $base = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation -and $MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
+      if ([string]::IsNullOrWhiteSpace($base)) { $base = [Environment]::GetFolderPath('LocalApplicationData') }
+      if (-not (Test-Path $base)) { 
+          try { New-Item -ItemType Directory -Path $base -Force | Out-Null } catch { return }
+      }
       $logPath = Join-Path $base 'WinTuner_GUI.log'
       
       # --- NEU: Log-Größe begrenzen (Log Rotation) ---
@@ -946,7 +950,7 @@ $tabUpdate.Controls.Add($supersededDropdown)
 
 # Button: Delete selected app
 $deleteSelectedAppButton = New-Object System.Windows.Forms.Button
-$deleteSelectedAppButton.Text = "Ausgewählte App löschen"
+$deleteSelectedAppButton.Text = "Delete Selected App"
 $deleteSelectedAppButton.Location = New-Object System.Drawing.Point(100,385)
 $deleteSelectedAppButton.Width = 250
 $deleteSelectedAppButton.Enabled = $false
@@ -1425,7 +1429,7 @@ $createButton.Add_Click({
     $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
     $progressBar.MarqueeAnimationSpeed = 30
     $progressBar.Visible = $true
-    [System.Windows.Forms.Application]::DoEvents()  # Update UI
+    [System.Windows.Forms.Application]::DoEvents()  # Update UI - TODO: refactor to use Invoke-AsyncOperation
     
     $desired = $null
     if ($script:selectedPackageVersions.ContainsKey($packageID)) { 
@@ -1496,7 +1500,7 @@ $uploadButton.Add_Click({
         $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
         $progressBar.MarqueeAnimationSpeed = 30
         $progressBar.Visible = $true
-        [System.Windows.Forms.Application]::DoEvents()
+        [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
         
         Deploy-WtWin32App -PackageId $packageID -Version $version -RootPackageFolder $folder -ErrorAction Stop
         
@@ -1588,7 +1592,6 @@ $updateFilterBox.Add_TextChanged({
     }
   }
   $updateListBox.EndUpdate()
-  $updateListBox.EndUpdate()
   # Update status with filter info
   if (-not [string]::IsNullOrWhiteSpace($filterText)) {
     $statusLabel.Text = "Filter: $($updateListBox.Items.Count) apps match '$filterText'"
@@ -1640,7 +1643,7 @@ $updateSearchButton.Add_Click({
     $progressBar.Maximum = $appsToCheck.Count
     $progressBar.Visible = $true
 
-    $candidates = @()
+    $candidates = [System.Collections.Generic.List[object]]::new()
     $processedCount = 0
     $totalCount = $appsToCheck.Count
     
@@ -1651,7 +1654,7 @@ $updateSearchButton.Add_Click({
       try {
         $progressBar.Value = $processedCount
         Update-Status ("Checking ({0}/{1}): {2}" -f $processedCount, $totalCount, $app.Name)
-        [System.Windows.Forms.Application]::DoEvents()
+        [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
       } catch { }
       
       # Try to resolve winget ID
@@ -1670,7 +1673,7 @@ $updateSearchButton.Add_Click({
               } catch { }
               
               if (Test-IsNewerVersion $wgLatest $app.CurrentVersion) {
-                $candidates += $app
+                $candidates.Add($app)
                 Write-Log ("Update available: {0} ({1} -> {2})" -f $app.Name, $app.CurrentVersion, $wgLatest)
               }
               $verified = $true
@@ -1684,7 +1687,7 @@ $updateSearchButton.Add_Click({
       # Fallback: use LatestVersion if winget check failed
       if (-not $verified -and $app.LatestVersion) {
         if (Test-IsNewerVersion $app.LatestVersion $app.CurrentVersion) {
-          $candidates += $app
+          $candidates.Add($app)
           Write-Log ("Update available (fallback): {0} ({1} -> {2})" -f $app.Name, $app.CurrentVersion, $app.LatestVersion)
         }
       }
@@ -1693,17 +1696,14 @@ $updateSearchButton.Add_Click({
     $count = 0
     $updateListBox.BeginUpdate()
     
-    # Explizite Array-Initialisierung, damit der op_Addition Fehler nie wieder auftritt
-    $script:updateApps = @()
+    $script:updateApps = [System.Collections.Generic.List[object]]::new()
     
     foreach ($app in ($candidates | Sort-Object Name)) {
       if (-not $app -or -not $app.Name) { continue }
       [void]$updateListBox.Items.Add($app.Name)
-      # @(...) erzwingt, dass PowerShell es als Array-Element behandelt
-      $script:updateApps += @($app)
+      $script:updateApps.Add($app)
       $count++
     }
-    $updateListBox.EndUpdate()
     $updateListBox.EndUpdate()
 
     if ($count -gt 0) {
@@ -1728,7 +1728,7 @@ $updateSearchButton.Add_Click({
 # -----------------------------
 $updateSelectedButton.Add_Click({
     # Get checked items
-    $checkedApps = @()
+    $checkedApps = [System.Collections.Generic.List[object]]::new()
     
     Write-Log "Processing $($updateListBox.CheckedItems.Count) checked items from UI"
     Write-Log "global:updateApps cache has $($script:updateApps.Count) apps"
@@ -1747,7 +1747,7 @@ $updateSelectedButton.Add_Click({
         
         if ($foundApp) { 
             Write-Log "Found: $($foundApp.Name) (Current: $($foundApp.CurrentVersion), Latest: $($foundApp.LatestVersion), GraphId: $($foundApp.GraphId))"
-            $checkedApps += $foundApp
+            $checkedApps.Add($foundApp)
         } else {
             Write-Log "WARNING: Could not find '$itemName' in cache!"
             Write-Log "Available apps in cache: $($script:updateApps.Name -join ', ')"
@@ -1788,7 +1788,7 @@ $updateSelectedButton.Add_Click({
         foreach ($app in $checkedApps) {
             $currentIndex++
             Update-Status ("Updating ({0}/{1}): {2}" -f $currentIndex, $totalCount, $app.Name)
-            [System.Windows.Forms.Application]::DoEvents()
+            [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
             
             # Extract properties from WtWin32App object
             $appName = $app.Name
@@ -1900,7 +1900,7 @@ $updateAllButton.Add_Click({
         foreach ($app in @($updatedApps)) {
             $currentIndex++
             Update-Status ("Updating ({0}/{1}): {2}" -f $currentIndex, $totalCount, $app.Name)
-            [System.Windows.Forms.Application]::DoEvents()  # Keep UI responsive
+            [System.Windows.Forms.Application]::DoEvents()  # Keep UI responsive - TODO: refactor to use Invoke-AsyncOperation
             
             Write-Log "Processing update for: $($app.Name)"
             
@@ -1958,7 +1958,7 @@ $removeOldAppsButton.Add_Click({
   $appNames = ($oldApps | Select-Object -ExpandProperty Name) -join "`r`n"
   $result = [System.Windows.Forms.MessageBox]::Show(
     "The following outdated apps will be removed:`r`n$appNames",
-    "Bestätigung",
+    "Confirmation",
     [System.Windows.Forms.MessageBoxButtons]::YesNo,
     [System.Windows.Forms.MessageBoxIcon]::Question
   )
@@ -1968,7 +1968,7 @@ $removeOldAppsButton.Add_Click({
     foreach ($app in @($oldApps)) {
       try {
         Remove-WtWin32App -GraphId $app.GraphId -ErrorAction Stop
-        Update-Status ("Entfernt: {0}" -f $app.Name)
+        Update-Status ("Removed: {0}" -f $app.Name)
       } catch {
         Update-Status ("Error removing {0}: {1}" -f $app.Name, $_.Exception.Message)
       }
@@ -2013,7 +2013,7 @@ $deleteSelectedAppButton.Add_Click({
   $app = $script:supersededApps[$supersededDropdown.SelectedIndex]
   $result = [System.Windows.Forms.MessageBox]::Show(
     "Delete App '" + $app.Name + "'?",
-    "Bestätigung",
+    "Confirmation",
     [System.Windows.Forms.MessageBoxButtons]::YesNo,
     [System.Windows.Forms.MessageBoxIcon]::Question
   )
@@ -2052,8 +2052,8 @@ function Update-DiscoveredListUI {
     $pubText = $discoveredPublisherBox.Text
     $sortType = $discoveredSortBox.Text
 
-    # Wir nutzen ein neues leeres Array für die gefilterten Ergebnisse
-    $newFiltered = @()
+    # Use a List for efficient collection building
+    $newFiltered = [System.Collections.Generic.List[object]]::new()
 
     foreach ($item in $script:discoveredRaw) {
         $match = $true
@@ -2077,7 +2077,7 @@ function Update-DiscoveredListUI {
 
         # Wenn die App beide Filter übersteht, zum neuen Array hinzufügen
         if ($match) {
-            $newFiltered += $item
+            $newFiltered.Add($item)
         }
     }
     
@@ -2146,13 +2146,24 @@ $scanDiscoveredButton.Add_Click({
     $scanDiscoveredButton.Enabled = $false
     $deployDiscoveredButton.Enabled = $false
     $discoveredListBox.Items.Clear()
-    $script:discoveredRaw = @()
+    $script:discoveredRaw = [System.Collections.Generic.List[object]]::new()
     
     $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
     $progressBar.Visible = $true
-    [System.Windows.Forms.Application]::DoEvents()
+    [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
 
     # --- GRAPH-AUTH BLOCK ---
+    # Check if Microsoft.Graph module is available before attempting auth
+    if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
+        Update-Status "Microsoft.Graph module not found. Please install it: Install-Module Microsoft.Graph -Scope CurrentUser"
+        [System.Windows.Forms.MessageBox]::Show(
+            "The Microsoft.Graph PowerShell module is required for Discovered Apps scanning.`n`nInstall it with:`nInstall-Module Microsoft.Graph -Scope CurrentUser",
+            "Module Missing",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+        return
+    }
     $requiredScope = "DeviceManagementApps.Read.All"
     $mgContext = Get-MgContext -ErrorAction SilentlyContinue
 
@@ -2165,39 +2176,39 @@ $scanDiscoveredButton.Add_Click({
         if (-not $hasScope -or -not $userMatch) {
             $needsAuth = $true
             Update-Status "Clearing old Graph session (Scope missing or wrong Tenant)..."
-            [System.Windows.Forms.Application]::DoEvents()
+            [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
             try { Disconnect-MgGraph -ErrorAction SilentlyContinue } catch {}
         }
     }
 
     if ($needsAuth) {
         Update-Status "Authenticating with MS Graph for $($script:currentUserUpn)..."
-        [System.Windows.Forms.Application]::DoEvents()
+        [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
         $tenantDomain = $script:currentUserUpn.Split('@')[1]
         $null = Connect-MgGraph -TenantId $tenantDomain -Scopes $requiredScope -NoWelcome -ErrorAction Stop *>&1
     }
 
     # 1. Vorhandene Apps checken (EXTREM SCHNELL DURCH "Resolve" STATT "Try-Resolve")
     Update-Status "Loading existing managed apps to filter them out..."
-    [System.Windows.Forms.Application]::DoEvents()
+    [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
     $existingApps = @(Get-WtWin32Apps -Superseded:$false -ErrorAction SilentlyContinue 3>$null 4>$null)
-    $existingPackageIds = @()
+    $existingPackageIds = [System.Collections.Generic.List[object]]::new()
     foreach ($eApp in $existingApps) {
-		[System.Windows.Forms.Application]::DoEvents()
+		[System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
         $id = Resolve-WtWingetId -AppOrResult $eApp
-        if ($id) { $existingPackageIds += $id }
+        if ($id) { $existingPackageIds.Add($id) }
     }
 
     # 2. Hole ALLE Discovered Apps aus Intune (inklusive Paginierung)
     Update-Status "Fetching ALL detected apps from Intune API (this might take a moment)..."
-    [System.Windows.Forms.Application]::DoEvents()
+    [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
     
     $uri = "https://graph.microsoft.com/beta/deviceManagement/detectedApps?`$top=500&`$orderby=deviceCount desc"
-    $detectedApps = @()
+    $detectedApps = [System.Collections.Generic.List[object]]::new()
     
     do {
         $response = Invoke-MgRestMethod -Uri $uri -Method GET -ErrorAction Stop
-        if ($response.value) { $detectedApps += $response.value }
+        if ($response.value) { $detectedApps.AddRange([object[]]$response.value) }
         $uri = $response.'@odata.nextLink'
     } while ($uri)
 
@@ -2219,11 +2230,11 @@ $scanDiscoveredButton.Add_Click({
     $progressBar.Value = 0
 
     foreach ($app in $filteredApps) {
-		[System.Windows.Forms.Application]::DoEvents()
+		[System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
         $current++
         $progressBar.Value = $current
         Update-Status "Analyzing ($current/$total): $($app.displayName)..."
-        [System.Windows.Forms.Application]::DoEvents()
+        [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
 
         try {
             # 1. Entfernt restlos alles, was in Klammern steht (z.B. "(x64 de)", "(x86 en-US)")
@@ -2240,7 +2251,7 @@ $scanDiscoveredButton.Add_Click({
             $highestScore = 0
             
             foreach ($wgApp in $wingetResults) {
-				[System.Windows.Forms.Application]::DoEvents()
+				[System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
                 $score = Get-StringSimilarity -str1 $app.displayName -str2 $wgApp.Name
                 if ($score -gt $highestScore) {
                     $highestScore = $score
@@ -2270,7 +2281,7 @@ $scanDiscoveredButton.Add_Click({
                         Checked     = $false
                         DisplayText = "[$($app.deviceCount) PCs] $cleanName ($($app.publisher))  -->  Winget: $($bestMatch.Name)"
                     }
-                    $script:discoveredRaw += $itemObj
+                    $script:discoveredRaw.Add($itemObj)
                     $matchCount++
                 }
             }
@@ -2278,20 +2289,6 @@ $scanDiscoveredButton.Add_Click({
     }
     
 # --- NEU: Befülle das Publisher-Dropdown mit eindeutigen Werten ---
-    $uniquePublishers = $script:discoveredRaw | Select-Object -ExpandProperty Publisher -Unique | Sort-Object
-    
-    $discoveredPublisherBox.BeginUpdate()
-    $discoveredPublisherBox.Items.Clear()
-    [void]$discoveredPublisherBox.Items.Add("<All Publishers>")
-    foreach ($pub in $uniquePublishers) {
-        if (-not [string]::IsNullOrWhiteSpace($pub)) {
-            [void]$discoveredPublisherBox.Items.Add($pub)
-        }
-    }
-    $discoveredPublisherBox.SelectedIndex = 0
-    $discoveredPublisherBox.EndUpdate()
-    
-    # --- NEU: Befülle das Publisher-Dropdown mit eindeutigen Werten ---
     $uniquePublishers = $script:discoveredRaw | Select-Object -ExpandProperty Publisher -Unique | Sort-Object
     
     $discoveredPublisherBox.BeginUpdate()
@@ -2361,7 +2358,7 @@ $deployDiscoveredButton.Add_Click({
             $wingetApp = $item.WingetApp
             
             Update-Status "Packaging & Deploying ($i/$($checkedItems.Count)): $($wingetApp.Name)..."
-            [System.Windows.Forms.Application]::DoEvents()
+            [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
 
             try {
                 $packageId = $wingetApp.PackageID
@@ -2444,7 +2441,7 @@ $form.Add_FormClosing({
             if ($statusLabel) { 
                 $statusLabel.Text = "Closing... signing out from tenant" 
                 # Zwingt die UI, sich noch einmal schnell zu aktualisieren, bevor sie blockiert wird
-                [System.Windows.Forms.Application]::DoEvents() 
+                [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
             }
         } catch {}
 
