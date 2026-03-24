@@ -1248,7 +1248,7 @@ $checkGuiUpdateStartupCheckbox = New-Object System.Windows.Forms.CheckBox
 $checkGuiUpdateStartupCheckbox.Text = "Check for new GUI version on startup"
 $checkGuiUpdateStartupCheckbox.Location = New-Object System.Drawing.Point(20,125)
 $checkGuiUpdateStartupCheckbox.AutoSize = $true
-$checkGuiUpdateStartupCheckbox.Checked = if ($script:settings.PSObject.Properties['CheckGuiUpdateOnStartup']) { $script:settings.CheckGuiUpdateOnStartup } else { $true }
+$checkGuiUpdateStartupCheckbox.Checked = if ($script:settings.ContainsKey('CheckGuiUpdateOnStartup')) { $script:settings.CheckGuiUpdateOnStartup } else { $true }
 $tabSettings.Controls.Add($checkGuiUpdateStartupCheckbox)
 
 # RememberMe Checkbox (moved to settings)
