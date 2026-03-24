@@ -157,6 +157,7 @@ Navigate to **Settings** tab:
 - **Default Package Folder**: Set where `.intune` files are stored
 - **Check for updates on login**: Auto-trigger update search after login
 - **Remember last username**: Save username for next session
+- **Update the Tool via GitHub**: Update the Tool on click
 
 Click **"Save Settings"** to persist changes.
 
@@ -247,6 +248,7 @@ Log includes:
 See [CHANGELOG.md](CHANGELOG.md) for a detailed list of changes between versions.
 
 ### Latest Updates
+- Added Update App in Settings
 - Fixed UI freezing and "Not Responding" state during long operations (like Discovered Apps scanning) by implementing `[System.Windows.Forms.Application]::DoEvents()`. 
 - Corrected event listener variable names for Discovered Apps filtering (`$discoveredAppSearchBox` and `$discoveredPublisherBox`) so the UI updates immediately on input.
 - Re-enabled and configured `WarningPreference`/`InformationPreference` globals to prevent threading crashes from PowerShell streams in WinForms.
