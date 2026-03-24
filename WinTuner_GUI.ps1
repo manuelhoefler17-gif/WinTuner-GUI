@@ -654,10 +654,269 @@ $script:currentUserUpn = ""
 # Track effective built versions per PackageId
 $script:builtVersions = @{}
 
+# ==================================================
+# App Assignment Helper Functions
+# ==================================================
+
+function Search-AzureADGroups {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$SearchText,
+        [int]$MaxResults = 20
+    )
+    try {
+        # Escape OData string literal (single quotes become ''), then URI-encode
+        $odataSafe = $SearchText.Replace("'", "''")
+        $encoded = [System.Uri]::EscapeDataString($odataSafe)
+        $uri = "https://graph.microsoft.com/v1.0/groups?`$filter=startswith(displayName,'$encoded')&`$top=$MaxResults&`$select=id,displayName,description,groupTypes&`$orderby=displayName"
+        $response = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
+        $groups = [System.Collections.Generic.List[object]]::new()
+        foreach ($g in $response.value) {
+            $groupType = if ($g.groupTypes -contains 'DynamicMembership') { 'Dynamic' }
+                         elseif ($g.groupTypes -contains 'Unified') { 'M365' }
+                         else { 'Security' }
+            $groups.Add([pscustomobject]@{
+                Id          = $g.id
+                DisplayName = $g.displayName
+                Description = $g.description
+                GroupType   = $groupType
+                DisplayText = "$($g.displayName) ($groupType)"
+            })
+        }
+        return @($groups)
+    } catch {
+        Write-Log "Group search failed: $($_.Exception.Message)"
+        return @()
+    }
+}
+
+function New-AppAssignment {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$AppId,
+        [Parameter(Mandatory=$true)]
+        [string]$GroupId,
+        [ValidateSet('required','available','uninstall')]
+        [string]$Intent = 'required'
+    )
+    try {
+        $body = @{
+            '@odata.type' = '#microsoft.graph.mobileAppAssignment'
+            intent = $Intent
+            target = @{
+                '@odata.type' = '#microsoft.graph.groupAssignmentTarget'
+                groupId = $GroupId
+            }
+            settings = $null
+        } | ConvertTo-Json -Depth 5
+        $uri = "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps/$AppId/assignments"
+        Invoke-MgGraphRequest -Method POST -Uri $uri -Body $body -ContentType 'application/json' -ErrorAction Stop
+        Write-Log "Assignment created: App $AppId -> Group $GroupId ($Intent)"
+        return $true
+    } catch {
+        Write-Log "Failed to create assignment: $($_.Exception.Message)"
+        throw
+    }
+}
+
+function Invoke-PostDeployAssignment {
+    <#
+    .SYNOPSIS
+        Assigns an app to the selected group after a successful deploy.
+        Called from both WinGet Apps tab and Discovered Apps tab.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$AppId,
+        [Parameter(Mandatory=$true)]
+        [string]$AppName,
+        [Parameter(Mandatory=$true)]
+        $AssignmentPanel
+    )
+    if (-not $AssignmentPanel.EnableCheckbox.Checked) { return }
+    $groupIdx = $AssignmentPanel.GroupDropdown.SelectedIndex
+    if ($groupIdx -lt 0 -or $AssignmentPanel.PanelState.Groups.Count -eq 0) {
+        $AssignmentPanel.StatusLabel.Text = "⚠️ No group selected for assignment"
+        $AssignmentPanel.StatusLabel.ForeColor = [System.Drawing.Color]::Orange
+        return
+    }
+    $selectedGroup = $AssignmentPanel.PanelState.Groups[$groupIdx]
+    $intent = if ($AssignmentPanel.RadioRequired.Checked) { 'required' }
+              elseif ($AssignmentPanel.RadioAvailable.Checked) { 'available' }
+              else { 'uninstall' }
+    try {
+        $context = Get-MgContext -ErrorAction SilentlyContinue
+        if (-not $context) {
+            Connect-MgGraph -Scopes @('DeviceManagementApps.ReadWrite.All', 'Group.Read.All') -NoWelcome -ErrorAction Stop
+        }
+        New-AppAssignment -AppId $AppId -GroupId $selectedGroup.Id -Intent $intent
+        $intentDisplay = [System.Globalization.CultureInfo]::InvariantCulture.TextInfo.ToTitleCase($intent)
+        $AssignmentPanel.StatusLabel.Text = "✅ Assigned: $AppName → $($selectedGroup.DisplayName) ($intentDisplay)"
+        $AssignmentPanel.StatusLabel.ForeColor = [System.Drawing.Color]::Green
+        Write-Log "Post-deploy assignment: $AppName → $($selectedGroup.DisplayName) ($intent)"
+        Update-Status "App assigned to $($selectedGroup.DisplayName) ($intentDisplay)"
+        try {
+            $script:settings.LastAssignmentGroup = $selectedGroup.DisplayName
+            $script:settings.LastAssignmentIntent = $intent
+            Save-Settings
+        } catch {
+            Write-Log "Warning: Failed to persist assignment settings: $($_.Exception.Message)"
+        }
+    } catch {
+        $AssignmentPanel.StatusLabel.Text = "❌ Assignment failed: $($_.Exception.Message)"
+        $AssignmentPanel.StatusLabel.ForeColor = [System.Drawing.Color]::Red
+        Write-Log "Post-deploy assignment failed for $AppName : $($_.Exception.Message)"
+    }
+}
+
+function New-AssignmentPanel {
+    param(
+        [Parameter(Mandatory=$true)]
+        [System.Windows.Forms.Control]$ParentControl,
+        [int]$LocationX = 20,
+        [int]$LocationY = 400
+    )
+    $groupBox = New-Object System.Windows.Forms.GroupBox
+    $groupBox.Text = "App Assignment"
+    $groupBox.Location = New-Object System.Drawing.Point($LocationX, $LocationY)
+    $groupBox.Width = 620
+    $groupBox.Height = 175
+    $groupBox.Font = New-Object System.Drawing.Font("Segoe UI", 9.5)
+
+    $enableCheckbox = New-Object System.Windows.Forms.CheckBox
+    $enableCheckbox.Text = "Assign to group after deploy"
+    $enableCheckbox.Location = New-Object System.Drawing.Point(15, 22)
+    $enableCheckbox.AutoSize = $true
+    $groupBox.Controls.Add($enableCheckbox)
+
+    $groupSearchLabel = New-Object System.Windows.Forms.Label
+    $groupSearchLabel.Text = "Search Group:"
+    $groupSearchLabel.Location = New-Object System.Drawing.Point(15, 52)
+    $groupSearchLabel.AutoSize = $true
+    $groupBox.Controls.Add($groupSearchLabel)
+
+    $groupSearchBox = New-Object System.Windows.Forms.TextBox
+    $groupSearchBox.Location = New-Object System.Drawing.Point(115, 49)
+    $groupSearchBox.Width = 300
+    $groupSearchBox.Enabled = $false
+    $groupBox.Controls.Add($groupSearchBox)
+
+    $searchButton = New-Object System.Windows.Forms.Button
+    $searchButton.Text = "Search"
+    $searchButton.Location = New-Object System.Drawing.Point(425, 47)
+    $searchButton.Width = 90
+    $searchButton.Height = 28
+    $searchButton.Enabled = $false
+    $groupBox.Controls.Add($searchButton)
+
+    $groupDropdown = New-Object System.Windows.Forms.ComboBox
+    $groupDropdown.Location = New-Object System.Drawing.Point(115, 82)
+    $groupDropdown.Width = 400
+    $groupDropdown.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+    $groupDropdown.Enabled = $false
+    $groupBox.Controls.Add($groupDropdown)
+
+    $intentLabel = New-Object System.Windows.Forms.Label
+    $intentLabel.Text = "Intent:"
+    $intentLabel.Location = New-Object System.Drawing.Point(15, 118)
+    $intentLabel.AutoSize = $true
+    $groupBox.Controls.Add($intentLabel)
+
+    $radioRequired = New-Object System.Windows.Forms.RadioButton
+    $radioRequired.Text = "Required"
+    $radioRequired.Location = New-Object System.Drawing.Point(115, 116)
+    $radioRequired.AutoSize = $true
+    $radioRequired.Checked = $true
+    $radioRequired.Enabled = $false
+    $groupBox.Controls.Add($radioRequired)
+
+    $radioAvailable = New-Object System.Windows.Forms.RadioButton
+    $radioAvailable.Text = "Available"
+    $radioAvailable.Location = New-Object System.Drawing.Point(230, 116)
+    $radioAvailable.AutoSize = $true
+    $radioAvailable.Enabled = $false
+    $groupBox.Controls.Add($radioAvailable)
+
+    $radioUninstall = New-Object System.Windows.Forms.RadioButton
+    $radioUninstall.Text = "Uninstall"
+    $radioUninstall.Location = New-Object System.Drawing.Point(345, 116)
+    $radioUninstall.AutoSize = $true
+    $radioUninstall.Enabled = $false
+    $groupBox.Controls.Add($radioUninstall)
+
+    $assignStatusLabel = New-Object System.Windows.Forms.Label
+    $assignStatusLabel.Text = ""
+    $assignStatusLabel.Location = New-Object System.Drawing.Point(15, 148)
+    $assignStatusLabel.AutoSize = $true
+    $assignStatusLabel.ForeColor = [System.Drawing.Color]::Gray
+    $groupBox.Controls.Add($assignStatusLabel)
+
+    $ParentControl.Controls.Add($groupBox)
+
+    $enableCheckbox.Add_CheckedChanged({
+        $enabled = $enableCheckbox.Checked
+        $groupSearchBox.Enabled = $enabled
+        $searchButton.Enabled = $enabled
+        $groupDropdown.Enabled = $enabled
+        $radioRequired.Enabled = $enabled
+        $radioAvailable.Enabled = $enabled
+        $radioUninstall.Enabled = $enabled
+    }.GetNewClosure())
+
+    $panelState = @{ Groups = @() }
+
+    $searchButton.Add_Click({
+        $searchText = $groupSearchBox.Text.Trim()
+        if ([string]::IsNullOrWhiteSpace($searchText)) { return }
+        try {
+            $searchButton.Enabled = $false
+            $assignStatusLabel.Text = "Searching..."
+            [System.Windows.Forms.Application]::DoEvents()
+            $panelState.Groups = @(Search-AzureADGroups -SearchText $searchText)
+            $groupDropdown.BeginUpdate()
+            $groupDropdown.Items.Clear()
+            if ($panelState.Groups.Count -eq 0) {
+                [void]$groupDropdown.Items.Add("(No groups found)")
+            } else {
+                foreach ($g in $panelState.Groups) {
+                    [void]$groupDropdown.Items.Add($g.DisplayText)
+                }
+                $groupDropdown.SelectedIndex = 0
+            }
+            $groupDropdown.EndUpdate()
+            $assignStatusLabel.Text = "Found $($panelState.Groups.Count) group(s)"
+        } catch {
+            $assignStatusLabel.Text = "Search failed: $($_.Exception.Message)"
+        } finally {
+            $searchButton.Enabled = $enableCheckbox.Checked
+        }
+    }.GetNewClosure())
+
+    $groupSearchBox.Add_KeyDown({
+        if ($_.KeyCode -eq [System.Windows.Forms.Keys]::Enter) {
+            $searchButton.PerformClick()
+            $_.SuppressKeyPress = $true
+        }
+    }.GetNewClosure())
+
+    return [pscustomobject]@{
+        GroupBox       = $groupBox
+        EnableCheckbox = $enableCheckbox
+        GroupSearchBox = $groupSearchBox
+        SearchButton   = $searchButton
+        GroupDropdown  = $groupDropdown
+        RadioRequired  = $radioRequired
+        RadioAvailable = $radioAvailable
+        RadioUninstall = $radioUninstall
+        StatusLabel    = $assignStatusLabel
+        PanelState     = $panelState
+    }
+}
+
 # Create form
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "WinTuner GUI"
-$form.Size = New-Object System.Drawing.Size(900, 850)
+$form.Size = New-Object System.Drawing.Size(900, 920)
 $form.Padding = '5,5,5,5'
 
 # Theme toggle button (top right)
@@ -765,7 +1024,7 @@ $form.Controls.Add($loginInfoLabel)
 # TabControl
 $tabControl = New-Object System.Windows.Forms.TabControl
 $tabControl.Location = New-Object System.Drawing.Point(10, 90)
-$tabControl.Size = New-Object System.Drawing.Size(760, 560)
+$tabControl.Size = New-Object System.Drawing.Size(760, 630)
 $tabControl.Visible = $true
 $tabControl.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right -bor [System.Windows.Forms.AnchorStyles]::Bottom
 $form.Controls.Add($tabControl)
@@ -855,6 +1114,9 @@ $uploadButton.Location = New-Object System.Drawing.Point(290,140)
 $uploadButton.Width = 180
 $uploadButton.Visible = $false
 $tabCreate.Controls.Add($uploadButton)
+
+# Assignment panel for WinGet Apps tab
+$wingetAssignPanel = New-AssignmentPanel -ParentControl $tabCreate -LocationX 20 -LocationY 180
 
 # Tab: Updates
 $tabUpdate = New-Object System.Windows.Forms.TabPage
@@ -1035,12 +1297,15 @@ $tabDiscovered.Controls.Add($discoveredSortBox)
 $discoveredListBox = New-Object System.Windows.Forms.CheckedListBox
 $discoveredListBox.Location = New-Object System.Drawing.Point(20,100)
 $discoveredListBox.Width = 710
-$discoveredListBox.Height = 335
+$discoveredListBox.Height = 230
 $discoveredListBox.CheckOnClick = $true
-$discoveredListBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right -bor [System.Windows.Forms.AnchorStyles]::Bottom
+$discoveredListBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $tabDiscovered.Controls.Add($discoveredListBox)
 
 $script:discoveredRaw = @()
+
+# Assignment panel for Discovered Apps tab
+$discoveredAssignPanel = New-AssignmentPanel -ParentControl $tabDiscovered -LocationX 20 -LocationY 345
 
 # ==================================================
 # Tab: Settings
@@ -1238,6 +1503,8 @@ $script:settings = @{
   WingetOverrides = @{}
   DefaultPackagePath = "C:\Temp"
   AutoCheckUpdates = $false
+  LastAssignmentGroup = ""
+  LastAssignmentIntent = "required"
 }
 
 function Load-Settings {
@@ -1267,6 +1534,18 @@ function Load-Settings {
           foreach ($p in $o.WingetOverrides.PSObject.Properties) { $ht[$p.Name] = [string]$p.Value }
           $script:settings.WingetOverrides = $ht
         } else { $script:settings.WingetOverrides = @{} }
+
+        if ($o.PSObject.Properties['LastAssignmentGroup']) {
+          $script:settings.LastAssignmentGroup = [string]$o.LastAssignmentGroup
+        } else {
+          $script:settings.LastAssignmentGroup = ""
+        }
+
+        if ($o.PSObject.Properties['LastAssignmentIntent']) {
+          $script:settings.LastAssignmentIntent = [string]$o.LastAssignmentIntent
+        } else {
+          $script:settings.LastAssignmentIntent = "required"
+        }
       }
     }
   } catch {
@@ -1295,6 +1574,22 @@ if ($pathBox) {
     $pathBox.Text = $script:settings.DefaultPackagePath
   } else {
     $pathBox.Text = "C:\Temp"
+  }
+}
+
+# Pre-fill assignment panels with last-used group and intent
+if ($script:settings.LastAssignmentGroup) {
+  $wingetAssignPanel.GroupSearchBox.Text = $script:settings.LastAssignmentGroup
+  $discoveredAssignPanel.GroupSearchBox.Text = $script:settings.LastAssignmentGroup
+}
+if ($script:settings.LastAssignmentIntent) {
+  $lastIntent = $script:settings.LastAssignmentIntent
+  foreach ($panel in @($wingetAssignPanel, $discoveredAssignPanel)) {
+    switch ($lastIntent) {
+      'required'  { $panel.RadioRequired.Checked = $true }
+      'available' { $panel.RadioAvailable.Checked = $true }
+      'uninstall' { $panel.RadioUninstall.Checked = $true }
+    }
   }
 }
 
@@ -1513,6 +1808,27 @@ $uploadButton.Add_Click({
         if ($script:selectedPackageVersions.ContainsKey($packageID)) {
             $script:selectedPackageVersions.Remove($packageID)
             Write-Log "Cleared cached version for $packageID after upload"
+        }
+
+        # Post-deploy group assignment
+        if ($wingetAssignPanel.EnableCheckbox.Checked) {
+            try {
+                Update-Status "Assigning app to group..."
+                [System.Windows.Forms.Application]::DoEvents()
+                $deployedApps = @(Get-WtWin32Apps -Superseded:$false -ErrorAction SilentlyContinue 3>$null 4>$null)
+                $newApp = $deployedApps | Where-Object {
+                    (Resolve-WtWingetId -AppOrResult $_) -eq $packageID
+                } | Select-Object -First 1
+                if ($newApp -and $newApp.GraphId) {
+                    Invoke-PostDeployAssignment -AppId $newApp.GraphId -AppName $newApp.Name -AssignmentPanel $wingetAssignPanel
+                } else {
+                    Write-Log "Could not find deployed app for assignment. App may need manual assignment."
+                    $wingetAssignPanel.StatusLabel.Text = "⚠️ Could not find app ID for assignment"
+                    $wingetAssignPanel.StatusLabel.ForeColor = [System.Drawing.Color]::Orange
+                }
+            } catch {
+                Write-Log "Post-deploy assignment error: $($_.Exception.Message)"
+            }
         }
     } catch {
         $errorMsg = $_.Exception.Message
@@ -2164,14 +2480,14 @@ $scanDiscoveredButton.Add_Click({
         )
         return
     }
-    $requiredScope = "DeviceManagementApps.Read.All"
+    $requiredScopes = @("DeviceManagementApps.ReadWrite.All", "Group.Read.All")
     $mgContext = Get-MgContext -ErrorAction SilentlyContinue
 
     $needsAuth = $false
     if (-not $mgContext) {
         $needsAuth = $true
     } else {
-        $hasScope = ($mgContext.Scopes -contains $requiredScope) -or ($mgContext.Scopes -contains "DeviceManagementApps.ReadWrite.All")
+        $hasScope = ($mgContext.Scopes -contains "DeviceManagementApps.ReadWrite.All") -and ($mgContext.Scopes -contains "Group.Read.All")
         $userMatch = ($mgContext.Account -eq $script:currentUserUpn)
         if (-not $hasScope -or -not $userMatch) {
             $needsAuth = $true
@@ -2185,7 +2501,7 @@ $scanDiscoveredButton.Add_Click({
         Update-Status "Authenticating with MS Graph for $($script:currentUserUpn)..."
         [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
         $tenantDomain = $script:currentUserUpn.Split('@')[1]
-        $null = Connect-MgGraph -TenantId $tenantDomain -Scopes $requiredScope -NoWelcome -ErrorAction Stop *>&1
+        $null = Connect-MgGraph -TenantId $tenantDomain -Scopes $requiredScopes -NoWelcome -ErrorAction Stop *>&1
     }
 
     # 1. Vorhandene Apps checken (EXTREM SCHNELL DURCH "Resolve" STATT "Try-Resolve")
@@ -2382,6 +2698,21 @@ $deployDiscoveredButton.Add_Click({
                 
                 $successCount++
                 Write-Log "Successfully deployed new app: $packageId"
+
+                # Post-deploy group assignment for discovered apps
+                if ($discoveredAssignPanel.EnableCheckbox.Checked) {
+                    try {
+                        $deployedApps = @(Get-WtWin32Apps -Superseded:$false -ErrorAction SilentlyContinue 3>$null 4>$null)
+                        $newApp = $deployedApps | Where-Object {
+                            (Resolve-WtWingetId -AppOrResult $_) -eq $packageId
+                        } | Select-Object -First 1
+                        if ($newApp -and $newApp.GraphId) {
+                            Invoke-PostDeployAssignment -AppId $newApp.GraphId -AppName $newApp.Name -AssignmentPanel $discoveredAssignPanel
+                        }
+                    } catch {
+                        Write-Log "Post-deploy assignment error for discovered app: $($_.Exception.Message)"
+                    }
+                }
             } catch {
                 $failedCount++
                 Write-Log "Failed to deploy $($wingetApp.Name): $($_.Exception.Message)"
