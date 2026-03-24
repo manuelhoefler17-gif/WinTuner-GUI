@@ -2782,6 +2782,7 @@ if ($script:settings.ContainsKey('CheckGuiUpdateOnStartup') -and $script:setting
     elseif ($script:startupUpdateInfo.UpdateAvailable) {
       Write-Log "Startup update: registering Add_Shown handler for update dialog"
       $form.Add_Shown({
+        param($sender, $e)
         try {
           $msg  = "A new version of WinTuner GUI is available!`n`n"
           $msg += "Current version: v$($script:appVersion)`n"
@@ -2833,8 +2834,7 @@ if ($script:settings.ContainsKey('CheckGuiUpdateOnStartup') -and $script:setting
             )
           }
         } catch {
-          # Use Write-FileLog as fallback since Write-Log may be unavailable in edge cases
-          try { Write-Log "Startup update dialog error: $($_.Exception.Message)" } catch { Write-FileLog "Startup update dialog error: $($_.Exception.Message)" }
+          try { Write-Log "Startup update dialog error: $($_.Exception.Message)" } catch {}
         }
       })
     } else {
