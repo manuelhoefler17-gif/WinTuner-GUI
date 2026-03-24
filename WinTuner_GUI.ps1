@@ -1243,10 +1243,18 @@ $autoCheckUpdatesCheckbox.AutoSize = $true
 $autoCheckUpdatesCheckbox.Checked = if ($script:settings.AutoCheckUpdates) { $script:settings.AutoCheckUpdates } else { $false }
 $tabSettings.Controls.Add($autoCheckUpdatesCheckbox)
 
+# Check for GUI Updates on Startup Checkbox
+$checkGuiUpdateStartupCheckbox = New-Object System.Windows.Forms.CheckBox
+$checkGuiUpdateStartupCheckbox.Text = "Check for new GUI version on startup"
+$checkGuiUpdateStartupCheckbox.Location = New-Object System.Drawing.Point(20,125)
+$checkGuiUpdateStartupCheckbox.AutoSize = $true
+$checkGuiUpdateStartupCheckbox.Checked = if ($script:settings.PSObject.Properties['CheckGuiUpdateOnStartup']) { $script:settings.CheckGuiUpdateOnStartup } else { $true }
+$tabSettings.Controls.Add($checkGuiUpdateStartupCheckbox)
+
 # RememberMe Checkbox (moved to settings)
 $rememberMeCheckbox = New-Object System.Windows.Forms.CheckBox
 $rememberMeCheckbox.Text = "Remember last username"
-$rememberMeCheckbox.Location = New-Object System.Drawing.Point(20,130)
+$rememberMeCheckbox.Location = New-Object System.Drawing.Point(20,155)
 $rememberMeCheckbox.AutoSize = $true
 $rememberMeCheckbox.Checked = if ($script:settings.RememberMe) { $script:settings.RememberMe } else { $false }
 $tabSettings.Controls.Add($rememberMeCheckbox)
@@ -1254,7 +1262,7 @@ $tabSettings.Controls.Add($rememberMeCheckbox)
 # Save Settings Button
 $saveSettingsButton = New-Object System.Windows.Forms.Button
 $saveSettingsButton.Text = "💾 Save Settings"
-$saveSettingsButton.Location = New-Object System.Drawing.Point(20,180)
+$saveSettingsButton.Location = New-Object System.Drawing.Point(20,205)
 $saveSettingsButton.Width = 150
 $saveSettingsButton.Height = 35
 $tabSettings.Controls.Add($saveSettingsButton)
@@ -1276,6 +1284,7 @@ $saveSettingsButton.Add_Click({
   try {
     $script:settings.DefaultPackagePath = $defaultPathTextBox.Text
     $script:settings.AutoCheckUpdates = $autoCheckUpdatesCheckbox.Checked
+    $script:settings.CheckGuiUpdateOnStartup = $checkGuiUpdateStartupCheckbox.Checked
     $script:settings.RememberMe = $rememberMeCheckbox.Checked
     
     # Update pathBox on WinGet Apps tab with new default
@@ -1509,6 +1518,7 @@ $script:settings = @{
   WingetOverrides = @{}
   DefaultPackagePath = "C:\Temp"
   AutoCheckUpdates = $false
+  CheckGuiUpdateOnStartup = $true
 }
 
 function Load-Settings {
@@ -1530,6 +1540,12 @@ function Load-Settings {
           $script:settings.AutoCheckUpdates = [bool]$o.AutoCheckUpdates
         } else {
           $script:settings.AutoCheckUpdates = $false
+        }
+        
+        if ($o.PSObject.Properties['CheckGuiUpdateOnStartup']) {
+          $script:settings.CheckGuiUpdateOnStartup = [bool]$o.CheckGuiUpdateOnStartup
+        } else {
+          $script:settings.CheckGuiUpdateOnStartup = $true
         }
         
         if ($o.PSObject.Properties['WingetOverrides']) {
@@ -2753,13 +2769,65 @@ try {
     # Ignoriere Fehler, falls die Event-Registrierung in älteren PS-Versionen zickt
 }
 
-# Auto-check for app updates on startup (silent, non-blocking)
-if ($script:settings.AutoCheckUpdates) {
+# Auto-check for GUI updates on startup with interactive dialog
+if ($script:settings.CheckGuiUpdateOnStartup) {
   try {
     $startupUpdate = Test-AppUpdateAvailable
     if ($startupUpdate.UpdateAvailable -and -not $startupUpdate.ErrorMessage) {
       $form.Add_Shown({
-        Update-Status "WinTuner GUI v$($startupUpdate.LatestVersion) is available! (You have v$($script:appVersion)) - Open Settings to update."
+        try {
+          $msg  = "A new version of WinTuner GUI is available!`n`n"
+          $msg += "Current version: v$($script:appVersion)`n"
+          $msg += "Latest version:  v$($startupUpdate.LatestVersion)`n`n"
+          
+          if ($startupUpdate.DownloadUrl) {
+            $msg += "Do you want to download and install the update now?`n`n"
+            $msg += "(A backup of your current version will be created)"
+            
+            $answer = [System.Windows.Forms.MessageBox]::Show(
+              $msg,
+              "Update Available",
+              [System.Windows.Forms.MessageBoxButtons]::YesNo,
+              [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+            
+            if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
+              Update-Status "Downloading update..."
+              [System.Windows.Forms.Application]::DoEvents()
+              
+              $success = Invoke-AppSelfUpdate -DownloadUrl $startupUpdate.DownloadUrl
+              
+              if ($success) {
+                $restartMsg  = "Update installed successfully!`n`n"
+                $restartMsg += "WinTuner GUI needs to restart to apply the update.`n"
+                $restartMsg += "Click OK to close. Please start the script again manually."
+                
+                [System.Windows.Forms.MessageBox]::Show(
+                  $restartMsg,
+                  "Update Complete",
+                  [System.Windows.Forms.MessageBoxButtons]::OK,
+                  [System.Windows.Forms.MessageBoxIcon]::Information
+                )
+                
+                $form.Close()
+              }
+            } else {
+              Update-Status "Update available: v$($startupUpdate.LatestVersion) - Go to Settings to update later."
+            }
+          } else {
+            $msg += "No direct download available for this release.`n"
+            $msg += "Please download manually from:`n$($startupUpdate.ReleaseUrl)"
+            
+            [System.Windows.Forms.MessageBox]::Show(
+              $msg,
+              "Update Available",
+              [System.Windows.Forms.MessageBoxButtons]::OK,
+              [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+          }
+        } catch {
+          Write-Log "Startup update dialog error: $($_.Exception.Message)"
+        }
       }.GetNewClosure())
     }
   } catch {
