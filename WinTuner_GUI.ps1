@@ -1243,10 +1243,18 @@ $autoCheckUpdatesCheckbox.AutoSize = $true
 $autoCheckUpdatesCheckbox.Checked = if ($script:settings.AutoCheckUpdates) { $script:settings.AutoCheckUpdates } else { $false }
 $tabSettings.Controls.Add($autoCheckUpdatesCheckbox)
 
+# Check for GUI updates on startup
+$checkGuiUpdateOnStartupCheckbox = New-Object System.Windows.Forms.CheckBox
+$checkGuiUpdateOnStartupCheckbox.Text = "Check for GUI updates on startup"
+$checkGuiUpdateOnStartupCheckbox.Location = New-Object System.Drawing.Point(20,130)
+$checkGuiUpdateOnStartupCheckbox.AutoSize = $true
+$checkGuiUpdateOnStartupCheckbox.Checked = if ($script:settings.ContainsKey('CheckGuiUpdateOnStartup')) { $script:settings.CheckGuiUpdateOnStartup } else { $true }
+$tabSettings.Controls.Add($checkGuiUpdateOnStartupCheckbox)
+
 # RememberMe Checkbox (moved to settings)
 $rememberMeCheckbox = New-Object System.Windows.Forms.CheckBox
 $rememberMeCheckbox.Text = "Remember last username"
-$rememberMeCheckbox.Location = New-Object System.Drawing.Point(20,130)
+$rememberMeCheckbox.Location = New-Object System.Drawing.Point(20,160)
 $rememberMeCheckbox.AutoSize = $true
 $rememberMeCheckbox.Checked = if ($script:settings.RememberMe) { $script:settings.RememberMe } else { $false }
 $tabSettings.Controls.Add($rememberMeCheckbox)
@@ -1254,7 +1262,7 @@ $tabSettings.Controls.Add($rememberMeCheckbox)
 # Save Settings Button
 $saveSettingsButton = New-Object System.Windows.Forms.Button
 $saveSettingsButton.Text = "💾 Save Settings"
-$saveSettingsButton.Location = New-Object System.Drawing.Point(20,180)
+$saveSettingsButton.Location = New-Object System.Drawing.Point(20,210)
 $saveSettingsButton.Width = 150
 $saveSettingsButton.Height = 35
 $tabSettings.Controls.Add($saveSettingsButton)
@@ -1276,6 +1284,7 @@ $saveSettingsButton.Add_Click({
   try {
     $script:settings.DefaultPackagePath = $defaultPathTextBox.Text
     $script:settings.AutoCheckUpdates = $autoCheckUpdatesCheckbox.Checked
+    $script:settings.CheckGuiUpdateOnStartup = $checkGuiUpdateOnStartupCheckbox.Checked
     $script:settings.RememberMe = $rememberMeCheckbox.Checked
     
     # Update pathBox on WinGet Apps tab with new default
@@ -1308,20 +1317,20 @@ $saveSettingsButton.Add_Click({
 # --- Self-Update Section in Settings Tab ---
 $updateSectionLabel = New-Object System.Windows.Forms.Label
 $updateSectionLabel.Text = "Application Updates"
-$updateSectionLabel.Location = New-Object System.Drawing.Point(20, 240)
+$updateSectionLabel.Location = New-Object System.Drawing.Point(20, 270)
 $updateSectionLabel.AutoSize = $true
 $updateSectionLabel.Font = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
 $tabSettings.Controls.Add($updateSectionLabel)
 
 $currentVersionLabel = New-Object System.Windows.Forms.Label
 $currentVersionLabel.Text = "Current version: v$($script:appVersion)"
-$currentVersionLabel.Location = New-Object System.Drawing.Point(20, 270)
+$currentVersionLabel.Location = New-Object System.Drawing.Point(20, 300)
 $currentVersionLabel.AutoSize = $true
 $tabSettings.Controls.Add($currentVersionLabel)
 
 $checkUpdateButton = New-Object System.Windows.Forms.Button
 $checkUpdateButton.Text = "🔄 Check for Updates"
-$checkUpdateButton.Location = New-Object System.Drawing.Point(20, 300)
+$checkUpdateButton.Location = New-Object System.Drawing.Point(20, 330)
 $checkUpdateButton.Width = 180
 $checkUpdateButton.Height = 35
 $tabSettings.Controls.Add($checkUpdateButton)
@@ -1509,6 +1518,7 @@ $script:settings = @{
   WingetOverrides = @{}
   DefaultPackagePath = "C:\Temp"
   AutoCheckUpdates = $false
+  CheckGuiUpdateOnStartup = $true
 }
 
 function Load-Settings {
@@ -1530,6 +1540,12 @@ function Load-Settings {
           $script:settings.AutoCheckUpdates = [bool]$o.AutoCheckUpdates
         } else {
           $script:settings.AutoCheckUpdates = $false
+        }
+        
+        if ($o.PSObject.Properties['CheckGuiUpdateOnStartup']) {
+          $script:settings.CheckGuiUpdateOnStartup = [bool]$o.CheckGuiUpdateOnStartup
+        } else {
+          $script:settings.CheckGuiUpdateOnStartup = $true
         }
         
         if ($o.PSObject.Properties['WingetOverrides']) {
@@ -2754,7 +2770,7 @@ try {
 }
 
 # Auto-check for app updates on startup (silent, non-blocking)
-if ($script:settings.AutoCheckUpdates) {
+if ($script:settings.CheckGuiUpdateOnStartup -ne $false) {
   try {
     $script:startupUpdateInfo = Test-AppUpdateAvailable
     if ($script:startupUpdateInfo -and $script:startupUpdateInfo.UpdateAvailable -and -not $script:startupUpdateInfo.ErrorMessage) {
