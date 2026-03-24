@@ -27,10 +27,12 @@ $DebugPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
 
 # Redirect all output streams to prevent threading issues
+# Note: '*:ProgressAction' is intentionally omitted here — using a wildcard for ProgressAction
+# can corrupt URI parameter binding in Invoke-WebRequest/Invoke-RestMethod on some PS7 builds.
+# $ProgressPreference = 'SilentlyContinue' (set above) already suppresses progress output globally.
 $PSDefaultParameterValues = @{
   '*:WarningAction' = 'SilentlyContinue'
   '*:InformationAction' = 'SilentlyContinue'
-  '*:ProgressAction' = 'SilentlyContinue'
   '*:Verbose' = $false
   '*:Debug' = $false
 }
@@ -94,7 +96,13 @@ function Test-AppUpdateAvailable {
       'User-Agent' = 'WinTuner-GUI-UpdateCheck'
     }
 
-    $response = Invoke-RestMethod -Uri $script:githubApiUrl -Headers $headers -TimeoutSec 10 -ErrorAction Stop
+    $savedDefaults = $PSDefaultParameterValues.Clone()
+    try {
+      $PSDefaultParameterValues.Clear()
+      $response = Invoke-RestMethod -Uri $script:githubApiUrl -Headers $headers -TimeoutSec 10 -ErrorAction Stop
+    } finally {
+      $PSDefaultParameterValues = $savedDefaults
+    }
 
     # Extract version from tag_name (strip leading "v" and any suffix like "-Beta")
     $remoteTag = $response.tag_name
@@ -158,8 +166,16 @@ function Invoke-AppSelfUpdate {
 
     $tempFile = [System.IO.Path]::GetTempFileName() + ".ps1"
 
-    $headers = @{ 'User-Agent' = 'WinTuner-GUI-UpdateCheck' }
-    Invoke-WebRequest -Uri $DownloadUrl -OutFile $tempFile -Headers $headers -TimeoutSec 60 -ErrorAction Stop
+    # Temporarily clear PSDefaultParameterValues to prevent parameter binding conflicts
+    # (wildcard entries like '*:ProgressAction' can corrupt URI resolution in some PS7 builds)
+    $savedDefaults = $PSDefaultParameterValues.Clone()
+    try {
+      $PSDefaultParameterValues.Clear()
+      $headers = @{ 'User-Agent' = 'WinTuner-GUI-UpdateCheck' }
+      Invoke-WebRequest -Uri $DownloadUrl -OutFile $tempFile -Headers $headers -TimeoutSec 60 -UseBasicParsing -ErrorAction Stop
+    } finally {
+      $PSDefaultParameterValues = $savedDefaults
+    }
 
     # Validate download
     if (-not (Test-Path $tempFile)) {
