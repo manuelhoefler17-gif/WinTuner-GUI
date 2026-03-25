@@ -40,7 +40,7 @@ $PSDefaultParameterValues = @{
 # ============================================
 # App version (used for self-update check)
 # ============================================
-$script:appVersion = "0.6.0"
+$script:appVersion = "0.7.0"
 $script:githubRepo = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 
