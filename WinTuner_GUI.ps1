@@ -2423,40 +2423,51 @@ $scanDiscoveredButton.Add_Click({
     $progressBar.Visible = $true
     [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
 
-    # --- GRAPH-AUTH BLOCK ---
-    # Check if Microsoft.Graph module is available before attempting auth
+# --- GRAPH-AUTH BLOCK (FIXED) ---
     if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
-        Update-Status "Microsoft.Graph module not found. Please install it: Install-Module Microsoft.Graph -Scope CurrentUser"
-        [System.Windows.Forms.MessageBox]::Show(
-            "The Microsoft.Graph PowerShell module is required for Discovered Apps scanning.`n`nInstall it with:`nInstall-Module Microsoft.Graph -Scope CurrentUser",
-            "Module Missing",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
-        )
+        Update-Status "Microsoft.Graph module not found..."
+        [System.Windows.Forms.MessageBox]::Show("...")
         return
     }
-    $requiredScope = "DeviceManagementApps.Read.All"
-    $mgContext = Get-MgContext -ErrorAction SilentlyContinue
 
+    # Liste ALLER benötigten Scopes für Discovered Apps
+    $requiredScopes = @(
+        "DeviceManagementApps.ReadWrite.All", 
+        "DeviceManagementManagedDevices.Read.All", 
+        "Directory.Read.All"
+    )
+
+    $mgContext = Get-MgContext -ErrorAction SilentlyContinue
     $needsAuth = $false
+
     if (-not $mgContext) {
         $needsAuth = $true
     } else {
-        $hasScope = ($mgContext.Scopes -contains $requiredScope) -or ($mgContext.Scopes -contains "DeviceManagementApps.ReadWrite.All")
+        # Prüfen, ob ALLE erforderlichen Scopes im aktuellen Token vorhanden sind
+        foreach ($s in $requiredScopes) {
+            if ($mgContext.Scopes -notcontains $s) {
+                $needsAuth = $true
+                break
+            }
+        }
+
         $userMatch = ($mgContext.Account -eq $script:currentUserUpn)
-        if (-not $hasScope -or -not $userMatch) {
-            $needsAuth = $true
+        if (-not $userMatch) { $needsAuth = $true }
+
+        if ($needsAuth) {
             Update-Status "Clearing old Graph session (Scope missing or wrong Tenant)..."
-            [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
+            [System.Windows.Forms.Application]::DoEvents()
             try { Disconnect-MgGraph -ErrorAction SilentlyContinue } catch {}
         }
     }
 
     if ($needsAuth) {
         Update-Status "Authenticating with MS Graph for $($script:currentUserUpn)..."
-        [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
+        [System.Windows.Forms.Application]::DoEvents()
         $tenantDomain = $script:currentUserUpn.Split('@')[1]
-        $null = Connect-MgGraph -TenantId $tenantDomain -Scopes $requiredScope -NoWelcome -ErrorAction Stop *>&1
+        
+        # Jetzt mit dem vollständigen Array an Scopes anmelden
+        $null = Connect-MgGraph -TenantId $tenantDomain -Scopes $requiredScopes -NoWelcome -ErrorAction Stop *>&1
     }
 
     # 1. Vorhandene Apps checken (EXTREM SCHNELL DURCH "Resolve" STATT "Try-Resolve")
