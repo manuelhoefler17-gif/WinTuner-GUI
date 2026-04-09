@@ -40,7 +40,7 @@ $PSDefaultParameterValues = @{
 # ============================================
 # App version (used for self-update check)
 # ============================================
-$script:appVersion = "0.7.1"
+$script:appVersion = "0.8.0"
 $script:githubRepo = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 
@@ -83,6 +83,7 @@ function Test-AppUpdateAvailable {
     UpdateAvailable = $false
     LatestVersion   = $null
     DownloadUrl     = $null
+    HashUrl         = $null
     ReleaseUrl      = $null
     ReleaseNotes    = $null
     ErrorMessage    = $null
@@ -119,6 +120,12 @@ function Test-AppUpdateAvailable {
       $result.DownloadUrl = $ps1Asset.browser_download_url
     }
 
+    # Find optional SHA256 checksum asset
+    $shaAsset = $response.assets | Where-Object { $_.name -like '*.sha256' } | Select-Object -First 1
+    if ($shaAsset) {
+      $result.HashUrl = $shaAsset.browser_download_url
+    }
+
     # Compare versions using existing function
     if (Test-IsNewerVersion -Latest $cleanVersion -Current $script:appVersion) {
       $result.UpdateAvailable = $true
@@ -138,7 +145,8 @@ function Test-AppUpdateAvailable {
 function Invoke-AppSelfUpdate {
   param(
     [Parameter(Mandatory=$true)]
-    [string]$DownloadUrl
+    [string]$DownloadUrl,
+    [string]$HashUrl = $null
   )
 
   try {
@@ -188,6 +196,33 @@ function Invoke-AppSelfUpdate {
     $content = Get-Content $tempFile -Raw -ErrorAction Stop
     if ($content -notmatch 'WinTuner GUI') {
       throw "Download validation failed: file doesn't appear to be WinTuner GUI"
+    }
+
+    # SHA256 integrity check (optional – skipped if no hash URL provided)
+    if ($HashUrl) {
+      $hashMismatch = $false
+      try {
+        Write-Log "Verifying SHA256 integrity..."
+        $savedDefaults2 = $PSDefaultParameterValues.Clone()
+        try {
+          $PSDefaultParameterValues = @{}
+          $expectedHash = (Invoke-RestMethod -Uri $HashUrl -TimeoutSec 15 -ErrorAction Stop).Trim().ToUpper()
+        } finally {
+          $PSDefaultParameterValues = $savedDefaults2
+        }
+        # Hash file may contain "HASH filename" or just "HASH"
+        $expectedHash = ($expectedHash -split '\s+')[0].ToUpper()
+        $actualHash = (Get-FileHash $tempFile -Algorithm SHA256).Hash.ToUpper()
+        if ($actualHash -ne $expectedHash) {
+          $hashMismatch = $true
+          throw "SHA256 mismatch: download may be corrupt or tampered! Expected: $expectedHash, Got: $actualHash"
+        }
+        Write-Log "SHA256 verified OK: $actualHash"
+      } catch {
+        # Re-throw only real hash mismatches, not network errors
+        if ($hashMismatch) { throw }
+        Write-Log "Warning: SHA256 check skipped (could not fetch hash): $($_.Exception.Message)"
+      }
     }
 
     Write-Log "Download complete ($fileSize bytes). Replacing script..."
@@ -901,8 +936,8 @@ $form.Controls.Add($statusLabel)
 
 # Output textbox (Log area below tabs and progress bar)
 $outputBox = New-Object System.Windows.Forms.TextBox
-$outputBox.Location = New-Object System.Drawing.Point(10, 680)
-$outputBox.Size = New-Object System.Drawing.Size(760, 60)
+$outputBox.Location = New-Object System.Drawing.Point(10, 620)
+$outputBox.Size = New-Object System.Drawing.Size(760, 120)
 $outputBox.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $outputBox.Multiline = $true
 $outputBox.ScrollBars = "Vertical"
@@ -911,7 +946,7 @@ $form.Controls.Add($outputBox)
 
 # Progress bar (appears between tabs and log when active)
 $progressBar = New-Object System.Windows.Forms.ProgressBar
-$progressBar.Location = New-Object System.Drawing.Point(10, 655)
+$progressBar.Location = New-Object System.Drawing.Point(10, 595)
 $progressBar.Width = 760
 $progressBar.Height = 20
 $progressBar.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
@@ -1379,7 +1414,7 @@ $checkUpdateButton.Add_Click({
           Update-Status "Downloading update..."
           [System.Windows.Forms.Application]::DoEvents()
 
-          $success = Invoke-AppSelfUpdate -DownloadUrl $updateInfo.DownloadUrl
+          $success = Invoke-AppSelfUpdate -DownloadUrl $updateInfo.DownloadUrl -HashUrl $updateInfo.HashUrl
 
           if ($success) {
             $restartMsg  = "Update installed successfully!`n`n"
@@ -2801,7 +2836,7 @@ try {
               Update-Status "Downloading update..."
               [System.Windows.Forms.Application]::DoEvents()
 
-              $success = Invoke-AppSelfUpdate -DownloadUrl $script:startupUpdateInfo.DownloadUrl
+              $success = Invoke-AppSelfUpdate -DownloadUrl $script:startupUpdateInfo.DownloadUrl -HashUrl $script:startupUpdateInfo.HashUrl
 
               if ($success) {
                 $restartMsg  = "Update installed successfully!`n`n"
@@ -2839,6 +2874,25 @@ try {
   } catch {
     try { Write-Log "Startup update check failed: $($_.Exception.Message)" } catch {}
   }
+
+# Tooltips for main buttons
+$toolTip = New-Object System.Windows.Forms.ToolTip
+$toolTip.AutoPopDelay = 5000
+$toolTip.InitialDelay = 500
+$toolTip.ReshowDelay  = 500
+$toolTip.ShowAlways   = $true
+
+$toolTip.SetToolTip($searchButton,          "Search the WinGet repository for applications")
+$toolTip.SetToolTip($versionsButton,        "Select a specific version for the selected app")
+$toolTip.SetToolTip($browseButton,          "Choose the local folder to store package files")
+if ($createButton)          { $toolTip.SetToolTip($createButton,          "Create the .wtpackage file locally") }
+if ($uploadButton)          { $toolTip.SetToolTip($uploadButton,          "Upload and deploy the package to Microsoft Intune") }
+if ($updateSearchButton)    { $toolTip.SetToolTip($updateSearchButton,    "Scan all Intune Win32 apps for available WinGet updates") }
+if ($updateAllButton)       { $toolTip.SetToolTip($updateAllButton,       "Update all apps with available updates") }
+if ($updateSelectedButton)  { $toolTip.SetToolTip($updateSelectedButton,  "Update only the checked apps in the list") }
+if ($scanDiscoveredButton)  { $toolTip.SetToolTip($scanDiscoveredButton,  "Scan Intune Discovered Apps and match them to WinGet packages") }
+if ($logoutButton)          { $toolTip.SetToolTip($logoutButton,          "Disconnect from the current Microsoft 365 tenant") }
+if ($themeToggleButton)     { $toolTip.SetToolTip($themeToggleButton,     "Switch between Dark Mode and Light Mode") }
 
 # Run the form mit finalem Sicherheitsnetz
 try {
