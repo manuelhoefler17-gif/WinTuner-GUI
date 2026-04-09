@@ -200,6 +200,7 @@ function Invoke-AppSelfUpdate {
 
     # SHA256 integrity check (optional – skipped if no hash URL provided)
     if ($HashUrl) {
+      $hashMismatch = $false
       try {
         Write-Log "Verifying SHA256 integrity..."
         $savedDefaults2 = $PSDefaultParameterValues.Clone()
@@ -213,12 +214,13 @@ function Invoke-AppSelfUpdate {
         $expectedHash = ($expectedHash -split '\s+')[0].ToUpper()
         $actualHash = (Get-FileHash $tempFile -Algorithm SHA256).Hash.ToUpper()
         if ($actualHash -ne $expectedHash) {
+          $hashMismatch = $true
           throw "SHA256 mismatch: download may be corrupt or tampered! Expected: $expectedHash, Got: $actualHash"
         }
         Write-Log "SHA256 verified OK: $actualHash"
       } catch {
         # Re-throw only real hash mismatches, not network errors
-        if ($_.Exception.Message -match 'mismatch') { throw }
+        if ($hashMismatch) { throw }
         Write-Log "Warning: SHA256 check skipped (could not fetch hash): $($_.Exception.Message)"
       }
     }
