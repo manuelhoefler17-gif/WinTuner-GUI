@@ -1,4 +1,5 @@
-# WinTuner GUI by Manuel Höfler  (patched + deploy fix + robust update search + regex quoting fix)
+# WinTuner GUI by Manuel Höfler
+# v0.9.0 – Phase 5: code quality pass (English comments, PS-approved verb names, central config block)
 # --- PowerShell version gate (runs on PS<7 without parsing the main body) ---
 try { $psMajor = $PSVersionTable.PSVersion.Major } catch { $psMajor = 0 }
 if ($psMajor -lt 7) {
@@ -37,12 +38,25 @@ $PSDefaultParameterValues = @{
   '*:Debug' = $false
 }
 
-# ============================================
-# App version (used for self-update check)
-# ============================================
-$script:appVersion = "0.8.0"
-$script:githubRepo = "manuelhoefler17-gif/WinTuner-GUI"
+# ============================================================
+# Script configuration – central place for all script-scoped
+# constants and mutable state variables
+# ============================================================
+
+# --- Application metadata ---
+$script:appVersion  = "0.9.0"
+$script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
+
+# --- Runtime state (set during execution) ---
+# $script:isConnected      – whether the user is logged in to a tenant
+# $script:currentUserUpn   – UPN of the currently logged-in user
+# $script:builtVersions    – tracks effective built package versions per PackageId
+# $script:wingetVersionCache – in-memory cache for winget version lookups
+# $script:versionCachePath – path to the on-disk version cache JSON file
+# $script:isDarkMode       – current theme state (true = dark)
+# $script:currentTheme     – active theme hashtable (darkTheme or lightTheme)
+# $script:asyncResult      – last result from Invoke-AsyncOperation
 
 # Version comparison helper: returns $true if Latest > Current
 function Test-IsNewerVersion {
@@ -275,7 +289,7 @@ function Resolve-WtWingetId {
     return $null
 }
 
-function Try-ResolveWingetIdForApp {
+function Resolve-WingetIdForApp {
   param([object]$App)
   $id = Resolve-WtWingetId -AppOrResult $App
   if (-not [string]::IsNullOrWhiteSpace($id)) { return $id }
@@ -283,7 +297,7 @@ function Try-ResolveWingetIdForApp {
     $res = @(Search-WtWinGetPackage -SearchQuery $App.Name)
   } catch { $res = @() }
   if ($res -and $res.Count -gt 0) {
-    # OHNE Select-Object -First 1, stattdessen Array-Zugriff [0]
+    # Avoid Select-Object -First 1 to prevent WinForms pipeline crash; use array index [0] instead
     $exact = @($res | Where-Object { $_.Name -and ($_.Name -eq $App.Name) })
     if ($exact.Count -gt 0 -and $exact[0].PackageID) { return [string]$exact[0].PackageID }
     
@@ -293,69 +307,113 @@ function Try-ResolveWingetIdForApp {
   return $null
 }
 
-function Get-PreviousWingetVersion {
-  param([string]$PackageId, [string]$LatestVersion)
-  try { $output = & winget show --id $PackageId --versions 2>$null } catch { return $null }
-  if (-not $output) { return $null }
+function Get-VersionDiskCache {
+  if (-not $script:versionCachePath) { return @{} }
+  try {
+    if (Test-Path $script:versionCachePath) {
+      $raw = Get-Content $script:versionCachePath -Raw -Encoding utf8 -ErrorAction Stop
+      $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+      $ht = @{}
+      foreach ($prop in $parsed.PSObject.Properties) {
+        $ht[$prop.Name] = @{
+          versions  = @($prop.Value.versions)
+          timestamp = [datetime]::Parse($prop.Value.timestamp, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind)
+        }
+      }
+      return $ht
+    }
+  } catch {
+    Write-Log "Warning: Could not read version cache: $($_.Exception.Message)"
+  }
+  return @{}
+}
+
+function Save-VersionDiskCache {
+  param([hashtable]$Cache)
+  if (-not $script:versionCachePath) { return }
+  try {
+    $obj = @{}
+    foreach ($key in $Cache.Keys) {
+      $obj[$key] = @{
+        versions  = $Cache[$key].versions
+        timestamp = $Cache[$key].timestamp.ToString('o')
+      }
+    }
+    $obj | ConvertTo-Json -Depth 4 | Set-Content -Path $script:versionCachePath -Encoding utf8 -ErrorAction SilentlyContinue
+  } catch {
+    Write-Log "Warning: Could not save version cache: $($_.Exception.Message)"
+  }
+}
+
+function Get-WingetVersions {
+  param([string]$PackageId)
+
+  # 1) RAM cache
+  if ($script:wingetVersionCache.ContainsKey($PackageId)) {
+    return $script:wingetVersionCache[$PackageId]
+  }
+
+  # 2) Disk cache (TTL 6h)
+  $diskCache = Get-VersionDiskCache
+  if ($diskCache.ContainsKey($PackageId)) {
+    $entry = $diskCache[$PackageId]
+    $ageHours = ([datetime]::UtcNow - $entry.timestamp.ToUniversalTime()).TotalHours
+    if ($ageHours -lt 6 -and $entry.versions -and $entry.versions.Count -gt 0) {
+      $script:wingetVersionCache[$PackageId] = $entry.versions
+      Write-Log "Version cache hit (disk) for $PackageId (age: $([math]::Round($ageHours,1))h)"
+      return $entry.versions
+    }
+  }
+
+  # 3) Query winget
+  try { $output = & winget show --id $PackageId --versions 2>$null } catch { return @() }
+  if (-not $output) { return @() }
+
   $cand = @()
   foreach ($line in @($output)) {
     $t = ($line -replace '^[\s\-•]+','').Trim()
     if (-not $t) { continue }
     if ($t -match '^(\d+)(\.[0-9A-Za-z]+)*([\-+._][0-9A-Za-z]+)*$') { $cand += $t }
   }
-  if (-not $cand -or $cand.Count -eq 0) { return $null }
+
   $unique = @($cand | Select-Object -Unique)
-  if ($LatestVersion) { $unique = @($unique | Where-Object { $_ -ne $LatestVersion }) }
   $parsed = foreach ($v in $unique) {
     $ok = $false; $vo = $null
     try { $vo = [version]$v; $ok = $true } catch {}
     [pscustomobject]@{ Text = $v; Parsed = $vo; Numeric = $ok }
   }
-  $sorted = @()
-  if ($parsed | Where-Object Numeric) { $sorted = @($parsed | Where-Object Numeric | Sort-Object Parsed -Descending) }
-  else { $sorted = @($parsed | Sort-Object Text -Descending) }
-  if ($sorted.Count -gt 0) { return $sorted[0].Text }
-  return $null
-}
 
-function Get-WingetVersions {
-  param([string]$PackageId)
-  
-  # Check cache first (speeds up repeated searches)
-  if ($script:wingetVersionCache.ContainsKey($PackageId)) {
-    return $script:wingetVersionCache[$PackageId]
-  }
-  
-  # Query winget
-  try { $output = & winget show --id $PackageId --versions 2>$null } catch { return @() }
-  if (-not $output) { return @() }
-  
-  $cand = @()
-  foreach ($line in @($output)) {
-    $t = ($line -replace '^[\s\-•]+','').Trim()
-    if (-not $t) { continue }
-    if ($t -match '^(\d+)(\.[0-9A-Za-z]+)*([\-+._][0-9A-Za-z]+)*$') { $cand += $t }
-  }
-  
-  $unique = @($cand | Select-Object -Unique)
-  $parsed = foreach ($v in $unique) { 
-    $ok = $false; $vo = $null
-    try { $vo = [version]$v; $ok = $true } catch {}
-    [pscustomobject]@{ Text = $v; Parsed = $vo; Numeric = $ok }
-  }
-  
   $result = @()
   if ($parsed | Where-Object Numeric) {
     $result = @($parsed | Where-Object Numeric | Sort-Object Parsed -Descending | Select-Object -ExpandProperty Text)
   } else {
     $result = @($parsed | Sort-Object Text -Descending | Select-Object -ExpandProperty Text)
   }
-  
-  # Cache result for future use
+
+  # 4) Store in RAM cache
   $script:wingetVersionCache[$PackageId] = $result
-  
+
+  # 5) Store in disk cache
+  $diskCache[$PackageId] = @{
+    versions  = $result
+    timestamp = [datetime]::UtcNow
+  }
+  Save-VersionDiskCache -Cache $diskCache
+
   return $result
 }
+
+function Get-PreviousWingetVersion {
+  param([string]$PackageId, [string]$LatestVersion)
+
+  $allVersions = @(Get-WingetVersions -PackageId $PackageId)
+  if (-not $allVersions -or $allVersions.Count -eq 0) { return $null }
+
+  $candidates = @($allVersions | Where-Object { $_ -ne $LatestVersion })
+  if ($candidates.Count -gt 0) { return $candidates[0] }
+  return $null
+}
+
 
 function Show-VersionPickerDialog {
   param([string]$Title,[string[]]$Versions)
@@ -436,7 +494,7 @@ function Get-UpdateCandidates {
   $candidates = [System.Collections.Generic.List[object]]::new()
   foreach ($app in @($all)) {
     if (-not $app -or -not $app.CurrentVersion) { continue }
-    $wingetId = Try-ResolveWingetIdForApp -App $app
+    $wingetId = Resolve-WingetIdForApp -App $app
     $usedLatest = $null
     if ($wingetId) {
       try { $wgVersions = @(Get-WingetVersions -PackageId $wingetId) } catch { $wgVersions = @() }
@@ -577,7 +635,7 @@ $script:isDarkMode   = $true
 $script:currentTheme = $script:darkTheme
 
 # Function to apply theme to all controls
-function Apply-Theme {
+function Set-GuiTheme {
   param([System.Windows.Forms.Control]$control, [hashtable]$theme)
   if ($control -is [System.Windows.Forms.Form]) {
     $control.BackColor = $theme.BackColor
@@ -618,15 +676,15 @@ function Apply-Theme {
     $control.ForeColor = $theme.ForeColor
   }
   foreach ($childControl in @($control.Controls)) {
-    Apply-Theme -control $childControl -theme $theme
+    Set-GuiTheme -control $childControl -theme $theme
   }
 }
 
 # Function to toggle theme
-function Toggle-Theme {
+function Switch-GuiTheme {
   $script:isDarkMode   = -not $script:isDarkMode
   $script:currentTheme = if ($script:isDarkMode) { $script:darkTheme } else { $script:lightTheme }
-  Apply-Theme -control $form -theme $script:currentTheme
+  Set-GuiTheme -control $form -theme $script:currentTheme
   # Button text indicates the action (target)
   $themeToggleButton.Text = if ($script:isDarkMode) { "Light Mode" } else { "Dark Mode" }
   $form.Refresh()
@@ -650,17 +708,17 @@ function Write-Log {
       }
       $logPath = Join-Path $base 'WinTuner_GUI.log'
       
-      # --- NEU: Log-Größe begrenzen (Log Rotation) ---
-      $maxLogSize = 2MB # Maximale Dateigröße (kannst du nach Belieben anpassen)
+      # --- Log rotation: limit log file size ---
+      $maxLogSize = 2MB # Maximum log file size before rotation
       if (Test-Path $logPath) {
           $logFile = Get-Item $logPath
           if ($logFile.Length -gt $maxLogSize) {
               $oldLogPath = Join-Path $base 'WinTuner_GUI_old.log'
-              # Verschiebt das aktuelle Log ins Backup (überschreibt ein evtl. vorhandenes altes Backup)
+              # Move current log to backup (overwrites existing backup)
               Move-Item -Path $logPath -Destination $oldLogPath -Force -ErrorAction SilentlyContinue
           }
       }
-      # -----------------------------------------------
+      # --- End log rotation ---
 
       Add-Content -Path $logPath -Value $logLine -Encoding utf8 -ErrorAction SilentlyContinue
     } catch {
@@ -809,12 +867,12 @@ function Test-ValidM365UserName {
 # Helper: check if WinTuner is connected (simple smoke test)
 function Test-WtConnected {
   try {
-    # OHNE Select-Object -First 1, um den WinForms Pipeline Crash beim Login zu vermeiden
+    # Avoid Select-Object -First 1 to prevent WinForms pipeline crash during login
     $apps = Get-WtWin32Apps -Update:$false -Superseded:$false -ErrorAction Stop
     foreach ($app in $apps) {
-        return $true # Verlässt die Überprüfung sicher beim ersten gefundenen Element
+        return $true # Exit safely on first found element
     }
-    return $true # Falls 0 Apps vorhanden sind, aber auch kein Fehler auftrat
+    return $true # No apps found but no error either
   } catch { return $false }
 }
 
@@ -859,6 +917,7 @@ $script:currentUserUpn = ""
 $script:builtVersions = @{}
 # Cache for winget version lookups (speeds up repeated searches)
 $script:wingetVersionCache = @{}
+$script:versionCachePath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'WinTuner_VersionCache.json'
 
 # Create form
 $form = New-Object System.Windows.Forms.Form
@@ -871,7 +930,7 @@ $themeToggleButton = New-Object System.Windows.Forms.Button
 $themeToggleButton.Text = "Light Mode"  # indicates action from dark -> light
 $themeToggleButton.Location = New-Object System.Drawing.Point(800, 5)
 $themeToggleButton.Size = New-Object System.Drawing.Size(80, 25)
-$themeToggleButton.Add_Click({ Toggle-Theme })
+$themeToggleButton.Add_Click({ Switch-GuiTheme })
 $themeToggleButton.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
 $form.Controls.Add($themeToggleButton)
 
@@ -1306,6 +1365,14 @@ $saveSettingsButton.Width = 150
 $saveSettingsButton.Height = 35
 $tabSettings.Controls.Add($saveSettingsButton)
 
+# Clear Version Cache Button
+$clearCacheButton = New-Object System.Windows.Forms.Button
+$clearCacheButton.Text = "🗑️ Clear Version Cache"
+$clearCacheButton.Location = New-Object System.Drawing.Point(20,225)
+$clearCacheButton.Width = 180
+$clearCacheButton.Height = 35
+$tabSettings.Controls.Add($clearCacheButton)
+
 # Browse Path Button Handler
 $browsePathButton.Add_Click({
   $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -1350,6 +1417,14 @@ $saveSettingsButton.Add_Click({
       [System.Windows.Forms.MessageBoxIcon]::Error
     )
   }
+})
+
+# Clear Version Cache Button Handler
+$clearCacheButton.Add_Click({
+  $script:wingetVersionCache = @{}
+  Remove-Item $script:versionCachePath -Force -ErrorAction SilentlyContinue
+  Write-Log "Version cache cleared."
+  Update-Status "Version cache cleared."
 })
 
 # --- Self-Update Section in Settings Tab ---
@@ -1976,7 +2051,7 @@ $updateSearchButton.Add_Click({
       } catch { }
       
       # Try to resolve winget ID
-      $wingetId = Try-ResolveWingetIdForApp -App $app
+      $wingetId = Resolve-WingetIdForApp -App $app
       $verified = $false
       
       if ($wingetId) {
@@ -2114,8 +2189,8 @@ $updateSelectedButton.Add_Click({
             $appLatestVersion = $app.LatestVersion
             $appGraphId = $app.GraphId
             
-            # Get PackageIdentifier - use Try-ResolveWingetIdForApp
-            $appPackageId = Try-ResolveWingetIdForApp -App $app
+            # Get PackageIdentifier - use Resolve-WingetIdForApp
+            $appPackageId = Resolve-WingetIdForApp -App $app
             
             Write-Log "Calling Update-SingleApp with: Name='$appName', Current='$appCurrentVersion', Latest='$appLatestVersion', GraphId='$appGraphId', PackageId='$appPackageId'"
             
@@ -2228,8 +2303,8 @@ $updateAllButton.Add_Click({
             $appLatestVersion = $app.LatestVersion
             $appGraphId = $app.GraphId
             
-            # Get PackageIdentifier - use Try-ResolveWingetIdForApp
-            $appPackageId = Try-ResolveWingetIdForApp -App $app
+            # Get PackageIdentifier - use Resolve-WingetIdForApp
+            $appPackageId = Resolve-WingetIdForApp -App $app
             
             # Execute update workflow using shared function
             $result = Update-SingleApp `
@@ -2737,7 +2812,7 @@ $deployDiscoveredButton.Add_Click({
     }
 })
 # Apply initial theme (Dark by default)
-Apply-Theme -control $form -theme $script:currentTheme
+Set-GuiTheme -control $form -theme $script:currentTheme
 
 # Safe logger for closing context
 function Write-FileLog {
