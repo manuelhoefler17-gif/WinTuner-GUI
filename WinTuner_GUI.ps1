@@ -1,5 +1,5 @@
 # WinTuner GUI by Manuel Höfler
-# v0.9.0 – Phase 5: code quality pass (English comments, PS-approved verb names, central config block)
+# v0.10.0 – Phase 6: Login/Logout improvements & recent users ComboBox
 # --- PowerShell version gate (runs on PS<7 without parsing the main body) ---
 try { $psMajor = $PSVersionTable.PSVersion.Major } catch { $psMajor = 0 }
 if ($psMajor -lt 7) {
@@ -44,7 +44,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.9.0"
+$script:appVersion  = "0.10.0"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 
@@ -864,6 +864,30 @@ function Test-ValidM365UserName {
   return ($UserName -match $upnRegex)
 }
 
+# Adds a UPN to the recent users list (only if RememberMe is active)
+function Add-RecentUser {
+  param([string]$Upn)
+  if (-not $script:settings.RememberMe) { return }
+  if ([string]::IsNullOrWhiteSpace($Upn)) { return }
+  $max = if ($script:settings.MaxRecentUsers -gt 0) { $script:settings.MaxRecentUsers } else { 3 }
+  $list = [System.Collections.Generic.List[string]]::new()
+  foreach ($u in @($script:settings.RecentUsers)) {
+    if ($u -and $u -ne $Upn) { $list.Add($u) }
+  }
+  $list.Insert(0, $Upn)
+  while ($list.Count -gt $max) { $list.RemoveAt($list.Count - 1) }
+  $script:settings.RecentUsers = $list.ToArray()
+  $script:settings.LastUser = $Upn
+  Save-Settings
+}
+
+# Clears the recent users list and resets LastUser
+function Clear-RecentUsers {
+  $script:settings.RecentUsers = @()
+  $script:settings.LastUser = ""
+  Save-Settings
+}
+
 # Helper: check if WinTuner is connected (simple smoke test)
 function Test-WtConnected {
   try {
@@ -886,6 +910,7 @@ function Set-ConnectedUIState {
     if ($usernameError) { $usernameError.Visible = $false }
     $tabControl.Visible = $true
     $logoutButton.Visible = $true
+    if ($clearHistoryButton) { $clearHistoryButton.Visible = $false }
   } else {
     $loginButton.Visible = $true
     $usernameBox.Visible = $true
@@ -893,6 +918,7 @@ function Set-ConnectedUIState {
     if ($usernameError) { $usernameError.Visible = $true }
     $tabControl.Visible = $true
     $logoutButton.Visible = $false
+    if ($clearHistoryButton) { $clearHistoryButton.Visible = $true }
   }
   if ($rememberCheckBox) { $rememberCheckBox.Visible = -not $Connected }
   if ($updateSearchButton) { $updateSearchButton.Enabled = $Connected }
@@ -941,7 +967,8 @@ $usernameLabel.Location = New-Object System.Drawing.Point(10,20)
 $usernameLabel.AutoSize = $true
 $form.Controls.Add($usernameLabel)
 
-$usernameBox = New-Object System.Windows.Forms.TextBox
+$usernameBox = New-Object System.Windows.Forms.ComboBox
+$usernameBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDown
 # ENTER in Username -> "Login"
 if ($usernameBox -ne $null) {
   $usernameBox.Add_KeyDown({
@@ -963,8 +990,24 @@ if ($usernameBox -ne $null) {
 }
 $usernameBox.Location = New-Object System.Drawing.Point(100,20)
 $usernameBox.Width = 450
-$usernameBox.BorderStyle = 'FixedSingle'
 $form.Controls.Add($usernameBox)
+
+# "Clear history" button next to username ComboBox
+$clearHistoryButton = New-Object System.Windows.Forms.Button
+$clearHistoryButton.Text = [char]0x1F5D1  # 🗑
+$clearHistoryButton.Width = 30
+$clearHistoryButton.Height = 23
+$clearHistoryButton.Location = New-Object System.Drawing.Point(555, 19)
+$clearHistoryButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$form.Controls.Add($clearHistoryButton)
+
+$clearHistoryButton.Add_Click({
+  Clear-RecentUsers
+  $usernameBox.Items.Clear()
+  $usernameBox.Text = ""
+  Update-Status "Username history cleared."
+  Write-Log "Username history cleared by user."
+})
 
 # Validation hint label for username
 $usernameError = New-Object System.Windows.Forms.Label
@@ -1628,6 +1671,8 @@ $script:settingsPath = Join-Path ([Environment]::GetFolderPath('ApplicationData'
 $script:settings = @{ 
   RememberMe = $false
   LastUser = ""
+  RecentUsers = @()
+  MaxRecentUsers = 3
   WingetOverrides = @{}
   DefaultPackagePath = "C:\Temp"
   AutoCheckUpdates = $false
@@ -1640,6 +1685,17 @@ function Load-Settings {
       if ($o) {
         $script:settings.RememberMe = [bool]$o.RememberMe
         $script:settings.LastUser = [string]$o.LastUser
+        
+        if ($o.PSObject.Properties['RecentUsers']) {
+            $script:settings.RecentUsers = @([string[]]$o.RecentUsers)
+        } else {
+            $script:settings.RecentUsers = @()
+        }
+        if ($o.PSObject.Properties['MaxRecentUsers'] -and $o.MaxRecentUsers -gt 0) {
+            $script:settings.MaxRecentUsers = [int]$o.MaxRecentUsers
+        } else {
+            $script:settings.MaxRecentUsers = 3
+        }
         
         # New settings with defaults
         if ($o.PSObject.Properties['DefaultPackagePath']) {
@@ -1682,6 +1738,14 @@ Load-Settings
 $rememberCheckBox.Checked = [bool]$script:settings.RememberMe
 if ($script:settings.RememberMe -and $script:settings.LastUser) { $usernameBox.Text = $script:settings.LastUser } else { $usernameBox.Text = "" }
 
+# Populate username ComboBox with recent users (only if RememberMe is on)
+if ($script:settings.RememberMe -and $script:settings.RecentUsers) {
+  $usernameBox.Items.Clear()
+  foreach ($u in @($script:settings.RecentUsers)) {
+    if ($u) { [void]$usernameBox.Items.Add($u) }
+  }
+}
+
 # Initialize pathBox with saved default package path
 if ($pathBox) {
   if ($script:settings.DefaultPackagePath) {
@@ -1694,7 +1758,11 @@ if ($pathBox) {
 $rememberCheckBox.Add_CheckedChanged({
   try {
     $script:settings.RememberMe = [bool]$rememberCheckBox.Checked
-    if ($script:settings.RememberMe) { $script:settings.LastUser = $usernameBox.Text } else { $script:settings.LastUser = "" }
+    if ($script:settings.RememberMe) { $script:settings.LastUser = $usernameBox.Text } else {
+      $script:settings.LastUser = ""
+      $script:settings.RecentUsers = @()
+      $usernameBox.Items.Clear()
+    }
     Save-Settings
   } catch {
     Write-Log "Error in RememberMe checkbox handler: $($_.Exception.Message)"
@@ -1711,6 +1779,9 @@ $loginButton.Add_Click({
     )
     return
   }
+  $loginButton.Enabled = $false
+  $loginButton.Text = "Connecting..."
+  [System.Windows.Forms.Application]::DoEvents()
   try {
     Update-Status "Connecting to tenant..."
     $script:isConnected = $false
@@ -1722,6 +1793,12 @@ $loginButton.Add_Click({
     if ($loginInfoLabel) { $loginInfoLabel.Text = "Logged in as: $($script:currentUserUpn)" }
     if ($rememberCheckBox) { $script:settings.RememberMe = [bool]$rememberCheckBox.Checked }
     if ($script:settings.RememberMe) { $script:settings.LastUser = $usernameBox.Text } else { $script:settings.LastUser = "" }
+    Add-RecentUser -Upn $usernameBox.Text
+    # Update dropdown list
+    $usernameBox.Items.Clear()
+    foreach ($u in @($script:settings.RecentUsers)) {
+      if ($u) { [void]$usernameBox.Items.Add($u) }
+    }
     Save-Settings
     Set-ConnectedUIState -Connected $true
     
@@ -1739,8 +1816,34 @@ $loginButton.Add_Click({
       }
     }
   } catch {
-    Update-Status ("Login canceled/failed: {0}" -f $_.Exception.Message)
+    $msg = $_.Exception.Message
+    if ($msg -imatch 'network|connection|timeout|unreachable') {
+      [void][System.Windows.Forms.MessageBox]::Show(
+        "Network error: Please check your internet connection.`n`nDetails: $msg",
+        "Network Error",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+      )
+    } elseif ($msg -imatch 'unauthorized|authentication|credential|access') {
+      [void][System.Windows.Forms.MessageBox]::Show(
+        "Authentication failed: Please check your credentials.`n`nDetails: $msg",
+        "Authentication Error",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+      )
+    } else {
+      [void][System.Windows.Forms.MessageBox]::Show(
+        "Login failed: $msg",
+        "Login Error",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+      )
+    }
+    Update-Status ("Login canceled/failed: {0}" -f $msg)
     Set-ConnectedUIState -Connected $false
+  } finally {
+    $loginButton.Text = "Login to Tenant"
+    $loginButton.Enabled = (Test-ValidM365UserName -UserName $usernameBox.Text)
   }
 })
 
@@ -2425,9 +2528,11 @@ $deleteSelectedAppButton.Add_Click({
 
 $logoutButton.Add_Click({
   Disconnect-WtWinTuner
+  try { Disconnect-MgGraph -ErrorAction SilentlyContinue } catch {}
   $script:isConnected = $false
   $script:currentUserUpn = ""
   if ($loginInfoLabel) { $loginInfoLabel.Text = "" }
+  if (-not $script:settings.RememberMe) { $usernameBox.Text = "" }
   Update-Status "Logout success."
   Set-ConnectedUIState -Connected $false
 })
