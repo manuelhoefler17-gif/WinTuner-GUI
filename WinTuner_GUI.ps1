@@ -40,7 +40,7 @@ $PSDefaultParameterValues = @{
 # ============================================
 # App version (used for self-update check)
 # ============================================
-$script:appVersion = "0.8.0"
+$script:appVersion = "0.8.1"
 $script:githubRepo = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 
@@ -293,69 +293,113 @@ function Try-ResolveWingetIdForApp {
   return $null
 }
 
-function Get-PreviousWingetVersion {
-  param([string]$PackageId, [string]$LatestVersion)
-  try { $output = & winget show --id $PackageId --versions 2>$null } catch { return $null }
-  if (-not $output) { return $null }
+function Get-VersionDiskCache {
+  if (-not $script:versionCachePath) { return @{} }
+  try {
+    if (Test-Path $script:versionCachePath) {
+      $raw = Get-Content $script:versionCachePath -Raw -Encoding utf8 -ErrorAction Stop
+      $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+      $ht = @{}
+      foreach ($prop in $parsed.PSObject.Properties) {
+        $ht[$prop.Name] = @{
+          versions  = @($prop.Value.versions)
+          timestamp = [datetime]$prop.Value.timestamp
+        }
+      }
+      return $ht
+    }
+  } catch {
+    Write-Log "Warning: Could not read version cache: $($_.Exception.Message)"
+  }
+  return @{}
+}
+
+function Save-VersionDiskCache {
+  param([hashtable]$Cache)
+  if (-not $script:versionCachePath) { return }
+  try {
+    $obj = @{}
+    foreach ($key in $Cache.Keys) {
+      $obj[$key] = @{
+        versions  = $Cache[$key].versions
+        timestamp = $Cache[$key].timestamp.ToString('o')
+      }
+    }
+    $obj | ConvertTo-Json -Depth 4 | Set-Content -Path $script:versionCachePath -Encoding utf8 -ErrorAction SilentlyContinue
+  } catch {
+    Write-Log "Warning: Could not save version cache: $($_.Exception.Message)"
+  }
+}
+
+function Get-WingetVersions {
+  param([string]$PackageId)
+
+  # 1) RAM cache
+  if ($script:wingetVersionCache.ContainsKey($PackageId)) {
+    return $script:wingetVersionCache[$PackageId]
+  }
+
+  # 2) Disk cache (TTL 6h)
+  $diskCache = Get-VersionDiskCache
+  if ($diskCache.ContainsKey($PackageId)) {
+    $entry = $diskCache[$PackageId]
+    $ageHours = ([datetime]::UtcNow - $entry.timestamp.ToUniversalTime()).TotalHours
+    if ($ageHours -lt 6 -and $entry.versions -and $entry.versions.Count -gt 0) {
+      $script:wingetVersionCache[$PackageId] = $entry.versions
+      Write-Log "Version cache hit (disk) for $PackageId (age: $([math]::Round($ageHours,1))h)"
+      return $entry.versions
+    }
+  }
+
+  # 3) Query winget
+  try { $output = & winget show --id $PackageId --versions 2>$null } catch { return @() }
+  if (-not $output) { return @() }
+
   $cand = @()
   foreach ($line in @($output)) {
     $t = ($line -replace '^[\s\-•]+','').Trim()
     if (-not $t) { continue }
     if ($t -match '^(\d+)(\.[0-9A-Za-z]+)*([\-+._][0-9A-Za-z]+)*$') { $cand += $t }
   }
-  if (-not $cand -or $cand.Count -eq 0) { return $null }
+
   $unique = @($cand | Select-Object -Unique)
-  if ($LatestVersion) { $unique = @($unique | Where-Object { $_ -ne $LatestVersion }) }
   $parsed = foreach ($v in $unique) {
     $ok = $false; $vo = $null
     try { $vo = [version]$v; $ok = $true } catch {}
     [pscustomobject]@{ Text = $v; Parsed = $vo; Numeric = $ok }
   }
-  $sorted = @()
-  if ($parsed | Where-Object Numeric) { $sorted = @($parsed | Where-Object Numeric | Sort-Object Parsed -Descending) }
-  else { $sorted = @($parsed | Sort-Object Text -Descending) }
-  if ($sorted.Count -gt 0) { return $sorted[0].Text }
-  return $null
-}
 
-function Get-WingetVersions {
-  param([string]$PackageId)
-  
-  # Check cache first (speeds up repeated searches)
-  if ($script:wingetVersionCache.ContainsKey($PackageId)) {
-    return $script:wingetVersionCache[$PackageId]
-  }
-  
-  # Query winget
-  try { $output = & winget show --id $PackageId --versions 2>$null } catch { return @() }
-  if (-not $output) { return @() }
-  
-  $cand = @()
-  foreach ($line in @($output)) {
-    $t = ($line -replace '^[\s\-•]+','').Trim()
-    if (-not $t) { continue }
-    if ($t -match '^(\d+)(\.[0-9A-Za-z]+)*([\-+._][0-9A-Za-z]+)*$') { $cand += $t }
-  }
-  
-  $unique = @($cand | Select-Object -Unique)
-  $parsed = foreach ($v in $unique) { 
-    $ok = $false; $vo = $null
-    try { $vo = [version]$v; $ok = $true } catch {}
-    [pscustomobject]@{ Text = $v; Parsed = $vo; Numeric = $ok }
-  }
-  
   $result = @()
   if ($parsed | Where-Object Numeric) {
     $result = @($parsed | Where-Object Numeric | Sort-Object Parsed -Descending | Select-Object -ExpandProperty Text)
   } else {
     $result = @($parsed | Sort-Object Text -Descending | Select-Object -ExpandProperty Text)
   }
-  
-  # Cache result for future use
+
+  # 4) Store in RAM cache
   $script:wingetVersionCache[$PackageId] = $result
-  
+
+  # 5) Store in disk cache
+  $diskCache[$PackageId] = @{
+    versions  = $result
+    timestamp = [datetime]::UtcNow
+  }
+  Save-VersionDiskCache -Cache $diskCache
+
   return $result
 }
+
+function Get-PreviousWingetVersion {
+  param([string]$PackageId, [string]$LatestVersion)
+
+  $allVersions = @(Get-WingetVersions -PackageId $PackageId)
+  if (-not $allVersions -or $allVersions.Count -eq 0) { return $null }
+
+  $candidates = @($allVersions | Where-Object { $_ -ne $LatestVersion })
+  if ($candidates.Count -gt 0) { return $candidates[0] }
+  return $null
+}
+
 
 function Show-VersionPickerDialog {
   param([string]$Title,[string[]]$Versions)
@@ -859,6 +903,7 @@ $script:currentUserUpn = ""
 $script:builtVersions = @{}
 # Cache for winget version lookups (speeds up repeated searches)
 $script:wingetVersionCache = @{}
+$script:versionCachePath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'WinTuner_VersionCache.json'
 
 # Create form
 $form = New-Object System.Windows.Forms.Form
@@ -1306,6 +1351,14 @@ $saveSettingsButton.Width = 150
 $saveSettingsButton.Height = 35
 $tabSettings.Controls.Add($saveSettingsButton)
 
+# Clear Version Cache Button
+$clearCacheButton = New-Object System.Windows.Forms.Button
+$clearCacheButton.Text = "🗑️ Clear Version Cache"
+$clearCacheButton.Location = New-Object System.Drawing.Point(20,225)
+$clearCacheButton.Width = 180
+$clearCacheButton.Height = 35
+$tabSettings.Controls.Add($clearCacheButton)
+
 # Browse Path Button Handler
 $browsePathButton.Add_Click({
   $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
@@ -1350,6 +1403,14 @@ $saveSettingsButton.Add_Click({
       [System.Windows.Forms.MessageBoxIcon]::Error
     )
   }
+})
+
+# Clear Version Cache Button Handler
+$clearCacheButton.Add_Click({
+  $script:wingetVersionCache = @{}
+  Remove-Item $script:versionCachePath -Force -ErrorAction SilentlyContinue
+  Write-Log "Version cache cleared."
+  Update-Status "Version cache cleared."
 })
 
 # --- Self-Update Section in Settings Tab ---
