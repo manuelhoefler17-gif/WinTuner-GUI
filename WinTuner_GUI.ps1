@@ -40,7 +40,7 @@ $PSDefaultParameterValues = @{
 # ============================================
 # App version (used for self-update check)
 # ============================================
-$script:appVersion = "0.7.0"
+$script:appVersion = "0.7.1"
 $script:githubRepo = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 
@@ -707,8 +707,15 @@ function Invoke-AsyncOperation {
     try {
       $e.Result = & $ScriptBlock
     } catch {
-      $e.Result = @{ Error = $_.Exception.Message }
-      Write-Log "Async operation error: $($_.Exception.Message)"
+      $errMsg = $_.Exception.Message
+      $e.Result = @{ Error = $errMsg }
+      # Write directly to log file (thread-safe, no UI access)
+      try {
+        $base = if ($PSScriptRoot) { $PSScriptRoot } else { [Environment]::GetFolderPath('LocalApplicationData') }
+        $logPath = Join-Path $base 'WinTuner_GUI.log'
+        $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        Add-Content -Path $logPath -Value "$timestamp - Async operation error: $errMsg" -Encoding utf8 -ErrorAction SilentlyContinue
+      } catch {}
     }
   })
   
@@ -746,6 +753,9 @@ function Invoke-AsyncOperation {
       $sender.Dispose()
     })
     $hideTimer.Start()
+    
+    # Dispose the BackgroundWorker to prevent memory leaks
+    $sender.Dispose()
   })
   
   # Start async operation
@@ -812,6 +822,8 @@ $script:currentUserUpn = ""
 
 # Track effective built versions per PackageId
 $script:builtVersions = @{}
+# Cache for winget version lookups (speeds up repeated searches)
+$script:wingetVersionCache = @{}
 
 # Create form
 $form = New-Object System.Windows.Forms.Form
