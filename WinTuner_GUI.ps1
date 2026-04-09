@@ -303,7 +303,7 @@ function Get-VersionDiskCache {
       foreach ($prop in $parsed.PSObject.Properties) {
         $ht[$prop.Name] = @{
           versions  = @($prop.Value.versions)
-          timestamp = [datetime]$prop.Value.timestamp
+          timestamp = [datetime]::Parse($prop.Value.timestamp, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind)
         }
       }
       return $ht
