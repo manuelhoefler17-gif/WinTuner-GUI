@@ -994,7 +994,7 @@ $form.Controls.Add($usernameBox)
 
 # "Clear history" button next to username ComboBox
 $clearHistoryButton = New-Object System.Windows.Forms.Button
-$clearHistoryButton.Text = [char]0x1F5D1  # 🗑
+$clearHistoryButton.Text = [System.Char]::ConvertFromUtf32(0x1F5D1)  # 🗑
 $clearHistoryButton.Width = 30
 $clearHistoryButton.Height = 23
 $clearHistoryButton.Location = New-Object System.Drawing.Point(555, 19)
