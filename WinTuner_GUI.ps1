@@ -1,4 +1,6 @@
 # WinTuner GUI by Manuel Höfler
+# v0.10.3 – Fix: Phase 1 critical bugfixes – error handling & logging consistency
+# v0.10.2 – Fix: Remove updated apps immediately from update list
 # v0.10.1 – Fix: Synchronize RememberMe checkboxes (login page ↔ Settings tab)
 # v0.10.0 – Phase 6: Login/Logout improvements & recent users ComboBox
 # --- PowerShell version gate (runs on PS<7 without parsing the main body) ---
@@ -45,7 +47,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.2"
+$script:appVersion  = "0.10.3"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 
@@ -2105,7 +2107,7 @@ $updateFilterBox.Add_TextChanged({
   $updateListBox.EndUpdate()
   # Update status with filter info
   if (-not [string]::IsNullOrWhiteSpace($filterText)) {
-    $statusLabel.Text = "Filter: $($updateListBox.Items.Count) apps match '$filterText'"
+    Update-Status "Filter: $($updateListBox.Items.Count) apps match '$filterText'"
   }
 })
 
@@ -2477,31 +2479,36 @@ $updateAllButton.Add_Click({
 
 
 $removeOldAppsButton.Add_Click({
-  $oldApps = Get-WtWin32Apps -Superseded $true
-  if ($oldApps.Count -eq 0) { Update-Status "No Superseded Apps Found"; return }
-  $appNames = ($oldApps | Select-Object -ExpandProperty Name) -join "`r`n"
-  $result = [System.Windows.Forms.MessageBox]::Show(
-    "The following outdated apps will be removed:`r`n$appNames",
-    "Confirmation",
-    [System.Windows.Forms.MessageBoxButtons]::YesNo,
-    [System.Windows.Forms.MessageBoxIcon]::Question
-  )
-  if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
-    $progressBar.Value = 0
-    $progressBar.Visible = $true
-    foreach ($app in @($oldApps)) {
-      try {
-        Remove-WtWin32App -GraphId $app.GraphId -ErrorAction Stop
-        Update-Status ("Removed: {0}" -f $app.Name)
-      } catch {
-        Update-Status ("Error removing {0}: {1}" -f $app.Name, $_.Exception.Message)
+  try {
+    $oldApps = Get-WtWin32Apps -Superseded $true
+    if ($oldApps.Count -eq 0) { Update-Status "No Superseded Apps Found"; return }
+    $appNames = ($oldApps | Select-Object -ExpandProperty Name) -join "`r`n"
+    $result = [System.Windows.Forms.MessageBox]::Show(
+      "The following outdated apps will be removed:`r`n$appNames",
+      "Confirmation",
+      [System.Windows.Forms.MessageBoxButtons]::YesNo,
+      [System.Windows.Forms.MessageBoxIcon]::Question
+    )
+    if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+      $progressBar.Value = 0
+      $progressBar.Visible = $true
+      foreach ($app in @($oldApps)) {
+        try {
+          Remove-WtWin32App -GraphId $app.GraphId -ErrorAction Stop
+          Update-Status ("Removed: {0}" -f $app.Name)
+        } catch {
+          Update-Status ("Error removing {0}: {1}" -f $app.Name, $_.Exception.Message)
+        }
       }
+      $progressBar.Value = 100
+      Update-Status "Deleted all superseded Apps..."
+      try { $supersededSearchButton.PerformClick() } catch {}
+    } else {
+      Update-Status "Removal aborted."
     }
-    $progressBar.Value = 100
-    Update-Status "Deleted all superseded Apps..."
-    try { $supersededSearchButton.PerformClick() } catch {}
-  } else {
-    Update-Status "Removal aborted."
+  } catch {
+    Write-Log "Error loading superseded apps: $($_.Exception.Message)"
+    Update-Status "Error: $($_.Exception.Message)"
   }
 })
 
@@ -2521,6 +2528,7 @@ $supersededSearchButton.Add_Click({
     if ($supersededDropdown.Items.Count -gt 0) { $supersededDropdown.SelectedIndex = 0 }
     Update-Status ("Search completed: {0} superseded Apps found." -f $supersededDropdown.Items.Count)
   } catch {
+    Write-Log "Superseded search error: $($_.Exception.Message)"
     Update-Status ("Error while search: {0}" -f $_.Exception.Message)
   }
 })
@@ -2555,7 +2563,11 @@ $deleteSelectedAppButton.Add_Click({
 })
 
 $logoutButton.Add_Click({
-  Disconnect-WtWinTuner
+  try {
+    Disconnect-WtWinTuner -ErrorAction Stop
+  } catch {
+    Write-Log "Logout warning: $($_.Exception.Message)"
+  }
   try { Disconnect-MgGraph -ErrorAction SilentlyContinue } catch {}
   $script:isConnected = $false
   $script:currentUserUpn = ""
@@ -2681,7 +2693,12 @@ $scanDiscoveredButton.Add_Click({
 # --- GRAPH-AUTH BLOCK (FIXED) ---
     if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
         Update-Status "Microsoft.Graph module not found..."
-        [System.Windows.Forms.MessageBox]::Show("...")
+        [System.Windows.Forms.MessageBox]::Show(
+            "The Microsoft.Graph module is required for this operation but was not found.`n`nPlease install it by running:`nInstall-Module Microsoft.Graph -Scope CurrentUser",
+            "Module Not Found",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
         return
     }
 
@@ -2822,7 +2839,9 @@ $scanDiscoveredButton.Add_Click({
                     $matchCount++
                 }
             }
-        } catch {}
+        } catch {
+            Write-Log "Failed to process app '$($app.displayName)': $($_.Exception.Message)"
+        }
     }
     
 # --- NEU: Befülle das Publisher-Dropdown mit eindeutigen Werten ---
