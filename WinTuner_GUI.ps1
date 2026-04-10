@@ -954,8 +954,8 @@ $form.Padding = '5,5,5,5'
 # Theme toggle button (top right)
 $themeToggleButton = New-Object System.Windows.Forms.Button
 $themeToggleButton.Text = "Light Mode"  # indicates action from dark -> light
-$themeToggleButton.Location = New-Object System.Drawing.Point(800, 5)
-$themeToggleButton.Size = New-Object System.Drawing.Size(80, 25)
+$themeToggleButton.Location = New-Object System.Drawing.Point(850, 5)
+$themeToggleButton.Size = New-Object System.Drawing.Size(95, 25)
 $themeToggleButton.Add_Click({ Switch-GuiTheme })
 $themeToggleButton.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
 $form.Controls.Add($themeToggleButton)
@@ -1402,7 +1402,7 @@ $tabSettings.Controls.Add($rememberMeCheckbox)
 
 # Save Settings Button
 $saveSettingsButton = New-Object System.Windows.Forms.Button
-$saveSettingsButton.Text = "💾 Save Settings"
+$saveSettingsButton.Text = "Save Settings"
 $saveSettingsButton.Location = New-Object System.Drawing.Point(20,180)
 $saveSettingsButton.Width = 150
 $saveSettingsButton.Height = 35
@@ -1410,7 +1410,7 @@ $tabSettings.Controls.Add($saveSettingsButton)
 
 # Clear Version Cache Button
 $clearCacheButton = New-Object System.Windows.Forms.Button
-$clearCacheButton.Text = "🗑️ Clear Version Cache"
+$clearCacheButton.Text = "Clear Version Cache"
 $clearCacheButton.Location = New-Object System.Drawing.Point(20,225)
 $clearCacheButton.Width = 180
 $clearCacheButton.Height = 35
@@ -1485,7 +1485,7 @@ $currentVersionLabel.AutoSize = $true
 $tabSettings.Controls.Add($currentVersionLabel)
 
 $checkUpdateButton = New-Object System.Windows.Forms.Button
-$checkUpdateButton.Text = "🔄 Check for Updates"
+$checkUpdateButton.Text = "Check for Updates"
 $checkUpdateButton.Location = New-Object System.Drawing.Point(20, 330)
 $checkUpdateButton.Width = 180
 $checkUpdateButton.Height = 35
