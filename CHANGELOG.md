@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.2] - 2026-04-10
+
+### Fixed
+- Updated apps are now immediately removed from the update list after a successful update, instead of waiting for the background "Search Updates" to finish. This applies to both "Update Checked Apps" and "Update All".
+
 ## [Unreleased]
 
 ## [0.10.0] – 2026-04-10
