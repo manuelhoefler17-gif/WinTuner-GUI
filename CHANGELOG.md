@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.6] – 2026-04-10
+
+### Changed
+- Disk version cache is now loaded once at script start instead of on every cache miss (`$script:diskCache` / `$script:diskCacheLoaded`). Cache-clear also resets these variables.
+- Filter debouncing (200ms timer) added for `updateFilterBox` and `discoveredAppSearchBox` to prevent lag with 500+ apps.
+- Duplicate update-loop code extracted into `Invoke-AppUpdateBatch` helper function; both `updateSelectedButton` and `updateAllButton` handlers now delegate to it.
+- `Get-StringSimilarity` moved from nested definition inside `$scanDiscoveredButton.Add_Click` to a top-level function.
+- `$script:updateApps` type consistency fixed: removal now uses `List.Remove()` instead of array conversion to preserve the `[List[object]]` type.
+- Graph API pagination loop capped at 100 pages to prevent runaway fetches in very large tenants.
+
 ## [0.10.2] - 2026-04-10
 
 ### Fixed
