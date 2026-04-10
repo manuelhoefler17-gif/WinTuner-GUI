@@ -45,7 +45,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.1"
+$script:appVersion  = "0.10.2"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 
@@ -2324,6 +2324,12 @@ $updateSelectedButton.Add_Click({
             if ($result.Success) {
                 $successCount++
                 Write-Log "Successfully updated: $appName"
+
+                # Immediately remove the updated app from the UI list
+                $idxToRemove = $updateListBox.Items.IndexOf($appName)
+                if ($idxToRemove -ge 0) { $updateListBox.Items.RemoveAt($idxToRemove) }
+                $script:updateApps = @($script:updateApps | Where-Object { $_.Name -ne $appName })
+                [System.Windows.Forms.Application]::DoEvents()
             } else {
                 $failedCount++
                 Write-Log "Failed to update: $appName - $($result.Message)"
@@ -2436,6 +2442,13 @@ $updateAllButton.Add_Click({
             if ($result.Success) {
                 $successCount++
                 Write-Log "Successfully updated: $($app.Name)"
+
+                # Immediately remove the updated app from the UI list
+                $appNameToRemove = $app.Name
+                $idxToRemove = $updateListBox.Items.IndexOf($appNameToRemove)
+                if ($idxToRemove -ge 0) { $updateListBox.Items.RemoveAt($idxToRemove) }
+                $script:updateApps = @($script:updateApps | Where-Object { $_.Name -ne $appNameToRemove })
+                [System.Windows.Forms.Application]::DoEvents()
             } else {
                 $failedCount++
                 Write-Log "Failed to update: $($app.Name) - $($result.Message)"
