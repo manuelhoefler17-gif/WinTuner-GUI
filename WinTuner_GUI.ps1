@@ -948,7 +948,7 @@ $script:versionCachePath = Join-Path ([Environment]::GetFolderPath('LocalApplica
 # Create form
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "WinTuner GUI"
-$form.Size = New-Object System.Drawing.Size(960, 950)
+$form.Size = New-Object System.Drawing.Size(900, 850)
 $form.Padding = '5,5,5,5'
 
 # Theme toggle button (top right)
@@ -996,8 +996,8 @@ $form.Controls.Add($usernameBox)
 $clearHistoryButton = New-Object System.Windows.Forms.Button
 $clearHistoryButton.Text = ([System.Char]::ConvertFromUtf32(0x1F5D1)) + " Clear History"
 $clearHistoryButton.Width = 110
-$clearHistoryButton.Height = 23
-$clearHistoryButton.Location = New-Object System.Drawing.Point(558, 19)
+$clearHistoryButton.Height = 26
+$clearHistoryButton.Location = New-Object System.Drawing.Point(558, 18)
 $clearHistoryButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $form.Controls.Add($clearHistoryButton)
 
@@ -1058,7 +1058,7 @@ $form.Controls.Add($progressBar)
 # Logout button
 $logoutButton = New-Object System.Windows.Forms.Button
 $logoutButton.Text = "Tenant Logout"
-$logoutButton.Location = New-Object System.Drawing.Point(570,20)
+$logoutButton.Location = New-Object System.Drawing.Point(675,20)
 $logoutButton.Width = 180
 $logoutButton.Visible = $false
 $form.Controls.Add($logoutButton)
@@ -1073,7 +1073,7 @@ $form.Controls.Add($loginInfoLabel)
 # TabControl
 $tabControl = New-Object System.Windows.Forms.TabControl
 $tabControl.Location = New-Object System.Drawing.Point(10, 90)
-$tabControl.Size = New-Object System.Drawing.Size(760, 560)
+$tabControl.Size = New-Object System.Drawing.Size(760, 500)
 $tabControl.Visible = $true
 $tabControl.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right -bor [System.Windows.Forms.AnchorStyles]::Bottom
 $form.Controls.Add($tabControl)
@@ -1653,7 +1653,7 @@ Update-Status "Module imported."
 # Login button
 $loginButton = New-Object System.Windows.Forms.Button
 $loginButton.Text = "Login to Tenant"
-$loginButton.Location = New-Object System.Drawing.Point(570,20)
+$loginButton.Location = New-Object System.Drawing.Point(675,20)
 $loginButton.Width = 180
 $form.Controls.Add($loginButton)
 
