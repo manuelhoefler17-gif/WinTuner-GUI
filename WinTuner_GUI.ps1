@@ -1,4 +1,5 @@
 # WinTuner GUI by Manuel Höfler
+# v0.10.6 – Fix: Phase 4 – performance improvements & code quality
 # v0.10.5 – Fix: Phase 3 – UX improvements, ProgressBar crash hotfix, batch update summary
 # v0.10.4 – Fix: Phase 2 – async update check, disconnect timeout, dead code removal
 # v0.10.3 – Fix: Phase 1 critical bugfixes – error handling & logging consistency
@@ -49,7 +50,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.5"
+$script:appVersion  = "0.10.6"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 
@@ -62,6 +63,8 @@ $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTune
 # $script:isDarkMode       – current theme state (true = dark)
 # $script:currentTheme     – active theme hashtable (darkTheme or lightTheme)
 # $script:asyncResult      – last result from Invoke-AsyncOperation
+# $script:diskCache        – in-memory copy of the on-disk version cache (loaded once)
+# $script:diskCacheLoaded  – whether $script:diskCache has been populated from disk
 
 # Version comparison helper: returns $true if Latest > Current
 function Test-IsNewerVersion {
@@ -358,10 +361,13 @@ function Get-WingetVersions {
     return $script:wingetVersionCache[$PackageId]
   }
 
-  # 2) Disk cache (TTL 6h)
-  $diskCache = Get-VersionDiskCache
-  if ($diskCache.ContainsKey($PackageId)) {
-    $entry = $diskCache[$PackageId]
+  # 2) Disk cache (TTL 6h) – loaded once per session
+  if (-not $script:diskCacheLoaded) {
+    $script:diskCache = Get-VersionDiskCache
+    $script:diskCacheLoaded = $true
+  }
+  if ($script:diskCache.ContainsKey($PackageId)) {
+    $entry = $script:diskCache[$PackageId]
     $ageHours = ([datetime]::UtcNow - $entry.timestamp.ToUniversalTime()).TotalHours
     if ($ageHours -lt 6 -and $entry.versions -and $entry.versions.Count -gt 0) {
       $script:wingetVersionCache[$PackageId] = $entry.versions
@@ -398,12 +404,12 @@ function Get-WingetVersions {
   # 4) Store in RAM cache
   $script:wingetVersionCache[$PackageId] = $result
 
-  # 5) Store in disk cache
-  $diskCache[$PackageId] = @{
+  # 5) Store in disk cache (update script-level cache variable and persist to disk)
+  $script:diskCache[$PackageId] = @{
     versions  = $result
     timestamp = [datetime]::UtcNow
   }
-  Save-VersionDiskCache -Cache $diskCache
+  Save-VersionDiskCache -Cache $script:diskCache
 
   return $result
 }
@@ -417,6 +423,21 @@ function Get-PreviousWingetVersion {
   $candidates = @($allVersions | Where-Object { $_ -ne $LatestVersion })
   if ($candidates.Count -gt 0) { return $candidates[0] }
   return $null
+}
+
+function Get-StringSimilarity {
+  param($str1, $str2)
+  if (-not $str1 -or -not $str2) { return 0 }
+  $clean1 = $str1.ToLower() -replace '[^\w\s]', ' '
+  $clean2 = $str2.ToLower() -replace '[^\w\s]', ' '
+  $words1 = @($clean1 -split '\s+' | Where-Object { $_.Trim() -ne '' })
+  $words2 = @($clean2 -split '\s+' | Where-Object { $_.Trim() -ne '' })
+  if ($words1.Count -eq 0 -or $words2.Count -eq 0) { return 0 }
+
+  $matchCount = 0
+  foreach ($w in $words1) { if ($words2 -contains $w) { $matchCount++ } }
+  $minWords = [math]::Min($words1.Count, $words2.Count)
+  return [math]::Round(($matchCount / $minWords) * 100)
 }
 
 
@@ -612,6 +633,99 @@ function Update-SingleApp {
   }
   
   return $result
+}
+
+function Invoke-AppUpdateBatch {
+  param(
+    [Parameter(Mandatory=$true)]
+    [object[]]$Apps,
+    [Parameter(Mandatory=$true)]
+    [string]$RootPackageFolder
+  )
+
+  $updateSelectedButton.Enabled = $false
+  $updateAllButton.Enabled = $false
+  $updateSearchButton.Enabled = $false
+  $checkAllButton.Enabled = $false
+  $uncheckAllButton.Enabled = $false
+
+  $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+  $progressBar.MarqueeAnimationSpeed = 30
+  $progressBar.Visible = $true
+
+  $successCount = 0
+  $failedCount = 0
+  $totalCount = $Apps.Count
+  $currentIndex = 0
+  $failedList = [System.Collections.Generic.List[object]]::new()
+
+  try {
+    foreach ($app in $Apps) {
+      $currentIndex++
+      Update-Status ("Updating ({0}/{1}): {2}" -f $currentIndex, $totalCount, $app.Name)
+      [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
+
+      # Extract properties from WtWin32App object
+      $appName = $app.Name
+      $appCurrentVersion = $app.CurrentVersion
+      $appLatestVersion = $app.LatestVersion
+      $appGraphId = $app.GraphId
+
+      # Get PackageIdentifier - use Resolve-WingetIdForApp
+      $appPackageId = Resolve-WingetIdForApp -App $app
+
+      Write-Log "Calling Update-SingleApp with: Name='$appName', Current='$appCurrentVersion', Latest='$appLatestVersion', GraphId='$appGraphId', PackageId='$appPackageId'"
+
+      $result = Update-SingleApp `
+        -AppName $appName `
+        -CurrentVersion $appCurrentVersion `
+        -LatestVersion $appLatestVersion `
+        -GraphId $appGraphId `
+        -PackageIdentifier $appPackageId `
+        -RootPackageFolder $RootPackageFolder
+
+      if ($result.Success) {
+        $successCount++
+        Write-Log "Successfully updated: $appName"
+
+        # Immediately remove the updated app from the UI list
+        $idxToRemove = $updateListBox.Items.IndexOf($appName)
+        if ($idxToRemove -ge 0) { $updateListBox.Items.RemoveAt($idxToRemove) }
+        $toRemove = $script:updateApps | Where-Object { $_.Name -eq $appName }
+        foreach ($item in @($toRemove)) { [void]$script:updateApps.Remove($item) }
+        [System.Windows.Forms.Application]::DoEvents()
+      } else {
+        $failedCount++
+        Write-Log "Failed to update: $appName - $($result.Message)"
+        $failedList.Add([pscustomobject]@{ Name = $appName; Reason = $result.Message })
+      }
+    }
+
+    if ($failedList.Count -gt 0) {
+      $summary = "The following $($failedList.Count) app(s) could not be updated:`n`n"
+      $summary += ($failedList | ForEach-Object { "• $($_.Name): $($_.Reason)" }) -join "`n"
+      [System.Windows.Forms.MessageBox]::Show(
+        $summary,
+        "Update Summary – $($failedList.Count) Failed",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+      )
+    }
+
+    # Refresh update list
+    try { $updateSearchButton.PerformClick() } catch {}
+
+    return @{ SuccessCount = $successCount; FailedList = $failedList }
+  } finally {
+    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $progressBar.Visible = $false
+    $progressBar.Value = 0
+    $updateSelectedButton.Enabled = $true
+    $updateAllButton.Enabled = $true
+    $updateSearchButton.Enabled = $true
+    $checkAllButton.Enabled = $true
+    $uncheckAllButton.Enabled = $true
+  }
 }
 
 # Dark mode theme colors
@@ -950,6 +1064,9 @@ $script:builtVersions = @{}
 # Cache for winget version lookups (speeds up repeated searches)
 $script:wingetVersionCache = @{}
 $script:versionCachePath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'WinTuner_VersionCache.json'
+# Disk cache loaded once at first use (Fix 1)
+$script:diskCache = @{}
+$script:diskCacheLoaded = $false
 
 # Create form
 $form = New-Object System.Windows.Forms.Form
@@ -1498,6 +1615,8 @@ $saveSettingsButton.Add_Click({
 # Clear Version Cache Button Handler
 $clearCacheButton.Add_Click({
   $script:wingetVersionCache = @{}
+  $script:diskCache = @{}
+  $script:diskCacheLoaded = $false
   Remove-Item $script:versionCachePath -Force -ErrorAction SilentlyContinue
   Write-Log "Version cache cleared."
   Update-Status "Version cache cleared."
@@ -2101,15 +2220,18 @@ $updateListBox.Add_ItemCheck({
 })
 
 # ----------------------------------------------
-# Update List Filter - filters as you type
+# Update List Filter - filters as you type (debounced 200ms)
 # ----------------------------------------------
-$updateFilterBox.Add_TextChanged({
+$updateFilterDebounceTimer = New-Object System.Windows.Forms.Timer
+$updateFilterDebounceTimer.Interval = 200
+$updateFilterDebounceTimer.Add_Tick({
+  $updateFilterDebounceTimer.Stop()
   $filterText = $updateFilterBox.Text.Trim()
-  
-   # Clear and repopulate list with filtered items
+
+  # Clear and repopulate list with filtered items
   $updateListBox.BeginUpdate()
   $updateListBox.Items.Clear()
-  
+
   if ([string]::IsNullOrWhiteSpace($filterText)) {
     # No filter - show all apps
     foreach ($app in @($script:updateApps)) {
@@ -2120,8 +2242,8 @@ $updateFilterBox.Add_TextChanged({
     }
   } else {
     # Filter apps by name (case-insensitive)
-    $filtered = $script:updateApps | Where-Object { 
-      $_.Name -like "*$filterText*" 
+    $filtered = $script:updateApps | Where-Object {
+      $_.Name -like "*$filterText*"
     }
     foreach ($app in @($filtered)) {
       if ($app -and $app.Name) {
@@ -2135,6 +2257,11 @@ $updateFilterBox.Add_TextChanged({
   if (-not [string]::IsNullOrWhiteSpace($filterText)) {
     Update-Status "Filter: $($updateListBox.Items.Count) apps match '$filterText'"
   }
+})
+
+$updateFilterBox.Add_TextChanged({
+  $updateFilterDebounceTimer.Stop()
+  $updateFilterDebounceTimer.Start()
 })
 
 
@@ -2272,13 +2399,13 @@ $updateSearchButton.Add_Click({
 $updateSelectedButton.Add_Click({
     # Get checked items
     $checkedApps = [System.Collections.Generic.List[object]]::new()
-    
+
     Write-Log "Processing $($updateListBox.CheckedItems.Count) checked items from UI"
     Write-Log "global:updateApps cache has $($script:updateApps.Count) apps"
-    
+
     foreach ($itemName in $updateListBox.CheckedItems) {
         Write-Log "Looking for app: '$itemName'"
-        
+
         # Find matching app in cache
         $foundApp = $null
         foreach ($cachedApp in $script:updateApps) {
@@ -2287,8 +2414,8 @@ $updateSelectedButton.Add_Click({
                 break
             }
         }
-        
-        if ($foundApp) { 
+
+        if ($foundApp) {
             Write-Log "Found: $($foundApp.Name) (Current: $($foundApp.CurrentVersion), Latest: $($foundApp.LatestVersion), GraphId: $($foundApp.GraphId))"
             $checkedApps.Add($foundApp)
         } else {
@@ -2296,108 +2423,27 @@ $updateSelectedButton.Add_Click({
             Write-Log "Available apps in cache: $($script:updateApps.Name -join ', ')"
         }
     }
-    
-    if ($checkedApps.Count -eq 0) { 
+
+    if ($checkedApps.Count -eq 0) {
         Update-Status "No valid apps found. Try 'Search Updates' again."
         Write-Log "ERROR: 0 apps matched from $($updateListBox.CheckedItems.Count) checked items"
-        return 
+        return
     }
-    
-    Write-Log "Successfully matched $($checkedApps.Count) apps for update"
-    
-    $rootPackageFolder = $pathBox.Text
-    if (-not (Test-Path $rootPackageFolder)) { 
-        New-Item -ItemType Directory -Path $rootPackageFolder -Force | Out-Null 
-    }
-    
-    try {
-        $updateSelectedButton.Enabled = $false
-        $updateAllButton.Enabled = $false
-        $updateSearchButton.Enabled = $false
-        $checkAllButton.Enabled = $false
-        $uncheckAllButton.Enabled = $false
-        
-        Update-Status "Starting update for $($checkedApps.Count) checked apps..."
-        $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-        $progressBar.MarqueeAnimationSpeed = 30
-        $progressBar.Visible = $true
-        
-        $successCount = 0
-        $failedCount = 0
-        $totalCount = $checkedApps.Count
-        $currentIndex = 0
-        $failedList = [System.Collections.Generic.List[object]]::new()
-        
-        # Process each app - extract properties to avoid object passing issues
-        foreach ($app in $checkedApps) {
-            $currentIndex++
-            Update-Status ("Updating ({0}/{1}): {2}" -f $currentIndex, $totalCount, $app.Name)
-            [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-            
-            # Extract properties from WtWin32App object
-            $appName = $app.Name
-            $appCurrentVersion = $app.CurrentVersion
-            $appLatestVersion = $app.LatestVersion
-            $appGraphId = $app.GraphId
-            
-            # Get PackageIdentifier - use Resolve-WingetIdForApp
-            $appPackageId = Resolve-WingetIdForApp -App $app
-            
-            Write-Log "Calling Update-SingleApp with: Name='$appName', Current='$appCurrentVersion', Latest='$appLatestVersion', GraphId='$appGraphId', PackageId='$appPackageId'"
-            
-            # Call with individual parameters instead of object
-            $result = Update-SingleApp `
-                -AppName $appName `
-                -CurrentVersion $appCurrentVersion `
-                -LatestVersion $appLatestVersion `
-                -GraphId $appGraphId `
-                -PackageIdentifier $appPackageId `
-                -RootPackageFolder $rootPackageFolder
-            
-            if ($result.Success) {
-                $successCount++
-                Write-Log "Successfully updated: $appName"
 
-                # Immediately remove the updated app from the UI list
-                $idxToRemove = $updateListBox.Items.IndexOf($appName)
-                if ($idxToRemove -ge 0) { $updateListBox.Items.RemoveAt($idxToRemove) }
-                $script:updateApps = @($script:updateApps | Where-Object { $_.Name -ne $appName })
-                [System.Windows.Forms.Application]::DoEvents()
-            } else {
-                $failedCount++
-                Write-Log "Failed to update: $appName - $($result.Message)"
-                $failedList.Add([pscustomobject]@{ Name = $appName; Reason = $result.Message })
-            }
-        }
-        
-        Update-Status "Checked apps updated: $successCount successful, $failedCount failed"
-        
-        if ($failedList.Count -gt 0) {
-            $summary = "The following $($failedList.Count) app(s) could not be updated:`n`n"
-            $summary += ($failedList | ForEach-Object { "• $($_.Name): $($_.Reason)" }) -join "`n"
-            [System.Windows.Forms.MessageBox]::Show(
-                $summary,
-                "Update Summary – $($failedList.Count) Failed",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            )
-        }
-        
-        # Refresh update list
-        try { $updateSearchButton.PerformClick() } catch {}
-        
+    Write-Log "Successfully matched $($checkedApps.Count) apps for update"
+
+    $rootPackageFolder = $pathBox.Text
+    if (-not (Test-Path $rootPackageFolder)) {
+        New-Item -ItemType Directory -Path $rootPackageFolder -Force | Out-Null
+    }
+
+    try {
+        Update-Status "Starting update for $($checkedApps.Count) checked apps..."
+        $batchResult = Invoke-AppUpdateBatch -Apps $checkedApps -RootPackageFolder $rootPackageFolder
+        Update-Status "Checked apps updated: $($batchResult.SuccessCount) successful, $($batchResult.FailedList.Count) failed"
     } catch {
         Update-Status "Update error: $($_.Exception.Message)"
         Write-Log "updateSelectedButton error: $($_.Exception.Message)"
-    } finally {
-        $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-        $progressBar.Visible = $false
-        $progressBar.Value = 0
-        $updateSelectedButton.Enabled = $true
-        $updateAllButton.Enabled = $true
-        $updateSearchButton.Enabled = $true
-        $checkAllButton.Enabled = $true
-        $uncheckAllButton.Enabled = $true
     }
 })
 
@@ -2407,129 +2453,48 @@ $updateSelectedButton.Add_Click({
 # -------------------------
 $updateAllButton.Add_Click({
     $rootPackageFolder = $pathBox.Text
-    if (-not (Test-Path $rootPackageFolder)) { 
-        New-Item -ItemType Directory -Path $rootPackageFolder -Force | Out-Null 
+    if (-not (Test-Path $rootPackageFolder)) {
+        New-Item -ItemType Directory -Path $rootPackageFolder -Force | Out-Null
     }
-    
+
     # Build candidate list to show in confirmation dialog
-    try { 
-        $updatedApps = @(Get-WtWin32Apps -Update $true -Superseded $false) 
-    } catch { 
+    try {
+        $updatedApps = @(Get-WtWin32Apps -Update $true -Superseded $false)
+    } catch {
         Write-Log "Get-WtWin32Apps update threw: $($_)"
-        $updatedApps = @() 
+        $updatedApps = @()
     }
-    
-    $updatedApps = @(( $updatedApps | Where-Object { 
-        $_.LatestVersion -and $_.CurrentVersion -and (Test-IsNewerVersion $_.LatestVersion $_.CurrentVersion) 
+
+    $updatedApps = @(( $updatedApps | Where-Object {
+        $_.LatestVersion -and $_.CurrentVersion -and (Test-IsNewerVersion $_.LatestVersion $_.CurrentVersion)
     } | Sort-Object Name ))
-    
-    if (-not $updatedApps -or $updatedApps.Count -eq 0) { 
+
+    if (-not $updatedApps -or $updatedApps.Count -eq 0) {
         Update-Status "No update candidates found."
-        return 
+        return
     }
-    
+
     # Show confirmation dialog
     $appNames = ($updatedApps | Select-Object -ExpandProperty Name) -join "`r`n"
     $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "The following apps will be updated:`r`n$appNames", 
-        "Confirm", 
-        [System.Windows.Forms.MessageBoxButtons]::YesNo, 
+        "The following apps will be updated:`r`n$appNames",
+        "Confirm",
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Question
     )
-    
-    if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { 
-        Update-Status "Mass update canceled."
-        return 
-    }
-    
-    try {
-        $updateAllButton.Enabled = $false
-        $updateSelectedButton.Enabled = $false
-        $updateSearchButton.Enabled = $false
-        $checkAllButton.Enabled = $false
-        $uncheckAllButton.Enabled = $false
-        
-        Update-Status "Starting mass update for $($updatedApps.Count) apps..."
-        $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-        $progressBar.MarqueeAnimationSpeed = 30
-        $progressBar.Visible = $true
-        
-        $successCount = 0
-        $failedCount = 0
-        $totalCount = $updatedApps.Count
-        $currentIndex = 0
-        $failedList = [System.Collections.Generic.List[object]]::new()
-        
-        foreach ($app in @($updatedApps)) {
-            $currentIndex++
-            Update-Status ("Updating ({0}/{1}): {2}" -f $currentIndex, $totalCount, $app.Name)
-            [System.Windows.Forms.Application]::DoEvents()  # Keep UI responsive - TODO: refactor to use Invoke-AsyncOperation
-            
-            Write-Log "Processing update for: $($app.Name)"
-            
-            # Extract properties from WtWin32App object
-            $appName = $app.Name
-            $appCurrentVersion = $app.CurrentVersion
-            $appLatestVersion = $app.LatestVersion
-            $appGraphId = $app.GraphId
-            
-            # Get PackageIdentifier - use Resolve-WingetIdForApp
-            $appPackageId = Resolve-WingetIdForApp -App $app
-            
-            # Execute update workflow using shared function
-            $result = Update-SingleApp `
-                -AppName $appName `
-                -CurrentVersion $appCurrentVersion `
-                -LatestVersion $appLatestVersion `
-                -GraphId $appGraphId `
-                -PackageIdentifier $appPackageId `
-                -RootPackageFolder $rootPackageFolder
-            
-            if ($result.Success) {
-                $successCount++
-                Write-Log "Successfully updated: $($app.Name)"
 
-                # Immediately remove the updated app from the UI list
-                $appNameToRemove = $app.Name
-                $idxToRemove = $updateListBox.Items.IndexOf($appNameToRemove)
-                if ($idxToRemove -ge 0) { $updateListBox.Items.RemoveAt($idxToRemove) }
-                $script:updateApps = @($script:updateApps | Where-Object { $_.Name -ne $appNameToRemove })
-                [System.Windows.Forms.Application]::DoEvents()
-            } else {
-                $failedCount++
-                Write-Log "Failed to update: $($app.Name) - $($result.Message)"
-                $failedList.Add([pscustomobject]@{ Name = $app.Name; Reason = $result.Message })
-            }
-        }
-        
-        Update-Status "All Updates Completed: $successCount successful, $failedCount failed"
-        
-        if ($failedList.Count -gt 0) {
-            $summary = "The following $($failedList.Count) app(s) could not be updated:`n`n"
-            $summary += ($failedList | ForEach-Object { "• $($_.Name): $($_.Reason)" }) -join "`n"
-            [System.Windows.Forms.MessageBox]::Show(
-                $summary,
-                "Update Summary – $($failedList.Count) Failed",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Warning
-            )
-        }
-        
-        # Refresh update list
-        try { $updateSearchButton.PerformClick() } catch {}
-        
+    if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) {
+        Update-Status "Mass update canceled."
+        return
+    }
+
+    try {
+        Update-Status "Starting mass update for $($updatedApps.Count) apps..."
+        $batchResult = Invoke-AppUpdateBatch -Apps $updatedApps -RootPackageFolder $rootPackageFolder
+        Update-Status "All Updates Completed: $($batchResult.SuccessCount) successful, $($batchResult.FailedList.Count) failed"
     } catch {
         Update-Status "Mass update error: $($_.Exception.Message)"
         Write-Log "updateAllButton error: $($_.Exception.Message)"
-    } finally {
-        $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-        $progressBar.Visible = $false
-        $progressBar.Value = 0
-        $updateAllButton.Enabled = $true
-        $updateSelectedButton.Enabled = $true
-        $updateSearchButton.Enabled = $true
-        $checkAllButton.Enabled = $true
-        $uncheckAllButton.Enabled = $true
     }
 })
 
@@ -2693,8 +2658,18 @@ function Update-DiscoveredListUI {
     $discoveredListBox.EndUpdate()
 }
 
-# Listener für das Suchfeld (Text-Eingabe)
-$discoveredAppSearchBox.Add_TextChanged({ Update-DiscoveredListUI })
+# Listener für das Suchfeld (Text-Eingabe) – debounced 200ms
+$discoveredSearchDebounceTimer = New-Object System.Windows.Forms.Timer
+$discoveredSearchDebounceTimer.Interval = 200
+$discoveredSearchDebounceTimer.Add_Tick({
+  $discoveredSearchDebounceTimer.Stop()
+  Update-DiscoveredListUI
+})
+
+$discoveredAppSearchBox.Add_TextChanged({
+  $discoveredSearchDebounceTimer.Stop()
+  $discoveredSearchDebounceTimer.Start()
+})
 
 # Listener für das Publisher-Dropdown
 $discoveredPublisherBox.Add_SelectedIndexChanged({ Update-DiscoveredListUI })
@@ -2726,22 +2701,7 @@ $uncheckAllDiscoveredButton.Add_Click({
 
 $scanDiscoveredButton.Add_Click({
   if (-not $script:isConnected) { Update-Status "Please login first."; return }
-  
-  function Get-StringSimilarity {
-      param($str1, $str2)
-      if (-not $str1 -or -not $str2) { return 0 }
-      $clean1 = $str1.ToLower() -replace '[^\w\s]', ' '
-      $clean2 = $str2.ToLower() -replace '[^\w\s]', ' '
-      $words1 = @($clean1 -split '\s+' | Where-Object { $_.Trim() -ne '' })
-      $words2 = @($clean2 -split '\s+' | Where-Object { $_.Trim() -ne '' })
-      if ($words1.Count -eq 0 -or $words2.Count -eq 0) { return 0 }
-      
-      $matchCount = 0
-      foreach ($w in $words1) { if ($words2 -contains $w) { $matchCount++ } }
-      $minWords = [math]::Min($words1.Count, $words2.Count)
-      return [math]::Round(($matchCount / $minWords) * 100)
-  }
-  
+
   # Speichere die originalen Streams und schalte sie stumm, um Threading-Crashes zu vermeiden
   $oldProgress = $ProgressPreference
   $oldInfo = $InformationPreference
@@ -2827,11 +2787,18 @@ $scanDiscoveredButton.Add_Click({
     
     $uri = "https://graph.microsoft.com/beta/deviceManagement/detectedApps?`$top=500&`$orderby=deviceCount desc"
     $detectedApps = [System.Collections.Generic.List[object]]::new()
-    
+    $maxPages = 100
+    $pageCount = 0
+
     do {
         $response = Invoke-MgRestMethod -Uri $uri -Method GET -ErrorAction Stop
         if ($response.value) { $detectedApps.AddRange([object[]]$response.value) }
         $uri = $response.'@odata.nextLink'
+        $pageCount++
+        if ($pageCount -ge $maxPages) {
+            Write-Log "Warning: Graph API pagination limit ($maxPages pages) reached. Some apps may not be shown."
+            break
+        }
     } while ($uri)
 
     if (-not $detectedApps -or $detectedApps.Count -eq 0) {
