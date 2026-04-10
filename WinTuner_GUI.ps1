@@ -2498,7 +2498,7 @@ $updateAllButton.Add_Click({
             } else {
                 $failedCount++
                 Write-Log "Failed to update: $($app.Name) - $($result.Message)"
-                $failedList.Add([pscustomobject]@{ Name = $appName; Reason = $result.Message })
+                $failedList.Add([pscustomobject]@{ Name = $app.Name; Reason = $result.Message })
             }
         }
         
