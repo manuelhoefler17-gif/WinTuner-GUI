@@ -1,4 +1,5 @@
 # WinTuner GUI by Manuel Höfler
+# v0.10.5 – Fix: Phase 3 – UX improvements, ProgressBar crash hotfix, batch update summary
 # v0.10.4 – Fix: Phase 2 – async update check, disconnect timeout, dead code removal
 # v0.10.3 – Fix: Phase 1 critical bugfixes – error handling & logging consistency
 # v0.10.2 – Fix: Remove updated apps immediately from update list
@@ -48,7 +49,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.4"
+$script:appVersion  = "0.10.5"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 
@@ -465,23 +466,23 @@ function New-WingetPackageWithFallback {
       $prev = Get-PreviousWingetVersion -PackageId $PackageId -LatestVersion $attemptVersion
       # Only allow previous if it's newer than current tenant version (if known)
       if ($prev -and ( -not $InstalledVersion -or (Test-IsNewerVersion $prev $InstalledVersion) )) {
-        try { New-WtWingetPackage -PackageId $PackageId -PackageFolder $PackageFolder -Version $prev -ErrorAction Stop; return [pscustomobject]@{ Succeeded=$true; EffectiveVersion=$prev } } catch { return [pscustomobject]@{ Succeeded=$false; EffectiveVersion=$null } }
-      } else { return [pscustomobject]@{ Succeeded=$false; EffectiveVersion=$null } }
+        try { New-WtWingetPackage -PackageId $PackageId -PackageFolder $PackageFolder -Version $prev -ErrorAction Stop; return [pscustomobject]@{ Succeeded=$true; EffectiveVersion=$prev } } catch { return [pscustomobject]@{ Succeeded=$false; EffectiveVersion=$null; ErrorMessage=$_.Exception.Message } }
+      } else { return [pscustomobject]@{ Succeeded=$false; EffectiveVersion=$null; ErrorMessage=$m } }
     } elseif ($m -match 'Hash mismatch') {
       if ($AllowUserRetry) {
         $res = [System.Windows.Forms.MessageBox]::Show("Hash mismatch detected. Retry download? Click Yes to retry, No to use previous available version, or Cancel to abort.", "Hash mismatch", [System.Windows.Forms.MessageBoxButtons]::YesNoCancel, [System.Windows.Forms.MessageBoxIcon]::Warning, [System.Windows.Forms.MessageBoxDefaultButton]::Button1)
         if ($res -eq [System.Windows.Forms.DialogResult]::Yes) {
-          try { if ($attemptVersion) { New-WtWingetPackage -PackageId $PackageId -PackageFolder $PackageFolder -Version $attemptVersion -ErrorAction Stop } else { New-WtWingetPackage -PackageId $PackageId -PackageFolder $PackageFolder -ErrorAction Stop }; return [pscustomobject]@{ Succeeded=$true; EffectiveVersion=$attemptVersion } } catch { return [pscustomobject]@{ Succeeded=$false; EffectiveVersion=$null } }
+          try { if ($attemptVersion) { New-WtWingetPackage -PackageId $PackageId -PackageFolder $PackageFolder -Version $attemptVersion -ErrorAction Stop } else { New-WtWingetPackage -PackageId $PackageId -PackageFolder $PackageFolder -ErrorAction Stop }; return [pscustomobject]@{ Succeeded=$true; EffectiveVersion=$attemptVersion } } catch { return [pscustomobject]@{ Succeeded=$false; EffectiveVersion=$null; ErrorMessage=$_.Exception.Message } }
         } elseif ($res -eq [System.Windows.Forms.DialogResult]::No) {
           $latest = $attemptVersion; if (-not $latest) { $latest = $LatestVersion }
           $prev = Get-PreviousWingetVersion -PackageId $PackageId -LatestVersion $latest
           # Only allow previous if it's newer than current tenant version (if known)
           if ($prev -and ( -not $InstalledVersion -or (Test-IsNewerVersion $prev $InstalledVersion) )) {
-            try { New-WtWingetPackage -PackageId $PackageId -PackageFolder $PackageFolder -Version $prev -ErrorAction Stop; return [pscustomobject]@{ Succeeded=$true; EffectiveVersion=$prev } } catch { return [pscustomobject]@{ Succeeded=$false; EffectiveVersion=$null } }
-          } else { return [pscustomobject]@{ Succeeded=$false; EffectiveVersion=$null } }
-        } else { return [pscustomobject]@{ Succeeded=$false; EffectiveVersion=$null } }
-      } else { return [pscustomobject]@{ Succeeded=$false; EffectiveVersion=$null } }
-    } else { return [pscustomobject]@{ Succeeded=$false; EffectiveVersion=$null } }
+            try { New-WtWingetPackage -PackageId $PackageId -PackageFolder $PackageFolder -Version $prev -ErrorAction Stop; return [pscustomobject]@{ Succeeded=$true; EffectiveVersion=$prev } } catch { return [pscustomobject]@{ Succeeded=$false; EffectiveVersion=$null; ErrorMessage=$_.Exception.Message } }
+          } else { return [pscustomobject]@{ Succeeded=$false; EffectiveVersion=$null; ErrorMessage=$m } }
+        } else { return [pscustomobject]@{ Succeeded=$false; EffectiveVersion=$null; ErrorMessage="Cancelled by user" } }
+      } else { return [pscustomobject]@{ Succeeded=$false; EffectiveVersion=$null; ErrorMessage=$m } }
+    } else { return [pscustomobject]@{ Succeeded=$false; EffectiveVersion=$null; ErrorMessage=$m } }
   }
 }
 
@@ -571,7 +572,8 @@ function Update-SingleApp {
       -ErrorAction SilentlyContinue
     
     if (-not $resPkg -or -not $resPkg.Succeeded) {
-      $result.Message = "Package creation failed for $AppName"
+      $errDetail = if ($resPkg -and $resPkg.ErrorMessage) { ": $($resPkg.ErrorMessage)" } else { "" }
+      $result.Message = "Package creation failed for $AppName$errDetail"
       Write-Log $result.Message
       return $result
     }
@@ -1172,7 +1174,8 @@ $uploadButton = New-Object System.Windows.Forms.Button
 $uploadButton.Text = "Upload to Tenant"
 $uploadButton.Location = New-Object System.Drawing.Point(290,140)
 $uploadButton.Width = 180
-$uploadButton.Visible = $false
+$uploadButton.Visible = $true
+$uploadButton.Enabled = $false
 $tabCreate.Controls.Add($uploadButton)
 
 # Tab: Updates
@@ -1310,6 +1313,20 @@ $deployDiscoveredButton.Width = 200
 $deployDiscoveredButton.Enabled = $false
 $tabDiscovered.Controls.Add($deployDiscoveredButton)
 
+$checkAllDiscoveredButton = New-Object System.Windows.Forms.Button
+$checkAllDiscoveredButton.Text = "☑ Check All"
+$checkAllDiscoveredButton.Location = New-Object System.Drawing.Point(20,74)
+$checkAllDiscoveredButton.Width = 100
+$checkAllDiscoveredButton.Enabled = $false
+$tabDiscovered.Controls.Add($checkAllDiscoveredButton)
+
+$uncheckAllDiscoveredButton = New-Object System.Windows.Forms.Button
+$uncheckAllDiscoveredButton.Text = "☐ Uncheck All"
+$uncheckAllDiscoveredButton.Location = New-Object System.Drawing.Point(130,74)
+$uncheckAllDiscoveredButton.Width = 110
+$uncheckAllDiscoveredButton.Enabled = $false
+$tabDiscovered.Controls.Add($uncheckAllDiscoveredButton)
+
 # --- NEU: Filter & Sortierung ---
 $discoveredAppSearchLabel = New-Object System.Windows.Forms.Label
 $discoveredAppSearchLabel.Text = "Search App:"
@@ -1352,9 +1369,9 @@ $discoveredSortBox.SelectedIndex = 0
 $tabDiscovered.Controls.Add($discoveredSortBox)
 
 $discoveredListBox = New-Object System.Windows.Forms.CheckedListBox
-$discoveredListBox.Location = New-Object System.Drawing.Point(20,100)
+$discoveredListBox.Location = New-Object System.Drawing.Point(20,110)
 $discoveredListBox.Width = 710
-$discoveredListBox.Height = 335
+$discoveredListBox.Height = 325
 $discoveredListBox.CheckOnClick = $true
 $discoveredListBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right -bor [System.Windows.Forms.AnchorStyles]::Bottom
 $tabDiscovered.Controls.Add($discoveredListBox)
@@ -1881,7 +1898,11 @@ $searchButton.Add_Click({
       }
     }
     if ($dropdown.Items.Count -gt 0) { $dropdown.SelectedIndex = 0 }
-    Update-Status "Search completed."
+    if ($dropdown.Items.Count -eq 0) {
+      Update-Status "No results found for '$($appSearchBox.Text)'"
+    } else {
+      Update-Status "Search completed."
+    }
   } finally {
     $searchButton.Enabled = $true
   }
@@ -1916,7 +1937,7 @@ $createButton.Add_Click({
   
   if (Test-Path $filePath) {
     $res = [System.Windows.Forms.MessageBox]::Show(("A package file already exists:\n{0}\nOverwrite it?" -f $filePath), "Confirm overwrite", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
-    if ($res -ne [System.Windows.Forms.DialogResult]::Yes) { Update-Status "Creation aborted by user (existing package)."; $uploadButton.Visible = $true; return }
+    if ($res -ne [System.Windows.Forms.DialogResult]::Yes) { Update-Status "Creation aborted by user (existing package)."; $uploadButton.Enabled = $true; return }
     try { 
       Remove-Item -Path $filePath -Force -ErrorAction Stop 
     } catch {
@@ -1953,7 +1974,7 @@ $createButton.Add_Click({
       $effectiveVersion = $resPkg.EffectiveVersion
       if (-not $effectiveVersion) { $effectiveVersion = $package.Version }
       Update-Status ("Package created successfully (version {0})" -f $effectiveVersion)
-      $uploadButton.Visible = $true
+      $uploadButton.Enabled = $true
       if ($effectiveVersion) { $script:builtVersions[$packageID] = $effectiveVersion }
     } else {
       Update-Status "Package creation failed"
@@ -2010,7 +2031,7 @@ $uploadButton.Add_Click({
         Deploy-WtWin32App -PackageId $packageID -Version $version -RootPackageFolder $folder -ErrorAction Stop
         
         Update-Status "Upload completed successfully"
-        $uploadButton.Visible = $false
+        $uploadButton.Enabled = $false
         $appSearchBox.Text = ""
         $dropdown.Items.Clear()
         
@@ -2057,6 +2078,7 @@ $checkAllButton.Add_Click({
   for ($i = 0; $i -lt $updateListBox.Items.Count; $i++) {
     $updateListBox.SetItemChecked($i, $true)
   }
+  foreach ($app in $script:updateApps) { $app.Checked = $true }
   Update-Status "All apps checked ($($updateListBox.Items.Count) items)"
 })
 
@@ -2064,9 +2086,19 @@ $uncheckAllButton.Add_Click({
   for ($i = 0; $i -lt $updateListBox.Items.Count; $i++) {
     $updateListBox.SetItemChecked($i, $false)
   }
+  foreach ($app in $script:updateApps) { $app.Checked = $false }
   Update-Status "All apps unchecked"
 })
 
+# Save checked state when user checks/unchecks an item in the update list
+$updateListBox.Add_ItemCheck({
+  param($sender, $e)
+  $itemName = $updateListBox.Items[$e.Index]
+  $appObj = $script:updateApps | Where-Object { $_.Name -eq $itemName } | Select-Object -First 1
+  if ($appObj) {
+    $appObj.Checked = ($e.NewValue -eq [System.Windows.Forms.CheckState]::Checked)
+  }
+})
 
 # ----------------------------------------------
 # Update List Filter - filters as you type
@@ -2082,7 +2114,8 @@ $updateFilterBox.Add_TextChanged({
     # No filter - show all apps
     foreach ($app in @($script:updateApps)) {
       if ($app -and $app.Name) {
-        [void]$updateListBox.Items.Add($app.Name)
+        $idx = $updateListBox.Items.Add($app.Name)
+        if ($app.Checked) { $updateListBox.SetItemChecked($idx, $true) }
       }
     }
   } else {
@@ -2092,7 +2125,8 @@ $updateFilterBox.Add_TextChanged({
     }
     foreach ($app in @($filtered)) {
       if ($app -and $app.Name) {
-        [void]$updateListBox.Items.Add($app.Name)
+        $idx = $updateListBox.Items.Add($app.Name)
+        if ($app.Checked) { $updateListBox.SetItemChecked($idx, $true) }
       }
     }
   }
@@ -2205,6 +2239,10 @@ $updateSearchButton.Add_Click({
     
     foreach ($app in ($candidates | Sort-Object Name)) {
       if (-not $app -or -not $app.Name) { continue }
+      # Ensure Checked property exists for filter state persistence
+      if (-not ($app | Get-Member -Name Checked -MemberType NoteProperty)) {
+        $app | Add-Member -NotePropertyName Checked -NotePropertyValue $false -Force
+      }
       [void]$updateListBox.Items.Add($app.Name)
       $script:updateApps.Add($app)
       $count++
@@ -2288,6 +2326,7 @@ $updateSelectedButton.Add_Click({
         $failedCount = 0
         $totalCount = $checkedApps.Count
         $currentIndex = 0
+        $failedList = [System.Collections.Generic.List[object]]::new()
         
         # Process each app - extract properties to avoid object passing issues
         foreach ($app in $checkedApps) {
@@ -2327,10 +2366,22 @@ $updateSelectedButton.Add_Click({
             } else {
                 $failedCount++
                 Write-Log "Failed to update: $appName - $($result.Message)"
+                $failedList.Add([pscustomobject]@{ Name = $appName; Reason = $result.Message })
             }
         }
         
         Update-Status "Checked apps updated: $successCount successful, $failedCount failed"
+        
+        if ($failedList.Count -gt 0) {
+            $summary = "The following $($failedList.Count) app(s) could not be updated:`n`n"
+            $summary += ($failedList | ForEach-Object { "• $($_.Name): $($_.Reason)" }) -join "`n"
+            [System.Windows.Forms.MessageBox]::Show(
+                $summary,
+                "Update Summary – $($failedList.Count) Failed",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+        }
         
         # Refresh update list
         try { $updateSearchButton.PerformClick() } catch {}
@@ -2407,6 +2458,7 @@ $updateAllButton.Add_Click({
         $failedCount = 0
         $totalCount = $updatedApps.Count
         $currentIndex = 0
+        $failedList = [System.Collections.Generic.List[object]]::new()
         
         foreach ($app in @($updatedApps)) {
             $currentIndex++
@@ -2446,10 +2498,22 @@ $updateAllButton.Add_Click({
             } else {
                 $failedCount++
                 Write-Log "Failed to update: $($app.Name) - $($result.Message)"
+                $failedList.Add([pscustomobject]@{ Name = $appName; Reason = $result.Message })
             }
         }
         
         Update-Status "All Updates Completed: $successCount successful, $failedCount failed"
+        
+        if ($failedList.Count -gt 0) {
+            $summary = "The following $($failedList.Count) app(s) could not be updated:`n`n"
+            $summary += ($failedList | ForEach-Object { "• $($_.Name): $($_.Reason)" }) -join "`n"
+            [System.Windows.Forms.MessageBox]::Show(
+                $summary,
+                "Update Summary – $($failedList.Count) Failed",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+        }
         
         # Refresh update list
         try { $updateSearchButton.PerformClick() } catch {}
@@ -2646,6 +2710,18 @@ $discoveredListBox.Add_ItemCheck({
     if ($obj) {
         $obj.Checked = ($e.NewValue -eq [System.Windows.Forms.CheckState]::Checked)
     }
+})
+
+$checkAllDiscoveredButton.Add_Click({
+    foreach ($obj in $script:discoveredRaw) { $obj.Checked = $true }
+    Update-DiscoveredListUI
+    Update-Status "All discovered apps checked ($($script:discoveredRaw.Count) items)"
+})
+
+$uncheckAllDiscoveredButton.Add_Click({
+    foreach ($obj in $script:discoveredRaw) { $obj.Checked = $false }
+    Update-DiscoveredListUI
+    Update-Status "All discovered apps unchecked"
 })
 
 $scanDiscoveredButton.Add_Click({
@@ -2856,6 +2932,8 @@ $scanDiscoveredButton.Add_Click({
     if ($matchCount -gt 0) {
         Update-Status "Found $matchCount Winget match(es). Filter, sort, or deploy them!"
         $deployDiscoveredButton.Enabled = $true
+        $checkAllDiscoveredButton.Enabled = $true
+        $uncheckAllDiscoveredButton.Enabled = $true
     } else {
         Update-Status "No Winget matches found (or all are already managed)."
     }
@@ -2890,6 +2968,8 @@ $deployDiscoveredButton.Add_Click({
     try {
         $deployDiscoveredButton.Enabled = $false
         $scanDiscoveredButton.Enabled = $false
+        $checkAllDiscoveredButton.Enabled = $false
+        $uncheckAllDiscoveredButton.Enabled = $false
         
         $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
         $progressBar.Maximum = $checkedItems.Count
@@ -2952,6 +3032,8 @@ $deployDiscoveredButton.Add_Click({
         $InformationPreference = $oldInfo
         $deployDiscoveredButton.Enabled = $true
         $scanDiscoveredButton.Enabled = $true
+        $checkAllDiscoveredButton.Enabled = $true
+        $uncheckAllDiscoveredButton.Enabled = $true
         $progressBar.Visible = $false
     }
 })
