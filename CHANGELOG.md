@@ -9,6 +9,64 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.0] – 2026-04-10
+
+### Added
+- `Add-RecentUser` function: saves used UPNs to settings (max 3, configurable via `MaxRecentUsers`).
+- `Clear-RecentUsers` function: clears the saved login history.
+- "Clear History" button (🗑 Clear History) next to the username ComboBox, visible only when logged out.
+- Settings now persist `RecentUsers` list and `MaxRecentUsers` limit.
+
+### Changed
+- Username input field replaced from `TextBox` to `ComboBox` (DropDown style) showing recent logins.
+- `Set-ConnectedUIState` updated: hides `$clearHistoryButton` when logged in, shows it when logged out.
+- "Clear History" button text made descriptive (`"🗑 Clear History"`) with tooltip `"Clears the list of saved M365 login names"`.
+- Initial form window size increased from `900×850` to `960×950` to prevent control clipping.
+
+### Fixed
+- "Clear History" button misaligned position – repositioned directly next to username ComboBox.
+
+## [0.9.0] – 2026-04-09
+
+### Changed
+- All comments translated to English.
+- PowerShell-approved verb names used throughout (`Test-`, `Invoke-`, `Get-`, `New-`, `Update-`, `Set-`, `Switch-`, `Resolve-`, `Save-`).
+- Central configuration block added at top of script for all script-scoped constants and mutable state variables.
+
+## [0.8.1] – 2026-04-09
+
+### Added
+- Winget version disk cache (JSON file, TTL 6 hours) stored at `%LOCALAPPDATA%\WinTuner_VersionCache.json`.
+- In-memory RAM cache for winget version lookups (speeds up repeated queries within session).
+- "Clear Cache" button in Settings tab to manually invalidate the version cache.
+
+### Fixed
+- UTC timestamp parsing in `Get-VersionDiskCache` using `RoundtripKind` flag.
+
+## [0.8.0] – 2026-04-09
+
+### Added
+- SHA256 integrity check for self-update downloads (optional, uses `.sha256` asset from GitHub release).
+- Tooltips on key controls for improved usability.
+- Username persistence (last used UPN saved and restored on next start).
+
+### Changed
+- Log box height increased to 120px for better visibility.
+
+### Fixed
+- `hashMismatch` flag variable used instead of string matching for correct SHA256 mismatch detection.
+
+## [0.7.1] – 2026-04-09
+
+### Fixed
+- `$script:wingetVersionCache` and `$script:builtVersions` not being initialized before use (cache init crash).
+- `BackgroundWorker` not being disposed after completion (BGW Dispose leak).
+- Thread-unsafe logging that caused crashes when `Write-Log` was called from background threads.
+
+---
+
+## [0.6.x and earlier]
+
 ### Added
 - Global error handler for Windows Forms and AppDomain to log unhandled exceptions.
 - Log rotation (2MB limit) for the log file.
@@ -19,7 +77,7 @@ All notable changes to this project will be documented in this file.
 - Consolidated discovered apps list so multiple versions of the same app are grouped by Winget PackageID with a summed device count and clean name.
 
 ### Fixed
-- Fixed UI freezing and "Not Responding" state during long operations (like Discovered Apps scanning) by implementing `[System.Windows.Forms.Application]::DoEvents()`. 
+- Fixed UI freezing and "Not Responding" state during long operations (like Discovered Apps scanning) by implementing `[System.Windows.Forms.Application]::DoEvents()`.
 - Corrected event listener variable names for Discovered Apps filtering (`$discoveredAppSearchBox` and `$discoveredPublisherBox`) so the UI updates immediately on input.
 - Fixed PowerShell stream preferences (`WarningPreference`, etc.) at the top of the script to prevent thread crashes from `WriteObject`/`WriteError` calls.
 

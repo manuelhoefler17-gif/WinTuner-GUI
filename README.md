@@ -4,7 +4,7 @@
 
 [![PowerShell Version](https://img.shields.io/badge/PowerShell-7.0%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4-orange.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.0-orange.svg)](CHANGELOG.md)
 
 ## 📋 Table of Contents
 
@@ -175,6 +175,8 @@ Click **"Save Settings"** to persist changes.
   "AutoCheckUpdates": true,
   "RememberMe": true,
   "LastUser": "admin@contoso.com",
+  "RecentUsers": ["admin@contoso.com", "user2@contoso.com"],
+  "MaxRecentUsers": 3,
   "WingetOverrides": {
     "7zip.7zip": "24.07"
   }
@@ -248,14 +250,11 @@ Log includes:
 See [CHANGELOG.md](CHANGELOG.md) for a detailed list of changes between versions.
 
 ### Latest Updates
-- Added Update App in Settings
-- Fixed UI freezing and "Not Responding" state during long operations (like Discovered Apps scanning) by implementing `[System.Windows.Forms.Application]::DoEvents()`. 
-- Corrected event listener variable names for Discovered Apps filtering (`$discoveredAppSearchBox` and `$discoveredPublisherBox`) so the UI updates immediately on input.
-- Re-enabled and configured `WarningPreference`/`InformationPreference` globals to prevent threading crashes from PowerShell streams in WinForms.
-- Enhanced Intune Discovered App parsing by aggressively trimming version strings and parenthesis values before searching Winget.
-- Reduced duplicate update list items by consolidating them per `PackageID` with combined device counts.
-- Added global unhandled exception and WinForms thread crash handlers to cleanly write fatal errors to the main log.
-- Introduced a 2MB log rotation limit to ensure `WinTuner_GUI.log` remains lightweight.
+- **v0.10.0** – Username input replaced with ComboBox showing recent logins; "🗑 Clear History" button added next to login field; form window size increased to 960×950; Clear History button repositioned correctly.
+- **v0.9.0** – All comments translated to English; PowerShell-approved verb names used throughout; central configuration block added at top of script.
+- **v0.8.1** – Winget version disk cache (JSON, TTL 6h) at `%LOCALAPPDATA%\WinTuner_VersionCache.json`; in-memory RAM cache for repeated version lookups; "Clear Cache" button in Settings tab.
+- **v0.8.0** – SHA256 integrity check for self-update downloads; tooltips on key controls; username persistence across sessions; log box height increased to 120px.
+- **v0.7.1** – Fixed cache init crash (`$script:wingetVersionCache` / `$script:builtVersions`); fixed BackgroundWorker dispose leak; fixed thread-unsafe logging from background threads.
 
 ## 🙏 Credits
 
