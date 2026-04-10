@@ -948,7 +948,7 @@ $script:versionCachePath = Join-Path ([Environment]::GetFolderPath('LocalApplica
 # Create form
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "WinTuner GUI"
-$form.Size = New-Object System.Drawing.Size(900, 850)
+$form.Size = New-Object System.Drawing.Size(960, 950)
 $form.Padding = '5,5,5,5'
 
 # Theme toggle button (top right)
@@ -994,10 +994,10 @@ $form.Controls.Add($usernameBox)
 
 # "Clear history" button next to username ComboBox
 $clearHistoryButton = New-Object System.Windows.Forms.Button
-$clearHistoryButton.Text = [System.Char]::ConvertFromUtf32(0x1F5D1)  # 🗑
-$clearHistoryButton.Width = 30
+$clearHistoryButton.Text = ([System.Char]::ConvertFromUtf32(0x1F5D1)) + " Clear History"
+$clearHistoryButton.Width = 110
 $clearHistoryButton.Height = 23
-$clearHistoryButton.Location = New-Object System.Drawing.Point(555, 19)
+$clearHistoryButton.Location = New-Object System.Drawing.Point(558, 19)
 $clearHistoryButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $form.Controls.Add($clearHistoryButton)
 
@@ -3073,6 +3073,7 @@ if ($updateSelectedButton)  { $toolTip.SetToolTip($updateSelectedButton,  "Updat
 if ($scanDiscoveredButton)  { $toolTip.SetToolTip($scanDiscoveredButton,  "Scan Intune Discovered Apps and match them to WinGet packages") }
 if ($logoutButton)          { $toolTip.SetToolTip($logoutButton,          "Disconnect from the current Microsoft 365 tenant") }
 if ($themeToggleButton)     { $toolTip.SetToolTip($themeToggleButton,     "Switch between Dark Mode and Light Mode") }
+if ($clearHistoryButton)    { $toolTip.SetToolTip($clearHistoryButton,    "Clears the list of saved M365 login names") }
 
 # Run the form mit finalem Sicherheitsnetz
 try {
