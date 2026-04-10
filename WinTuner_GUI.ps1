@@ -1,5 +1,5 @@
 # WinTuner GUI by Manuel Höfler
-# v0.9.0 – Phase 5: code quality pass (English comments, PS-approved verb names, central config block)
+# v0.10.0 – Phase 6: Login/Logout improvements & recent users ComboBox
 # --- PowerShell version gate (runs on PS<7 without parsing the main body) ---
 try { $psMajor = $PSVersionTable.PSVersion.Major } catch { $psMajor = 0 }
 if ($psMajor -lt 7) {
@@ -44,7 +44,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.9.0"
+$script:appVersion  = "0.10.0"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 
@@ -864,6 +864,30 @@ function Test-ValidM365UserName {
   return ($UserName -match $upnRegex)
 }
 
+# Adds a UPN to the recent users list (only if RememberMe is active)
+function Add-RecentUser {
+  param([string]$Upn)
+  if (-not $script:settings.RememberMe) { return }
+  if ([string]::IsNullOrWhiteSpace($Upn)) { return }
+  $max = if ($script:settings.MaxRecentUsers -gt 0) { $script:settings.MaxRecentUsers } else { 3 }
+  $list = [System.Collections.Generic.List[string]]::new()
+  foreach ($u in @($script:settings.RecentUsers)) {
+    if ($u -and $u -ne $Upn) { $list.Add($u) }
+  }
+  $list.Insert(0, $Upn)
+  while ($list.Count -gt $max) { $list.RemoveAt($list.Count - 1) }
+  $script:settings.RecentUsers = $list.ToArray()
+  $script:settings.LastUser = $Upn
+  Save-Settings
+}
+
+# Clears the recent users list and resets LastUser
+function Clear-RecentUsers {
+  $script:settings.RecentUsers = @()
+  $script:settings.LastUser = ""
+  Save-Settings
+}
+
 # Helper: check if WinTuner is connected (simple smoke test)
 function Test-WtConnected {
   try {
@@ -886,6 +910,7 @@ function Set-ConnectedUIState {
     if ($usernameError) { $usernameError.Visible = $false }
     $tabControl.Visible = $true
     $logoutButton.Visible = $true
+    if ($clearHistoryButton) { $clearHistoryButton.Visible = $false }
   } else {
     $loginButton.Visible = $true
     $usernameBox.Visible = $true
@@ -893,6 +918,7 @@ function Set-ConnectedUIState {
     if ($usernameError) { $usernameError.Visible = $true }
     $tabControl.Visible = $true
     $logoutButton.Visible = $false
+    if ($clearHistoryButton) { $clearHistoryButton.Visible = $true }
   }
   if ($rememberCheckBox) { $rememberCheckBox.Visible = -not $Connected }
   if ($updateSearchButton) { $updateSearchButton.Enabled = $Connected }
@@ -922,26 +948,33 @@ $script:versionCachePath = Join-Path ([Environment]::GetFolderPath('LocalApplica
 # Create form
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "WinTuner GUI"
-$form.Size = New-Object System.Drawing.Size(900, 850)
+$form.Size = New-Object System.Drawing.Size(960, 850)
 $form.Padding = '5,5,5,5'
 
-# Theme toggle button (top right)
+# Header panel – contains all login/top controls so they stay in one row
+$headerPanel = New-Object System.Windows.Forms.Panel
+$headerPanel.Dock = [System.Windows.Forms.DockStyle]::Top
+$headerPanel.Height = 78
+$form.Controls.Add($headerPanel)
+
+# Theme toggle button (top right, anchored so it never clips)
 $themeToggleButton = New-Object System.Windows.Forms.Button
 $themeToggleButton.Text = "Light Mode"  # indicates action from dark -> light
-$themeToggleButton.Location = New-Object System.Drawing.Point(800, 5)
-$themeToggleButton.Size = New-Object System.Drawing.Size(80, 25)
+$themeToggleButton.Location = New-Object System.Drawing.Point(835, 8)
+$themeToggleButton.Size = New-Object System.Drawing.Size(100, 27)
 $themeToggleButton.Add_Click({ Switch-GuiTheme })
 $themeToggleButton.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
-$form.Controls.Add($themeToggleButton)
+$headerPanel.Controls.Add($themeToggleButton)
 
 # Username label and textbox
 $usernameLabel = New-Object System.Windows.Forms.Label
 $usernameLabel.Text = "Username:"
-$usernameLabel.Location = New-Object System.Drawing.Point(10,20)
+$usernameLabel.Location = New-Object System.Drawing.Point(10, 10)
 $usernameLabel.AutoSize = $true
-$form.Controls.Add($usernameLabel)
+$headerPanel.Controls.Add($usernameLabel)
 
-$usernameBox = New-Object System.Windows.Forms.TextBox
+$usernameBox = New-Object System.Windows.Forms.ComboBox
+$usernameBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDown
 # ENTER in Username -> "Login"
 if ($usernameBox -ne $null) {
   $usernameBox.Add_KeyDown({
@@ -961,18 +994,35 @@ if ($usernameBox -ne $null) {
     }
   })
 }
-$usernameBox.Location = New-Object System.Drawing.Point(100,20)
-$usernameBox.Width = 450
-$usernameBox.BorderStyle = 'FixedSingle'
-$form.Controls.Add($usernameBox)
+$usernameBox.Location = New-Object System.Drawing.Point(88, 10)
+$usernameBox.Width = 365
+$usernameBox.Height = 27
+$headerPanel.Controls.Add($usernameBox)
+
+# "Clear history" button next to username ComboBox
+$clearHistoryButton = New-Object System.Windows.Forms.Button
+$clearHistoryButton.Text = ([System.Char]::ConvertFromUtf32(0x1F5D1)) + " Clear History"
+$clearHistoryButton.Width = 115
+$clearHistoryButton.Height = 27
+$clearHistoryButton.Location = New-Object System.Drawing.Point(461, 10)
+$clearHistoryButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$headerPanel.Controls.Add($clearHistoryButton)
+
+$clearHistoryButton.Add_Click({
+  Clear-RecentUsers
+  $usernameBox.Items.Clear()
+  $usernameBox.Text = ""
+  Update-Status "Username history cleared."
+  Write-Log "Username history cleared by user."
+})
 
 # Validation hint label for username
 $usernameError = New-Object System.Windows.Forms.Label
 $usernameError.Text = ""
-$usernameError.Location = New-Object System.Drawing.Point(100,45)
+$usernameError.Location = New-Object System.Drawing.Point(88, 46)
 $usernameError.AutoSize = $true
 $usernameError.ForeColor = [System.Drawing.Color]::FromArgb(220,80,80)
-$form.Controls.Add($usernameError)
+$headerPanel.Controls.Add($usernameError)
 
 # Live validation for username field
 $usernameBox.add_TextChanged({
@@ -1015,22 +1065,22 @@ $form.Controls.Add($progressBar)
 # Logout button
 $logoutButton = New-Object System.Windows.Forms.Button
 $logoutButton.Text = "Tenant Logout"
-$logoutButton.Location = New-Object System.Drawing.Point(570,20)
-$logoutButton.Width = 180
+$logoutButton.Location = New-Object System.Drawing.Point(584, 10)
+$logoutButton.Size = New-Object System.Drawing.Size(150, 27)
 $logoutButton.Visible = $false
-$form.Controls.Add($logoutButton)
+$headerPanel.Controls.Add($logoutButton)
 
 $loginInfoLabel = New-Object System.Windows.Forms.Label
 $loginInfoLabel.Text = ""
-$loginInfoLabel.Location = New-Object System.Drawing.Point(100,20)
+$loginInfoLabel.Location = New-Object System.Drawing.Point(88, 10)
 $loginInfoLabel.AutoSize = $true
 $loginInfoLabel.Visible = $false
-$form.Controls.Add($loginInfoLabel)
+$headerPanel.Controls.Add($loginInfoLabel)
 
 # TabControl
 $tabControl = New-Object System.Windows.Forms.TabControl
-$tabControl.Location = New-Object System.Drawing.Point(10, 90)
-$tabControl.Size = New-Object System.Drawing.Size(760, 560)
+$tabControl.Location = New-Object System.Drawing.Point(10, 88)
+$tabControl.Size = New-Object System.Drawing.Size(760, 500)
 $tabControl.Visible = $true
 $tabControl.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right -bor [System.Windows.Forms.AnchorStyles]::Bottom
 $form.Controls.Add($tabControl)
@@ -1359,7 +1409,7 @@ $tabSettings.Controls.Add($rememberMeCheckbox)
 
 # Save Settings Button
 $saveSettingsButton = New-Object System.Windows.Forms.Button
-$saveSettingsButton.Text = "💾 Save Settings"
+$saveSettingsButton.Text = "Save Settings"
 $saveSettingsButton.Location = New-Object System.Drawing.Point(20,180)
 $saveSettingsButton.Width = 150
 $saveSettingsButton.Height = 35
@@ -1367,7 +1417,7 @@ $tabSettings.Controls.Add($saveSettingsButton)
 
 # Clear Version Cache Button
 $clearCacheButton = New-Object System.Windows.Forms.Button
-$clearCacheButton.Text = "🗑️ Clear Version Cache"
+$clearCacheButton.Text = "Clear Version Cache"
 $clearCacheButton.Location = New-Object System.Drawing.Point(20,225)
 $clearCacheButton.Width = 180
 $clearCacheButton.Height = 35
@@ -1442,7 +1492,7 @@ $currentVersionLabel.AutoSize = $true
 $tabSettings.Controls.Add($currentVersionLabel)
 
 $checkUpdateButton = New-Object System.Windows.Forms.Button
-$checkUpdateButton.Text = "🔄 Check for Updates"
+$checkUpdateButton.Text = "Check for Updates"
 $checkUpdateButton.Location = New-Object System.Drawing.Point(20, 330)
 $checkUpdateButton.Width = 180
 $checkUpdateButton.Height = 35
@@ -1610,24 +1660,26 @@ Update-Status "Module imported."
 # Login button
 $loginButton = New-Object System.Windows.Forms.Button
 $loginButton.Text = "Login to Tenant"
-$loginButton.Location = New-Object System.Drawing.Point(570,20)
-$loginButton.Width = 180
-$form.Controls.Add($loginButton)
+$loginButton.Location = New-Object System.Drawing.Point(584, 10)
+$loginButton.Size = New-Object System.Drawing.Size(150, 27)
+$headerPanel.Controls.Add($loginButton)
 
 # initialize login button enabled state based on username validation
 $loginButton.Enabled = (Test-ValidM365UserName -UserName $usernameBox.Text)
 
 $rememberCheckBox = New-Object System.Windows.Forms.CheckBox
 $rememberCheckBox.Text = "Remember me"
-$rememberCheckBox.Location = New-Object System.Drawing.Point(570,50)
+$rememberCheckBox.Location = New-Object System.Drawing.Point(461, 46)
 $rememberCheckBox.AutoSize = $true
 $rememberCheckBox.Checked = $false
-$form.Controls.Add($rememberCheckBox)
+$headerPanel.Controls.Add($rememberCheckBox)
 
 $script:settingsPath = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'WinTunerGUI\settings.json'
 $script:settings = @{ 
   RememberMe = $false
   LastUser = ""
+  RecentUsers = @()
+  MaxRecentUsers = 3
   WingetOverrides = @{}
   DefaultPackagePath = "C:\Temp"
   AutoCheckUpdates = $false
@@ -1640,6 +1692,17 @@ function Load-Settings {
       if ($o) {
         $script:settings.RememberMe = [bool]$o.RememberMe
         $script:settings.LastUser = [string]$o.LastUser
+        
+        if ($o.PSObject.Properties['RecentUsers']) {
+            $script:settings.RecentUsers = @([string[]]$o.RecentUsers)
+        } else {
+            $script:settings.RecentUsers = @()
+        }
+        if ($o.PSObject.Properties['MaxRecentUsers'] -and $o.MaxRecentUsers -gt 0) {
+            $script:settings.MaxRecentUsers = [int]$o.MaxRecentUsers
+        } else {
+            $script:settings.MaxRecentUsers = 3
+        }
         
         # New settings with defaults
         if ($o.PSObject.Properties['DefaultPackagePath']) {
@@ -1682,6 +1745,14 @@ Load-Settings
 $rememberCheckBox.Checked = [bool]$script:settings.RememberMe
 if ($script:settings.RememberMe -and $script:settings.LastUser) { $usernameBox.Text = $script:settings.LastUser } else { $usernameBox.Text = "" }
 
+# Populate username ComboBox with recent users (only if RememberMe is on)
+if ($script:settings.RememberMe -and $script:settings.RecentUsers) {
+  $usernameBox.Items.Clear()
+  foreach ($u in @($script:settings.RecentUsers)) {
+    if ($u) { [void]$usernameBox.Items.Add($u) }
+  }
+}
+
 # Initialize pathBox with saved default package path
 if ($pathBox) {
   if ($script:settings.DefaultPackagePath) {
@@ -1694,7 +1765,11 @@ if ($pathBox) {
 $rememberCheckBox.Add_CheckedChanged({
   try {
     $script:settings.RememberMe = [bool]$rememberCheckBox.Checked
-    if ($script:settings.RememberMe) { $script:settings.LastUser = $usernameBox.Text } else { $script:settings.LastUser = "" }
+    if ($script:settings.RememberMe) { $script:settings.LastUser = $usernameBox.Text } else {
+      $script:settings.LastUser = ""
+      $script:settings.RecentUsers = @()
+      $usernameBox.Items.Clear()
+    }
     Save-Settings
   } catch {
     Write-Log "Error in RememberMe checkbox handler: $($_.Exception.Message)"
@@ -1711,6 +1786,9 @@ $loginButton.Add_Click({
     )
     return
   }
+  $loginButton.Enabled = $false
+  $loginButton.Text = "Connecting..."
+  [System.Windows.Forms.Application]::DoEvents()
   try {
     Update-Status "Connecting to tenant..."
     $script:isConnected = $false
@@ -1722,6 +1800,12 @@ $loginButton.Add_Click({
     if ($loginInfoLabel) { $loginInfoLabel.Text = "Logged in as: $($script:currentUserUpn)" }
     if ($rememberCheckBox) { $script:settings.RememberMe = [bool]$rememberCheckBox.Checked }
     if ($script:settings.RememberMe) { $script:settings.LastUser = $usernameBox.Text } else { $script:settings.LastUser = "" }
+    Add-RecentUser -Upn $usernameBox.Text
+    # Update dropdown list
+    $usernameBox.Items.Clear()
+    foreach ($u in @($script:settings.RecentUsers)) {
+      if ($u) { [void]$usernameBox.Items.Add($u) }
+    }
     Save-Settings
     Set-ConnectedUIState -Connected $true
     
@@ -1739,8 +1823,34 @@ $loginButton.Add_Click({
       }
     }
   } catch {
-    Update-Status ("Login canceled/failed: {0}" -f $_.Exception.Message)
+    $msg = $_.Exception.Message
+    if ($msg -imatch 'network|connection|timeout|unreachable') {
+      [void][System.Windows.Forms.MessageBox]::Show(
+        "Network error: Please check your internet connection.`n`nDetails: $msg",
+        "Network Error",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+      )
+    } elseif ($msg -imatch 'unauthorized|authentication|credential|access') {
+      [void][System.Windows.Forms.MessageBox]::Show(
+        "Authentication failed: Please check your credentials.`n`nDetails: $msg",
+        "Authentication Error",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+      )
+    } else {
+      [void][System.Windows.Forms.MessageBox]::Show(
+        "Login failed: $msg",
+        "Login Error",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+      )
+    }
+    Update-Status ("Login canceled/failed: {0}" -f $msg)
     Set-ConnectedUIState -Connected $false
+  } finally {
+    $loginButton.Text = "Login to Tenant"
+    $loginButton.Enabled = (Test-ValidM365UserName -UserName $usernameBox.Text)
   }
 })
 
@@ -2425,9 +2535,11 @@ $deleteSelectedAppButton.Add_Click({
 
 $logoutButton.Add_Click({
   Disconnect-WtWinTuner
+  try { Disconnect-MgGraph -ErrorAction SilentlyContinue } catch {}
   $script:isConnected = $false
   $script:currentUserUpn = ""
   if ($loginInfoLabel) { $loginInfoLabel.Text = "" }
+  if (-not $script:settings.RememberMe) { $usernameBox.Text = "" }
   Update-Status "Logout success."
   Set-ConnectedUIState -Connected $false
 })
@@ -2968,6 +3080,7 @@ if ($updateSelectedButton)  { $toolTip.SetToolTip($updateSelectedButton,  "Updat
 if ($scanDiscoveredButton)  { $toolTip.SetToolTip($scanDiscoveredButton,  "Scan Intune Discovered Apps and match them to WinGet packages") }
 if ($logoutButton)          { $toolTip.SetToolTip($logoutButton,          "Disconnect from the current Microsoft 365 tenant") }
 if ($themeToggleButton)     { $toolTip.SetToolTip($themeToggleButton,     "Switch between Dark Mode and Light Mode") }
+if ($clearHistoryButton)    { $toolTip.SetToolTip($clearHistoryButton,    "Clears the list of saved M365 login names") }
 
 # Run the form mit finalem Sicherheitsnetz
 try {
