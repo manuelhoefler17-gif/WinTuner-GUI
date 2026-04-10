@@ -821,8 +821,9 @@ function Invoke-AsyncOperation {
     param($sender, $e)
     
     # Restore progress bar to normal
-    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $progressBar.Value = 100
+	$progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+	$progressBar.Maximum = 100   # ← Zeile hinzufügen
+	$progressBar.Value = 100
     
     # Re-enable controls
     foreach ($ctrl in $DisableControls) {
