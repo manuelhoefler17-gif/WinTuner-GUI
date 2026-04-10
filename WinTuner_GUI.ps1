@@ -948,24 +948,30 @@ $script:versionCachePath = Join-Path ([Environment]::GetFolderPath('LocalApplica
 # Create form
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "WinTuner GUI"
-$form.Size = New-Object System.Drawing.Size(900, 850)
+$form.Size = New-Object System.Drawing.Size(960, 850)
 $form.Padding = '5,5,5,5'
 
-# Theme toggle button (top right)
+# Header panel – contains all login/top controls so they stay in one row
+$headerPanel = New-Object System.Windows.Forms.Panel
+$headerPanel.Dock = [System.Windows.Forms.DockStyle]::Top
+$headerPanel.Height = 78
+$form.Controls.Add($headerPanel)
+
+# Theme toggle button (top right, anchored so it never clips)
 $themeToggleButton = New-Object System.Windows.Forms.Button
 $themeToggleButton.Text = "Light Mode"  # indicates action from dark -> light
-$themeToggleButton.Location = New-Object System.Drawing.Point(850, 5)
-$themeToggleButton.Size = New-Object System.Drawing.Size(95, 25)
+$themeToggleButton.Location = New-Object System.Drawing.Point(835, 8)
+$themeToggleButton.Size = New-Object System.Drawing.Size(100, 27)
 $themeToggleButton.Add_Click({ Switch-GuiTheme })
 $themeToggleButton.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
-$form.Controls.Add($themeToggleButton)
+$headerPanel.Controls.Add($themeToggleButton)
 
 # Username label and textbox
 $usernameLabel = New-Object System.Windows.Forms.Label
 $usernameLabel.Text = "Username:"
-$usernameLabel.Location = New-Object System.Drawing.Point(10,20)
+$usernameLabel.Location = New-Object System.Drawing.Point(10, 10)
 $usernameLabel.AutoSize = $true
-$form.Controls.Add($usernameLabel)
+$headerPanel.Controls.Add($usernameLabel)
 
 $usernameBox = New-Object System.Windows.Forms.ComboBox
 $usernameBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDown
@@ -988,18 +994,19 @@ if ($usernameBox -ne $null) {
     }
   })
 }
-$usernameBox.Location = New-Object System.Drawing.Point(100,20)
-$usernameBox.Width = 450
-$form.Controls.Add($usernameBox)
+$usernameBox.Location = New-Object System.Drawing.Point(88, 10)
+$usernameBox.Width = 365
+$usernameBox.Height = 27
+$headerPanel.Controls.Add($usernameBox)
 
 # "Clear history" button next to username ComboBox
 $clearHistoryButton = New-Object System.Windows.Forms.Button
 $clearHistoryButton.Text = ([System.Char]::ConvertFromUtf32(0x1F5D1)) + " Clear History"
-$clearHistoryButton.Width = 110
-$clearHistoryButton.Height = 23
-$clearHistoryButton.Location = New-Object System.Drawing.Point(558, 18)
+$clearHistoryButton.Width = 115
+$clearHistoryButton.Height = 27
+$clearHistoryButton.Location = New-Object System.Drawing.Point(461, 10)
 $clearHistoryButton.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$form.Controls.Add($clearHistoryButton)
+$headerPanel.Controls.Add($clearHistoryButton)
 
 $clearHistoryButton.Add_Click({
   Clear-RecentUsers
@@ -1012,10 +1019,10 @@ $clearHistoryButton.Add_Click({
 # Validation hint label for username
 $usernameError = New-Object System.Windows.Forms.Label
 $usernameError.Text = ""
-$usernameError.Location = New-Object System.Drawing.Point(100,45)
+$usernameError.Location = New-Object System.Drawing.Point(88, 46)
 $usernameError.AutoSize = $true
 $usernameError.ForeColor = [System.Drawing.Color]::FromArgb(220,80,80)
-$form.Controls.Add($usernameError)
+$headerPanel.Controls.Add($usernameError)
 
 # Live validation for username field
 $usernameBox.add_TextChanged({
@@ -1058,21 +1065,21 @@ $form.Controls.Add($progressBar)
 # Logout button
 $logoutButton = New-Object System.Windows.Forms.Button
 $logoutButton.Text = "Tenant Logout"
-$logoutButton.Location = New-Object System.Drawing.Point(675, 20)
-$logoutButton.Width = 180
+$logoutButton.Location = New-Object System.Drawing.Point(584, 10)
+$logoutButton.Size = New-Object System.Drawing.Size(150, 27)
 $logoutButton.Visible = $false
-$form.Controls.Add($logoutButton)
+$headerPanel.Controls.Add($logoutButton)
 
 $loginInfoLabel = New-Object System.Windows.Forms.Label
 $loginInfoLabel.Text = ""
-$loginInfoLabel.Location = New-Object System.Drawing.Point(100,20)
+$loginInfoLabel.Location = New-Object System.Drawing.Point(88, 10)
 $loginInfoLabel.AutoSize = $true
 $loginInfoLabel.Visible = $false
-$form.Controls.Add($loginInfoLabel)
+$headerPanel.Controls.Add($loginInfoLabel)
 
 # TabControl
 $tabControl = New-Object System.Windows.Forms.TabControl
-$tabControl.Location = New-Object System.Drawing.Point(10, 90)
+$tabControl.Location = New-Object System.Drawing.Point(10, 88)
 $tabControl.Size = New-Object System.Drawing.Size(760, 500)
 $tabControl.Visible = $true
 $tabControl.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right -bor [System.Windows.Forms.AnchorStyles]::Bottom
@@ -1653,19 +1660,19 @@ Update-Status "Module imported."
 # Login button
 $loginButton = New-Object System.Windows.Forms.Button
 $loginButton.Text = "Login to Tenant"
-$loginButton.Location = New-Object System.Drawing.Point(675, 20)
-$loginButton.Width = 180
-$form.Controls.Add($loginButton)
+$loginButton.Location = New-Object System.Drawing.Point(584, 10)
+$loginButton.Size = New-Object System.Drawing.Size(150, 27)
+$headerPanel.Controls.Add($loginButton)
 
 # initialize login button enabled state based on username validation
 $loginButton.Enabled = (Test-ValidM365UserName -UserName $usernameBox.Text)
 
 $rememberCheckBox = New-Object System.Windows.Forms.CheckBox
 $rememberCheckBox.Text = "Remember me"
-$rememberCheckBox.Location = New-Object System.Drawing.Point(570,50)
+$rememberCheckBox.Location = New-Object System.Drawing.Point(461, 46)
 $rememberCheckBox.AutoSize = $true
 $rememberCheckBox.Checked = $false
-$form.Controls.Add($rememberCheckBox)
+$headerPanel.Controls.Add($rememberCheckBox)
 
 $script:settingsPath = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'WinTunerGUI\settings.json'
 $script:settings = @{ 
