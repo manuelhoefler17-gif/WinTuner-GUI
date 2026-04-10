@@ -1,4 +1,5 @@
 # WinTuner GUI by Manuel Höfler
+# v0.10.7 – Fix: Phase 5 – error handling, security, module import guard
 # v0.10.6 – Fix: Phase 4 – performance improvements & code quality
 # v0.10.5 – Fix: Phase 3 – UX improvements, ProgressBar crash hotfix, batch update summary
 # v0.10.4 – Fix: Phase 2 – async update check, disconnect timeout, dead code removal
@@ -50,7 +51,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.6"
+$script:appVersion  = "0.10.7"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 
@@ -1781,15 +1782,19 @@ try {
 try { 
   Import-Module WinTuner -ErrorAction Stop 
 } catch {
-  $errMsg = "CRITICAL: Failed to import WinTuner module: $($_.Exception.Message)"
-  Write-Log $errMsg
-  Update-Status $errMsg
+  $errMsg = $_.Exception.Message
+  Write-Log "Failed to import WinTuner module: $errMsg"
   [System.Windows.Forms.MessageBox]::Show(
-    "Failed to import WinTuner module. Please install it manually:\n\nInstall-Module WinTuner -Scope CurrentUser\n\nError: $($_.Exception.Message)",
-    "Module Error",
+    "Failed to import WinTuner module.`n`nError: $errMsg`n`nPlease install it:`nInstall-Module WinTuner -Scope CurrentUser",
+    "Module Import Failed",
     [System.Windows.Forms.MessageBoxButtons]::OK,
     [System.Windows.Forms.MessageBoxIcon]::Error
   )
+  # Disable all functional tabs except Settings
+  foreach ($tab in $tabControl.TabPages) {
+    if ($tab.Text -ne "Settings") { $tab.Enabled = $false }
+  }
+  if ($loginButton) { $loginButton.Enabled = $false }
 }
 Update-Status "Module imported."
 
@@ -2050,7 +2055,25 @@ $createButton.Add_Click({
   $package  = $script:packageMap[$appName]
   if (-not $package -or -not $package.PackageID) { Update-Status "Selected item is invalid."; return }
   $packageID = $package.PackageID
-  $folder    = $pathBox.Text
+  $folder    = [System.IO.Path]::GetFullPath($pathBox.Text.Trim())
+  $forbiddenPaths = @(
+    [Environment]::GetFolderPath('Windows'),
+    [Environment]::GetFolderPath('System'),
+    "$env:SystemRoot\System32",
+    "$env:SystemRoot\SysWOW64",
+    "$env:ProgramFiles",
+    "${env:ProgramFiles(x86)}"
+  )
+  $isForbidden = $forbiddenPaths | Where-Object { $folder -eq $_ -or $folder.StartsWith($_ + '\') }
+  if ($isForbidden) {
+    [System.Windows.Forms.MessageBox]::Show(
+      "The selected folder '$folder' is a protected system directory.`nPlease choose a different folder.",
+      "Invalid Folder",
+      [System.Windows.Forms.MessageBoxButtons]::OK,
+      [System.Windows.Forms.MessageBoxIcon]::Warning
+    )
+    return
+  }
   if (-not (Test-Path $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
   $filePath  = Join-Path $folder "$packageID.wtpackage"
   
@@ -2134,7 +2157,25 @@ $uploadButton.Add_Click({
     }
     if ([string]::IsNullOrWhiteSpace($version))   { Update-Status "Version could not be determined."; return }
     if ([string]::IsNullOrWhiteSpace($packageID)) { Update-Status "Cannot upload: failed to resolve PackageId."; return }
-    $folder = $pathBox.Text
+    $folder = [System.IO.Path]::GetFullPath($pathBox.Text.Trim())
+    $forbiddenPaths = @(
+      [Environment]::GetFolderPath('Windows'),
+      [Environment]::GetFolderPath('System'),
+      "$env:SystemRoot\System32",
+      "$env:SystemRoot\SysWOW64",
+      "$env:ProgramFiles",
+      "${env:ProgramFiles(x86)}"
+    )
+    $isForbidden = $forbiddenPaths | Where-Object { $folder -eq $_ -or $folder.StartsWith($_ + '\') }
+    if ($isForbidden) {
+      [System.Windows.Forms.MessageBox]::Show(
+        "The selected folder '$folder' is a protected system directory.`nPlease choose a different folder.",
+        "Invalid Folder",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+      )
+      return
+    }
     if (-not (Test-Path $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
     
     try {
@@ -2432,7 +2473,25 @@ $updateSelectedButton.Add_Click({
 
     Write-Log "Successfully matched $($checkedApps.Count) apps for update"
 
-    $rootPackageFolder = $pathBox.Text
+    $rootPackageFolder = [System.IO.Path]::GetFullPath($pathBox.Text.Trim())
+    $forbiddenPaths = @(
+      [Environment]::GetFolderPath('Windows'),
+      [Environment]::GetFolderPath('System'),
+      "$env:SystemRoot\System32",
+      "$env:SystemRoot\SysWOW64",
+      "$env:ProgramFiles",
+      "${env:ProgramFiles(x86)}"
+    )
+    $isForbidden = $forbiddenPaths | Where-Object { $rootPackageFolder -eq $_ -or $rootPackageFolder.StartsWith($_ + '\') }
+    if ($isForbidden) {
+      [System.Windows.Forms.MessageBox]::Show(
+        "The selected folder '$rootPackageFolder' is a protected system directory.`nPlease choose a different folder.",
+        "Invalid Folder",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+      )
+      return
+    }
     if (-not (Test-Path $rootPackageFolder)) {
         New-Item -ItemType Directory -Path $rootPackageFolder -Force | Out-Null
     }
@@ -2452,7 +2511,25 @@ $updateSelectedButton.Add_Click({
 # UPDATED: Update All flow
 # -------------------------
 $updateAllButton.Add_Click({
-    $rootPackageFolder = $pathBox.Text
+    $rootPackageFolder = [System.IO.Path]::GetFullPath($pathBox.Text.Trim())
+    $forbiddenPaths = @(
+      [Environment]::GetFolderPath('Windows'),
+      [Environment]::GetFolderPath('System'),
+      "$env:SystemRoot\System32",
+      "$env:SystemRoot\SysWOW64",
+      "$env:ProgramFiles",
+      "${env:ProgramFiles(x86)}"
+    )
+    $isForbidden = $forbiddenPaths | Where-Object { $rootPackageFolder -eq $_ -or $rootPackageFolder.StartsWith($_ + '\') }
+    if ($isForbidden) {
+      [System.Windows.Forms.MessageBox]::Show(
+        "The selected folder '$rootPackageFolder' is a protected system directory.`nPlease choose a different folder.",
+        "Invalid Folder",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+      )
+      return
+    }
     if (-not (Test-Path $rootPackageFolder)) {
         New-Item -ItemType Directory -Path $rootPackageFolder -Force | Out-Null
     }
@@ -2501,9 +2578,15 @@ $updateAllButton.Add_Click({
 
 $removeOldAppsButton.Add_Click({
   try {
-    $oldApps = Get-WtWin32Apps -Superseded $true
-    if ($oldApps.Count -eq 0) { Update-Status "No Superseded Apps Found"; return }
-    $appNames = ($oldApps | Select-Object -ExpandProperty Name) -join "`r`n"
+    $supersededApps = @(Get-WtWin32Apps -Superseded:$true -ErrorAction Stop)
+  } catch {
+    Update-Status "Error fetching superseded apps: $($_.Exception.Message)"
+    Write-Log "removeOldApps error: $($_.Exception.Message)"
+    return
+  }
+  try {
+    if ($supersededApps.Count -eq 0) { Update-Status "No Superseded Apps Found"; return }
+    $appNames = ($supersededApps | Select-Object -ExpandProperty Name) -join "`r`n"
     $result = [System.Windows.Forms.MessageBox]::Show(
       "The following outdated apps will be removed:`r`n$appNames",
       "Confirmation",
@@ -2513,7 +2596,7 @@ $removeOldAppsButton.Add_Click({
     if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
       $progressBar.Value = 0
       $progressBar.Visible = $true
-      foreach ($app in @($oldApps)) {
+      foreach ($app in @($supersededApps)) {
         try {
           Remove-WtWin32App -GraphId $app.GraphId -ErrorAction Stop
           Update-Status ("Removed: {0}" -f $app.Name)
@@ -2722,7 +2805,7 @@ $scanDiscoveredButton.Add_Click({
     if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
         Update-Status "Microsoft.Graph module not found..."
         [System.Windows.Forms.MessageBox]::Show(
-            "The Microsoft.Graph module is required for this operation but was not found.`n`nPlease install it by running:`nInstall-Module Microsoft.Graph -Scope CurrentUser",
+            "Microsoft.Graph module not found.`n`nPlease install it first:`nInstall-Module Microsoft.Graph -Scope CurrentUser",
             "Module Not Found",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning
@@ -2875,7 +2958,7 @@ $scanDiscoveredButton.Add_Click({
                 }
             }
         } catch {
-            Write-Log "Failed to process app '$($app.displayName)': $($_.Exception.Message)"
+            Write-Log "Failed to process '$($app.displayName)': $($_.Exception.Message)"
         }
     }
     
@@ -3036,7 +3119,7 @@ $form.Add_FormClosing({
         try {
             $form.Enabled = $false
             if ($statusLabel) { 
-                $statusLabel.Text = "Closing... signing out from tenant" 
+                Update-Status "Closing... signing out from tenant"
                 # Zwingt die UI, sich noch einmal schnell zu aktualisieren, bevor sie blockiert wird
                 [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
             }
