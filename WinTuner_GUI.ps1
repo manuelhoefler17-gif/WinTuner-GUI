@@ -1,4 +1,5 @@
 # WinTuner GUI by Manuel Höfler
+# v0.10.4 – Fix: Phase 2 – async update check, disconnect timeout, dead code removal
 # v0.10.3 – Fix: Phase 1 critical bugfixes – error handling & logging consistency
 # v0.10.2 – Fix: Remove updated apps immediately from update list
 # v0.10.1 – Fix: Synchronize RememberMe checkboxes (login page ↔ Settings tab)
@@ -47,7 +48,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.3"
+$script:appVersion  = "0.10.4"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 
@@ -932,7 +933,6 @@ function Set-ConnectedUIState {
   if ($deleteSelectedAppButton) { $deleteSelectedAppButton.Enabled = $Connected }
   if ($removeOldAppsButton) { $removeOldAppsButton.Enabled = $Connected }
   
-  if ($mapWingetIdButton) { $mapWingetIdButton.Enabled = $Connected }
   if ($loginInfoLabel) {
     $loginInfoLabel.Visible = $Connected
     if ($Connected -and $script:currentUserUpn) { $loginInfoLabel.Text = "Logged in as: $($script:currentUserUpn)" }
@@ -1507,18 +1507,18 @@ $checkUpdateButton.Height = 35
 $tabSettings.Controls.Add($checkUpdateButton)
 
 $checkUpdateButton.Add_Click({
-  try {
-    $checkUpdateButton.Enabled = $false
-    Update-Status "Checking for updates..."
-    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-    $progressBar.Visible = $true
-    [System.Windows.Forms.Application]::DoEvents()
-
-    $updateInfo = Test-AppUpdateAvailable
-
-    if ($updateInfo.ErrorMessage) {
+  Invoke-AsyncOperation -StatusText "Checking for updates..." -DisableControls @($checkUpdateButton) -ScriptBlock {
+    Test-AppUpdateAvailable
+  } -OnComplete {
+    param($updateResult)
+    # Consolidate error checking: Invoke-AsyncOperation wraps thrown exceptions as .Error;
+    # Test-AppUpdateAvailable returns graceful errors as .ErrorMessage
+    $errorDetail = if ($updateResult -and $updateResult.Error) { $updateResult.Error } `
+                   elseif ($updateResult -and $updateResult.ErrorMessage) { $updateResult.ErrorMessage } `
+                   else { $null }
+    if ($errorDetail) {
       [System.Windows.Forms.MessageBox]::Show(
-        "Could not check for updates.`n`nError: $($updateInfo.ErrorMessage)`n`nCheck your internet connection and try again.",
+        "Could not check for updates.`n`nError: $errorDetail`n`nCheck your internet connection and try again.",
         "Update Check Failed",
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Warning
@@ -1527,12 +1527,12 @@ $checkUpdateButton.Add_Click({
       return
     }
 
-    if ($updateInfo.UpdateAvailable) {
+    if ($updateResult -and $updateResult.UpdateAvailable) {
       $msg  = "A new version of WinTuner GUI is available!`n`n"
       $msg += "Current version: v$($script:appVersion)`n"
-      $msg += "Latest version:  v$($updateInfo.LatestVersion)`n`n"
+      $msg += "Latest version:  v$($updateResult.LatestVersion)`n`n"
 
-      if ($updateInfo.DownloadUrl) {
+      if ($updateResult.DownloadUrl) {
         $msg += "Do you want to download and install the update now?`n`n"
         $msg += "(A backup of your current version will be created)"
 
@@ -1547,7 +1547,7 @@ $checkUpdateButton.Add_Click({
           Update-Status "Downloading update..."
           [System.Windows.Forms.Application]::DoEvents()
 
-          $success = Invoke-AppSelfUpdate -DownloadUrl $updateInfo.DownloadUrl -HashUrl $updateInfo.HashUrl
+          $success = Invoke-AppSelfUpdate -DownloadUrl $updateResult.DownloadUrl -HashUrl $updateResult.HashUrl
 
           if ($success) {
             $restartMsg  = "Update installed successfully!`n`n"
@@ -1568,7 +1568,7 @@ $checkUpdateButton.Add_Click({
         }
       } else {
         $msg += "No direct download available for this release.`n"
-        $msg += "Please download manually from:`n$($updateInfo.ReleaseUrl)"
+        $msg += "Please download manually from:`n$($updateResult.ReleaseUrl)"
 
         [System.Windows.Forms.MessageBox]::Show(
           $msg,
@@ -1586,14 +1586,6 @@ $checkUpdateButton.Add_Click({
       )
       Update-Status "App is up to date (v$($script:appVersion))"
     }
-
-  } catch {
-    Write-Log "Update check UI error: $($_.Exception.Message)"
-    Update-Status "Update check error"
-  } finally {
-    $checkUpdateButton.Enabled = $true
-    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $progressBar.Visible = $false
   }
 })
 
@@ -1604,8 +1596,7 @@ $script:packageMap = @{}
 $script:selectedPackageVersions = @{}
 
 # Cache for winget searches to speed up repeated searches
-$script:wingetVersionCache = @{}  # PackageId -> @(versions)
-$script:lastUpdateSearch = $null  # Timestamp of last update search
+# (initialized at script scope; see earlier declaration)
 
 # Module check
 Update-Status "Checking WinTuner Module..."
@@ -3004,10 +2995,15 @@ $form.Add_FormClosing({
         Write-FileLog 'Shutdown: starting tenant disconnect.'
 
         try {
-            # Synchrones Disconnect - HIER lag das Problem mit dem BackgroundWorker!
-            Disconnect-WtWinTuner -ErrorAction SilentlyContinue
+            # Use Start-ThreadJob (PS 7+) so the WinTuner module is available in the same process
+            $job = Start-ThreadJob { Disconnect-WtWinTuner }
+            $null = Wait-Job $job -Timeout 5
+            if ($job.State -ne 'Completed') {
+                Write-FileLog 'Shutdown: disconnect timed out after 5s, closing anyway.'
+            }
+            Remove-Job $job -Force -ErrorAction SilentlyContinue
         } catch {
-            Write-FileLog "Warning: Disconnect-WtWinTuner failed: $($_.Exception.Message)"
+            Write-FileLog "FormClosing disconnect warning: $($_.Exception.Message)"
         }
         
         Write-FileLog 'Shutdown: disconnect finished. Closing form.'
@@ -3038,17 +3034,20 @@ try {
     # Ignoriere Fehler, falls die Event-Registrierung in älteren PS-Versionen zickt
 }
 
-# Auto-check for GUI updates on startup (silent, non-blocking)
-try {
-  $script:startupUpdateInfo = Test-AppUpdateAvailable
-  if ($script:startupUpdateInfo -and $script:startupUpdateInfo.UpdateAvailable -and -not $script:startupUpdateInfo.ErrorMessage) {
-      $form.Add_Shown({
+# Async update check on startup so it doesn't block the UI
+$form.Add_Shown({
+  Invoke-AsyncOperation -StatusText "Checking for updates..." -ScriptBlock {
+    Test-AppUpdateAvailable
+  } -OnComplete {
+    param($updateResult)
+    if ($updateResult -and -not $updateResult.Error -and -not $updateResult.ErrorMessage) {
+      if ($updateResult.UpdateAvailable) {
         try {
           $msg  = "A new version of WinTuner GUI is available!`n`n"
           $msg += "Current version: v$($script:appVersion)`n"
-          $msg += "Latest version:  v$($script:startupUpdateInfo.LatestVersion)`n`n"
+          $msg += "Latest version:  v$($updateResult.LatestVersion)`n`n"
 
-          if ($script:startupUpdateInfo.DownloadUrl) {
+          if ($updateResult.DownloadUrl) {
             $msg += "Do you want to download and install the update now?`n`n"
             $msg += "(A backup of your current version will be created)"
 
@@ -3063,7 +3062,7 @@ try {
               Update-Status "Downloading update..."
               [System.Windows.Forms.Application]::DoEvents()
 
-              $success = Invoke-AppSelfUpdate -DownloadUrl $script:startupUpdateInfo.DownloadUrl -HashUrl $script:startupUpdateInfo.HashUrl
+              $success = Invoke-AppSelfUpdate -DownloadUrl $updateResult.DownloadUrl -HashUrl $updateResult.HashUrl
 
               if ($success) {
                 $restartMsg  = "Update installed successfully!`n`n"
@@ -3080,11 +3079,11 @@ try {
                 $form.Close()
               }
             } else {
-              Update-Status "Update available: v$($script:startupUpdateInfo.LatestVersion) - Go to Settings to update later."
+              Update-Status "Update available: v$($updateResult.LatestVersion) - Go to Settings to update later."
             }
           } else {
             $msg += "No direct download available for this release.`n"
-            $msg += "Please download manually from:`n$($script:startupUpdateInfo.ReleaseUrl)"
+            $msg += "Please download manually from:`n$($updateResult.ReleaseUrl)"
 
             [System.Windows.Forms.MessageBox]::Show(
               $msg,
@@ -3096,11 +3095,12 @@ try {
         } catch {
           try { Write-Log "Startup update dialog error: $($_.Exception.Message)" } catch {}
         }
-      })
+      } else {
+        Update-Status "WinTuner GUI v$($script:appVersion) – up to date"
+      }
     }
-  } catch {
-    try { Write-Log "Startup update check failed: $($_.Exception.Message)" } catch {}
   }
+})
 
 # Tooltips for main buttons
 $toolTip = New-Object System.Windows.Forms.ToolTip
