@@ -1,4 +1,5 @@
 # WinTuner GUI by Manuel Höfler
+# v0.10.11 – Hotfix: $progressBar/$statusLabel/$outputBox als $script: Variablen für BackgroundWorker-Closures
 # v0.10.10 – Hotfix: Invoke-AsyncOperation Closure-Bug – $progressBar war $null in RunWorkerCompleted
 # v0.10.9 – Hotfix: ProgressBar Maximum-Reset an allen Stellen + graceful "not found" bei Remove
 # v0.10.8 – Hotfix: Update-Check status feedback & checkUpdateButton re-enable after async
@@ -54,7 +55,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.10"
+$script:appVersion  = "0.10.11"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 
@@ -653,9 +654,9 @@ function Invoke-AppUpdateBatch {
   $checkAllButton.Enabled = $false
   $uncheckAllButton.Enabled = $false
 
-  $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-  $progressBar.MarqueeAnimationSpeed = 30
-  $progressBar.Visible = $true
+  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+  $script:progressBar.MarqueeAnimationSpeed = 30
+  $script:progressBar.Visible = $true
 
   $successCount = 0
   $failedCount = 0
@@ -721,9 +722,9 @@ function Invoke-AppUpdateBatch {
 
     return @{ SuccessCount = $successCount; FailedList = $failedList }
   } finally {
-    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $progressBar.Visible = $false
-    $progressBar.Value = 0
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $script:progressBar.Visible = $false
+    $script:progressBar.Value = 0
     $updateSelectedButton.Enabled = $true
     $updateAllButton.Enabled = $true
     $updateSearchButton.Enabled = $true
@@ -850,16 +851,16 @@ function Write-Log {
     }
     
     # Update UI - always try to append (suppress any errors)
-    if ($outputBox) {
+    if ($script:outputBox) {
       try {
-        if ($outputBox.InvokeRequired) {
+        if ($script:outputBox.InvokeRequired) {
           # Cross-thread call - use Invoke
-          $outputBox.Invoke([Action]{
-            $outputBox.AppendText("$logLine`r`n")
+          $script:outputBox.Invoke([Action]{
+            $script:outputBox.AppendText("$logLine`r`n")
           })
         } else {
           # Same thread - direct call
-          $outputBox.AppendText("$logLine`r`n")
+          $script:outputBox.AppendText("$logLine`r`n")
         }
       } catch {
         # Silently ignore UI update errors (threading issues)
@@ -873,7 +874,7 @@ function Write-Log {
 # Status update function
 function Update-Status {
   param([string]$status)
-  $statusLabel.Text = $status
+  $script:statusLabel.Text = $status
   Write-Log $status
 }
 
@@ -901,9 +902,9 @@ function Invoke-AsyncOperation {
   
   # Update UI - show progress in marquee style (indefinite)
   Update-Status $StatusText
-  $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-  $progressBar.MarqueeAnimationSpeed = 30
-  $progressBar.Visible = $true
+  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+  $script:progressBar.MarqueeAnimationSpeed = 30
+  $script:progressBar.Visible = $true
   
   # Disable controls
   foreach ($ctrl in $DisableControls) {
@@ -942,17 +943,17 @@ function Invoke-AsyncOperation {
   $bw.Add_DoWork($doWork)
 
   # On completion (runs on UI thread)
-  # WICHTIG: $progressBar ist eine Script-Variable und wird zur Laufzeit aufgelöst.
+  # WICHTIG: $script:progressBar ist eine Script-Variable und wird zur Laufzeit aufgelöst.
   # .GetNewClosure() hier ist nötig um $_OnComplete und $_DisableControls einzufangen,
-  # aber $progressBar darf NICHT eingefroren werden (wäre $null zur Definitionszeit).
+  # aber $script:progressBar darf NICHT eingefroren werden (wäre $null zur Definitionszeit).
   $runCompleted = {
     param($sender, $e)
 
     # Restore progress bar to normal
-    # $progressBar wird zur Laufzeit aus dem Script-Scope aufgelöst (nicht eingefroren)
-    $progressBar.Style   = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $progressBar.Maximum = 100
-    $progressBar.Value   = 100
+    # $script:progressBar wird zur Laufzeit aus dem Script-Scope aufgelöst (nicht eingefroren)
+    $script:progressBar.Style   = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $script:progressBar.Maximum = 100
+    $script:progressBar.Value   = 100
 
     # Re-enable controls
     foreach ($ctrl in $_DisableControls) {
@@ -974,8 +975,8 @@ function Invoke-AsyncOperation {
     $hideTimer.Interval = 1000
     $hideTimer.Add_Tick({
       param($sender, $e)
-      $progressBar.Visible = $false
-      $progressBar.Value = 0
+      $script:progressBar.Visible = $false
+      $script:progressBar.Value = 0
       $sender.Stop()
       $sender.Dispose()
     })
@@ -1173,31 +1174,31 @@ $usernameBox.add_TextChanged({
 })
 
 # Status label
-$statusLabel = New-Object System.Windows.Forms.Label
-$statusLabel.Text = ""
-$statusLabel.Location = New-Object System.Drawing.Point(10, 745)
-$statusLabel.Width = 750
-$statusLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
-$form.Controls.Add($statusLabel)
+$script:statusLabel = New-Object System.Windows.Forms.Label
+$script:statusLabel.Text = ""
+$script:statusLabel.Location = New-Object System.Drawing.Point(10, 745)
+$script:statusLabel.Width = 750
+$script:statusLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+$form.Controls.Add($script:statusLabel)
 
 # Output textbox (Log area below tabs and progress bar)
-$outputBox = New-Object System.Windows.Forms.TextBox
-$outputBox.Location = New-Object System.Drawing.Point(10, 620)
-$outputBox.Size = New-Object System.Drawing.Size(760, 120)
-$outputBox.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
-$outputBox.Multiline = $true
-$outputBox.ScrollBars = "Vertical"
-$outputBox.ReadOnly = $true
-$form.Controls.Add($outputBox)
+$script:outputBox = New-Object System.Windows.Forms.TextBox
+$script:outputBox.Location = New-Object System.Drawing.Point(10, 620)
+$script:outputBox.Size = New-Object System.Drawing.Size(760, 120)
+$script:outputBox.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+$script:outputBox.Multiline = $true
+$script:outputBox.ScrollBars = "Vertical"
+$script:outputBox.ReadOnly = $true
+$form.Controls.Add($script:outputBox)
 
 # Progress bar (appears between tabs and log when active)
-$progressBar = New-Object System.Windows.Forms.ProgressBar
-$progressBar.Location = New-Object System.Drawing.Point(10, 595)
-$progressBar.Width = 760
-$progressBar.Height = 20
-$progressBar.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
-$progressBar.Visible = $false
-$form.Controls.Add($progressBar)
+$script:progressBar = New-Object System.Windows.Forms.ProgressBar
+$script:progressBar.Location = New-Object System.Drawing.Point(10, 595)
+$script:progressBar.Width = 760
+$script:progressBar.Height = 20
+$script:progressBar.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+$script:progressBar.Visible = $false
+$form.Controls.Add($script:progressBar)
 
 # Logout button
 $logoutButton = New-Object System.Windows.Forms.Button
@@ -2111,9 +2112,9 @@ $createButton.Add_Click({
     $versionsButton.Enabled = $false
     
     Update-Status "Creating package for $packageID..."
-    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-    $progressBar.MarqueeAnimationSpeed = 30
-    $progressBar.Visible = $true
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+    $script:progressBar.MarqueeAnimationSpeed = 30
+    $script:progressBar.Visible = $true
     [System.Windows.Forms.Application]::DoEvents()  # Update UI - TODO: refactor to use Invoke-AsyncOperation
     
     $desired = $null
@@ -2139,9 +2140,9 @@ $createButton.Add_Click({
       Update-Status "Package creation failed"
     }
   } finally {
-    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $progressBar.Visible = $false
-    $progressBar.Value = 0
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $script:progressBar.Visible = $false
+    $script:progressBar.Value = 0
     $createButton.Enabled = $true
     $searchButton.Enabled = $true
     $versionsButton.Enabled = $true
@@ -2200,9 +2201,9 @@ $uploadButton.Add_Click({
         $createButton.Enabled = $false
         
         Update-Status "Uploading $packageID (v$version) to tenant..."
-        $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-        $progressBar.MarqueeAnimationSpeed = 30
-        $progressBar.Visible = $true
+        $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+        $script:progressBar.MarqueeAnimationSpeed = 30
+        $script:progressBar.Visible = $true
         [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
         
         Deploy-WtWin32App -PackageId $packageID -Version $version -RootPackageFolder $folder -ErrorAction Stop
@@ -2239,9 +2240,9 @@ $uploadButton.Add_Click({
             [System.Windows.Forms.MessageBoxIcon]::Error
         )
     } finally {
-        $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-        $progressBar.Visible = $false
-        $progressBar.Value = 0
+        $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+        $script:progressBar.Visible = $false
+        $script:progressBar.Value = 0
         $uploadButton.Enabled = $true
         $createButton.Enabled = $true
     }
@@ -2362,10 +2363,10 @@ $updateSearchButton.Add_Click({
     Write-Log ("Checking {0} apps for updates..." -f $appsToCheck.Count)
     
     # Show progress bar
-    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $progressBar.Value = 0
-    $progressBar.Maximum = $appsToCheck.Count
-    $progressBar.Visible = $true
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $script:progressBar.Value = 0
+    $script:progressBar.Maximum = $appsToCheck.Count
+    $script:progressBar.Visible = $true
 
     $candidates = [System.Collections.Generic.List[object]]::new()
     $processedCount = 0
@@ -2376,7 +2377,7 @@ $updateSearchButton.Add_Click({
       
       # Update progress every app
       try {
-        $progressBar.Value = $processedCount
+        $script:progressBar.Value = $processedCount
         Update-Status ("Checking ({0}/{1}): {2}" -f $processedCount, $totalCount, $app.Name)
         [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
       } catch { }
@@ -2446,9 +2447,9 @@ $updateSearchButton.Add_Click({
     }
   } finally {
     $updateSearchButton.Enabled = $true
-    $progressBar.Maximum = 100
-    $progressBar.Value = 0
-    $progressBar.Visible = $false
+    $script:progressBar.Maximum = 100
+    $script:progressBar.Value = 0
+    $script:progressBar.Visible = $false
   }
 })
 
@@ -2612,8 +2613,8 @@ $removeOldAppsButton.Add_Click({
       [System.Windows.Forms.MessageBoxIcon]::Question
     )
     if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
-      $progressBar.Value = 0
-      $progressBar.Visible = $true
+      $script:progressBar.Value = 0
+      $script:progressBar.Visible = $true
       foreach ($app in @($supersededApps)) {
         try {
           Remove-WtWin32App -GraphId $app.GraphId -ErrorAction Stop
@@ -2628,8 +2629,8 @@ $removeOldAppsButton.Add_Click({
           }
         }
       }
-      $progressBar.Maximum = 100
-      $progressBar.Value = 100
+      $script:progressBar.Maximum = 100
+      $script:progressBar.Value = 100
       Update-Status "Deleted all superseded Apps..."
       try { $supersededSearchButton.PerformClick() } catch {}
     } else {
@@ -2822,8 +2823,8 @@ $scanDiscoveredButton.Add_Click({
     $discoveredListBox.Items.Clear()
     $script:discoveredRaw = [System.Collections.Generic.List[object]]::new()
     
-    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-    $progressBar.Visible = $true
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+    $script:progressBar.Visible = $true
     [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
 
 # --- GRAPH-AUTH BLOCK (FIXED) ---
@@ -2922,14 +2923,14 @@ $scanDiscoveredButton.Add_Click({
     $current = 0
     $matchCount = 0
 
-    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $progressBar.Maximum = $total
-    $progressBar.Value = 0
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $script:progressBar.Maximum = $total
+    $script:progressBar.Value = 0
 
     foreach ($app in $filteredApps) {
 		[System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
         $current++
-        $progressBar.Value = $current
+        $script:progressBar.Value = $current
         Update-Status "Analyzing ($current/$total): $($app.displayName)..."
         [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
 
@@ -3020,9 +3021,9 @@ $scanDiscoveredButton.Add_Click({
     $ProgressPreference = $oldProgress
     $InformationPreference = $oldInfo
     $scanDiscoveredButton.Enabled = $true
-    $progressBar.Maximum = 100
-    $progressBar.Value = 0
-    $progressBar.Visible = $false
+    $script:progressBar.Maximum = 100
+    $script:progressBar.Value = 0
+    $script:progressBar.Visible = $false
   }
 })
 
@@ -3048,10 +3049,10 @@ $deployDiscoveredButton.Add_Click({
         $checkAllDiscoveredButton.Enabled = $false
         $uncheckAllDiscoveredButton.Enabled = $false
         
-        $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-        $progressBar.Maximum = $checkedItems.Count
-        $progressBar.Value = 0
-        $progressBar.Visible = $true
+        $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+        $script:progressBar.Maximum = $checkedItems.Count
+        $script:progressBar.Value = 0
+        $script:progressBar.Visible = $true
 
         $successCount = 0
         $failedCount = 0
@@ -3059,7 +3060,7 @@ $deployDiscoveredButton.Add_Click({
 
         foreach ($item in $checkedItems) {
             $i++
-            $progressBar.Value = $i
+            $script:progressBar.Value = $i
             $wingetApp = $item.WingetApp
             
             Update-Status "Packaging & Deploying ($i/$($checkedItems.Count)): $($wingetApp.Name)..."
@@ -3111,9 +3112,9 @@ $deployDiscoveredButton.Add_Click({
         $scanDiscoveredButton.Enabled = $true
         $checkAllDiscoveredButton.Enabled = $true
         $uncheckAllDiscoveredButton.Enabled = $true
-        $progressBar.Maximum = 100
-        $progressBar.Value = 0
-        $progressBar.Visible = $false
+        $script:progressBar.Maximum = 100
+        $script:progressBar.Value = 0
+        $script:progressBar.Visible = $false
     }
 })
 # Apply initial theme (Dark by default)
@@ -3147,7 +3148,7 @@ $form.Add_FormClosing({
     if ($script:isConnected) {
         try {
             $form.Enabled = $false
-            if ($statusLabel) { 
+            if ($script:statusLabel) { 
                 Update-Status "Closing... signing out from tenant"
                 # Zwingt die UI, sich noch einmal schnell zu aktualisieren, bevor sie blockiert wird
                 [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation

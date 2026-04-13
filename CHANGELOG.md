@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.11] – 2026-04-13
+
+### Fixed
+- `$progressBar`, `$statusLabel`, and `$outputBox` are now declared as `$script:`-scoped variables throughout the entire script. This fixes a fatal `The property 'Style' cannot be found on this object` error that occurred in the `RunWorkerCompleted` callback of `Invoke-AsyncOperation`, where the BackgroundWorker dispatcher invoked the handler outside the normal PowerShell variable scope, causing those variables to resolve as `$null`.
+
 ## [0.10.6] – 2026-04-10
 
 ### Changed
