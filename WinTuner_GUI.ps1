@@ -1,4 +1,5 @@
 # WinTuner GUI by Manuel Höfler
+# v0.10.10 – Hotfix: Invoke-AsyncOperation Closure-Bug (OnComplete nie ausgeführt) + Update-Check Feedback
 # v0.10.9 – Hotfix: ProgressBar Maximum-Reset an allen Stellen + graceful "not found" bei Remove
 # v0.10.8 – Hotfix: Update-Check status feedback & checkUpdateButton re-enable after async
 # v0.10.7 – Fix: Phase 5 – error handling, security, module import guard
@@ -53,7 +54,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.9"
+$script:appVersion  = "0.10.10"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 
@@ -918,7 +919,7 @@ function Invoke-AsyncOperation {
   $script:asyncResult = $null
   
   # Do work in background
-  $bw.Add_DoWork({
+  $doWork = {
     param($sender, $e)
     try {
       $e.Result = & $ScriptBlock
@@ -933,10 +934,11 @@ function Invoke-AsyncOperation {
         Add-Content -Path $logPath -Value "$timestamp - Async operation error: $errMsg" -Encoding utf8 -ErrorAction SilentlyContinue
       } catch {}
     }
-  })
+  }.GetNewClosure()
+  $bw.Add_DoWork($doWork)
   
   # On completion (runs on UI thread)
-  $bw.Add_RunWorkerCompleted({
+  $runCompleted = {
     param($sender, $e)
     
     # Restore progress bar to normal
@@ -973,7 +975,8 @@ function Invoke-AsyncOperation {
     
     # Dispose the BackgroundWorker to prevent memory leaks
     $sender.Dispose()
-  })
+  }.GetNewClosure()
+  $bw.Add_RunWorkerCompleted($runCompleted)
   
   # Start async operation
   $bw.RunWorkerAsync()
@@ -1665,7 +1668,7 @@ $checkUpdateButton.Add_Click({
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Warning
       )
-      Update-Status "Update check failed"
+      Update-Status "Update check failed (v$($script:appVersion)) – check internet connection"
       return
     }
 
@@ -1720,9 +1723,11 @@ $checkUpdateButton.Add_Click({
         )
       }
     } else {
-      Update-Status "WinTuner GUI is up to date (v$($script:appVersion))"
+      $latestVer = if ($updateResult -and $updateResult.LatestVersion) { $updateResult.LatestVersion } else { "unknown" }
+      $msg = "WinTuner GUI is up to date.`n`nLocal version:  v$($script:appVersion)`nGitHub version: v$latestVer"
+      Update-Status "Up to date – Local: v$($script:appVersion) | GitHub: v$latestVer"
       [System.Windows.Forms.MessageBox]::Show(
-        "WinTuner GUI is up to date.`n`nCurrent version: v$($script:appVersion)",
+        $msg,
         "No Update Available",
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Information
@@ -3245,8 +3250,12 @@ $form.Add_Shown({
           try { Write-Log "Startup update dialog error: $($_.Exception.Message)" } catch {}
         }
       } else {
-        Update-Status "WinTuner GUI is up to date (v$($script:appVersion))"
+        $latestVer = if ($updateResult -and $updateResult.LatestVersion) { $updateResult.LatestVersion } else { "unknown" }
+        Update-Status "WinTuner GUI is up to date – Local: v$($script:appVersion) | GitHub: v$latestVer"
       }
+    } else {
+      # Error case – still show a clear status
+      Update-Status "Update check failed – running v$($script:appVersion)"
     }
   }
 })
