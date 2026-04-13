@@ -1,5 +1,5 @@
 # WinTuner GUI by Manuel Höfler
-# v0.10.10 – Hotfix: Invoke-AsyncOperation Closure-Bug (OnComplete nie ausgeführt) + Update-Check Feedback
+# v0.10.10 – Hotfix: Invoke-AsyncOperation Closure-Bug – $progressBar war $null in RunWorkerCompleted
 # v0.10.9 – Hotfix: ProgressBar Maximum-Reset an allen Stellen + graceful "not found" bei Remove
 # v0.10.8 – Hotfix: Update-Check status feedback & checkUpdateButton re-enable after async
 # v0.10.7 – Fix: Phase 5 – error handling, security, module import guard
@@ -918,15 +918,19 @@ function Invoke-AsyncOperation {
   # Store result
   $script:asyncResult = $null
   
+  # Lokale Kopien der Parameter für Closure-Binding
+  $_ScriptBlock     = $ScriptBlock
+  $_OnComplete      = $OnComplete
+  $_DisableControls = $DisableControls
+
   # Do work in background
   $doWork = {
     param($sender, $e)
     try {
-      $e.Result = & $ScriptBlock
+      $e.Result = & $_ScriptBlock
     } catch {
       $errMsg = $_.Exception.Message
       $e.Result = @{ Error = $errMsg }
-      # Write directly to log file (thread-safe, no UI access)
       try {
         $base = if ($PSScriptRoot) { $PSScriptRoot } else { [Environment]::GetFolderPath('LocalApplicationData') }
         $logPath = Join-Path $base 'WinTuner_GUI.log'
@@ -936,31 +940,35 @@ function Invoke-AsyncOperation {
     }
   }.GetNewClosure()
   $bw.Add_DoWork($doWork)
-  
+
   # On completion (runs on UI thread)
+  # WICHTIG: $progressBar ist eine Script-Variable und wird zur Laufzeit aufgelöst.
+  # .GetNewClosure() hier ist nötig um $_OnComplete und $_DisableControls einzufangen,
+  # aber $progressBar darf NICHT eingefroren werden (wäre $null zur Definitionszeit).
   $runCompleted = {
     param($sender, $e)
-    
+
     # Restore progress bar to normal
-	$progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-	$progressBar.Maximum = 100   # ← Zeile hinzufügen
-	$progressBar.Value = 100
-    
+    # $progressBar wird zur Laufzeit aus dem Script-Scope aufgelöst (nicht eingefroren)
+    $progressBar.Style   = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $progressBar.Maximum = 100
+    $progressBar.Value   = 100
+
     # Re-enable controls
-    foreach ($ctrl in $DisableControls) {
+    foreach ($ctrl in $_DisableControls) {
       if ($ctrl) { $ctrl.Enabled = $true }
     }
-    
+
     # Execute completion callback with result
-    if ($OnComplete) {
+    if ($_OnComplete) {
       try {
-        & $OnComplete $e.Result
+        & $_OnComplete $e.Result
       } catch {
         Write-Log "Async completion callback error: $($_.Exception.Message)"
         Update-Status "Operation completed with errors"
       }
     }
-    
+
     # Hide progress after short delay
     $hideTimer = New-Object System.Windows.Forms.Timer
     $hideTimer.Interval = 1000
@@ -972,12 +980,12 @@ function Invoke-AsyncOperation {
       $sender.Dispose()
     })
     $hideTimer.Start()
-    
+
     # Dispose the BackgroundWorker to prevent memory leaks
     $sender.Dispose()
   }.GetNewClosure()
   $bw.Add_RunWorkerCompleted($runCompleted)
-  
+
   # Start async operation
   $bw.RunWorkerAsync()
 }
