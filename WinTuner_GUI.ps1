@@ -1,4 +1,5 @@
 # WinTuner GUI by Manuel Höfler
+# v0.10.9 – Hotfix: ProgressBar Maximum-Reset an allen Stellen + graceful "not found" bei Remove
 # v0.10.8 – Hotfix: Update-Check status feedback & checkUpdateButton re-enable after async
 # v0.10.7 – Fix: Phase 5 – error handling, security, module import guard
 # v0.10.6 – Fix: Phase 4 – performance improvements & code quality
@@ -52,7 +53,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.8"
+$script:appVersion  = "0.10.9"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 
@@ -2432,8 +2433,9 @@ $updateSearchButton.Add_Click({
     }
   } finally {
     $updateSearchButton.Enabled = $true
-    $progressBar.Visible = $false
+    $progressBar.Maximum = 100
     $progressBar.Value = 0
+    $progressBar.Visible = $false
   }
 })
 
@@ -2604,9 +2606,16 @@ $removeOldAppsButton.Add_Click({
           Remove-WtWin32App -GraphId $app.GraphId -ErrorAction Stop
           Update-Status ("Removed: {0}" -f $app.Name)
         } catch {
-          Update-Status ("Error removing {0}: {1}" -f $app.Name, $_.Exception.Message)
+          if ($_.Exception.Message -match 'not found') {
+            Write-Log "App already removed or not found in Intune: $($app.Name)"
+            Update-Status "Already removed: $($app.Name)"
+          } else {
+            Update-Status ("Error removing {0}: {1}" -f $app.Name, $_.Exception.Message)
+            Write-Log "Error while removal: $($_.Exception.Message)"
+          }
         }
       }
+      $progressBar.Maximum = 100
       $progressBar.Value = 100
       Update-Status "Deleted all superseded Apps..."
       try { $supersededSearchButton.PerformClick() } catch {}
@@ -2998,6 +3007,8 @@ $scanDiscoveredButton.Add_Click({
     $ProgressPreference = $oldProgress
     $InformationPreference = $oldInfo
     $scanDiscoveredButton.Enabled = $true
+    $progressBar.Maximum = 100
+    $progressBar.Value = 0
     $progressBar.Visible = $false
   }
 })
@@ -3087,6 +3098,8 @@ $deployDiscoveredButton.Add_Click({
         $scanDiscoveredButton.Enabled = $true
         $checkAllDiscoveredButton.Enabled = $true
         $uncheckAllDiscoveredButton.Enabled = $true
+        $progressBar.Maximum = 100
+        $progressBar.Value = 0
         $progressBar.Visible = $false
     }
 })
