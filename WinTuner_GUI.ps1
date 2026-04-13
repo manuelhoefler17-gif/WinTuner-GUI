@@ -1,4 +1,5 @@
 # WinTuner GUI by Manuel Höfler
+# v0.10.12 – Hotfix: $progressBar → $script:progressBar (BackgroundWorker scope fix)
 # v0.10.11 – Hotfix: $progressBar/$statusLabel/$outputBox als $script: Variablen für BackgroundWorker-Closures
 # v0.10.10 – Hotfix: Invoke-AsyncOperation Closure-Bug – $progressBar war $null in RunWorkerCompleted
 # v0.10.9 – Hotfix: ProgressBar Maximum-Reset an allen Stellen + graceful "not found" bei Remove
@@ -55,7 +56,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.11"
+$script:appVersion  = "0.10.12"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 
