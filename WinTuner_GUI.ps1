@@ -1,4 +1,5 @@
 # WinTuner GUI by Manuel Höfler
+# v0.10.8 – Hotfix: Update-Check status feedback & checkUpdateButton re-enable after async
 # v0.10.7 – Fix: Phase 5 – error handling, security, module import guard
 # v0.10.6 – Fix: Phase 4 – performance improvements & code quality
 # v0.10.5 – Fix: Phase 3 – UX improvements, ProgressBar crash hotfix, batch update summary
@@ -51,7 +52,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.7"
+$script:appVersion  = "0.10.8"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 
@@ -1645,10 +1646,12 @@ $checkUpdateButton.Height = 35
 $tabSettings.Controls.Add($checkUpdateButton)
 
 $checkUpdateButton.Add_Click({
-  Invoke-AsyncOperation -StatusText "Checking for updates..." -DisableControls @($checkUpdateButton) -ScriptBlock {
+  $checkUpdateButton.Enabled = $false
+  Invoke-AsyncOperation -StatusText "Checking for updates..." -ScriptBlock {
     Test-AppUpdateAvailable
   } -OnComplete {
     param($updateResult)
+    $checkUpdateButton.Enabled = $true
     # Consolidate error checking: Invoke-AsyncOperation wraps thrown exceptions as .Error;
     # Test-AppUpdateAvailable returns graceful errors as .ErrorMessage
     $errorDetail = if ($updateResult -and $updateResult.Error) { $updateResult.Error } `
@@ -1716,13 +1719,13 @@ $checkUpdateButton.Add_Click({
         )
       }
     } else {
+      Update-Status "WinTuner GUI is up to date (v$($script:appVersion))"
       [System.Windows.Forms.MessageBox]::Show(
-        "You are running the latest version (v$($script:appVersion)).",
+        "WinTuner GUI is up to date.`n`nCurrent version: v$($script:appVersion)",
         "No Update Available",
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Information
       )
-      Update-Status "App is up to date (v$($script:appVersion))"
     }
   }
 })
@@ -3229,7 +3232,7 @@ $form.Add_Shown({
           try { Write-Log "Startup update dialog error: $($_.Exception.Message)" } catch {}
         }
       } else {
-        Update-Status "WinTuner GUI v$($script:appVersion) – up to date"
+        Update-Status "WinTuner GUI is up to date (v$($script:appVersion))"
       }
     }
   }
