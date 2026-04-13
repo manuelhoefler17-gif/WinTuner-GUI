@@ -3271,6 +3271,30 @@ if ($logoutButton)          { $toolTip.SetToolTip($logoutButton,          "Disco
 if ($themeToggleButton)     { $toolTip.SetToolTip($themeToggleButton,     "Switch between Dark Mode and Light Mode") }
 if ($clearHistoryButton)    { $toolTip.SetToolTip($clearHistoryButton,    "Clears the list of saved M365 login names") }
 
+# Header / Login area
+if ($loginButton)           { $toolTip.SetToolTip($loginButton,           "Sign in to your Microsoft 365 tenant") }
+if ($rememberCheckBox)      { $toolTip.SetToolTip($rememberCheckBox,      "Save your username so it is pre-filled on the next launch") }
+
+# tabUpdate
+if ($checkAllButton)        { $toolTip.SetToolTip($checkAllButton,        "Check all apps in the update list") }
+if ($uncheckAllButton)      { $toolTip.SetToolTip($uncheckAllButton,      "Uncheck all apps in the update list") }
+if ($supersededSearchButton){ $toolTip.SetToolTip($supersededSearchButton,"Search for outdated (superseded) app versions in Intune") }
+if ($deleteSelectedAppButton){ $toolTip.SetToolTip($deleteSelectedAppButton, "Delete the app currently selected in the dropdown from Intune") }
+if ($removeOldAppsButton)   { $toolTip.SetToolTip($removeOldAppsButton,   "Delete all superseded app versions from Intune at once") }
+
+# tabDiscovered
+if ($deployDiscoveredButton){ $toolTip.SetToolTip($deployDiscoveredButton,"Deploy the checked discovered apps to Microsoft Intune") }
+if ($checkAllDiscoveredButton)  { $toolTip.SetToolTip($checkAllDiscoveredButton,   "Check all apps in the discovered apps list") }
+if ($uncheckAllDiscoveredButton){ $toolTip.SetToolTip($uncheckAllDiscoveredButton, "Uncheck all apps in the discovered apps list") }
+
+# tabSettings
+if ($browsePathButton)         { $toolTip.SetToolTip($browsePathButton,         "Open a folder browser to choose the default package folder") }
+if ($autoCheckUpdatesCheckbox) { $toolTip.SetToolTip($autoCheckUpdatesCheckbox, "Automatically scan for app updates each time you log in") }
+if ($rememberMeCheckbox)       { $toolTip.SetToolTip($rememberMeCheckbox,       "Save your username so it is pre-filled on the next launch") }
+if ($saveSettingsButton)       { $toolTip.SetToolTip($saveSettingsButton,       "Save all settings to disk") }
+if ($clearCacheButton)         { $toolTip.SetToolTip($clearCacheButton,         "Clear the locally cached WinGet version list") }
+if ($checkUpdateButton)        { $toolTip.SetToolTip($checkUpdateButton,        "Check GitHub for a newer version of WinTuner GUI") }
+
 # Run the form mit finalem Sicherheitsnetz
 try {
     [System.Windows.Forms.Application]::Run($form)
