@@ -2521,7 +2521,8 @@ $removeOldAppsButton.Add_Click({
           Update-Status ("Error removing {0}: {1}" -f $app.Name, $_.Exception.Message)
         }
       }
-      $progressBar.Value = 100
+      $progressBar.Maximum = 100
+		$progressBar.Value = 100
       Update-Status "Deleted all superseded Apps..."
       try { $supersededSearchButton.PerformClick() } catch {}
     } else {
