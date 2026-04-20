@@ -871,10 +871,36 @@ function Write-Log {
   }
 }
 
+# Runs an action on the UI thread if required
+function Invoke-UiAction {
+  param(
+    [Parameter(Mandatory=$true)]
+    [System.Windows.Forms.Control]$Control,
+    [Parameter(Mandatory=$true)]
+    [scriptblock]$Action
+  )
+
+  if (-not $Control) { return }
+  if ($Control.IsDisposed) { return }
+
+  if ($Control.InvokeRequired) {
+    $Control.Invoke([Action]$Action)
+  } else {
+    & $Action
+  }
+}
+
 # Status update function
 function Update-Status {
   param([string]$status)
-  $script:statusLabel.Text = $status
+  $statusText = if ([string]::IsNullOrWhiteSpace($status)) { "" } else { $status }
+  try {
+    Invoke-UiAction -Control $script:statusLabel -Action {
+      $script:statusLabel.Text = $statusText
+    }
+  } catch {
+    # Keep status updates non-fatal even on cross-thread/disposed-control races
+  }
   Write-Log $status
 }
 
@@ -1682,6 +1708,7 @@ $checkUpdateButton.Add_Click({
     }
 
     if ($updateResult -and $updateResult.UpdateAvailable) {
+      Update-Status "Update available: v$($updateResult.LatestVersion)"
       $msg  = "A new version of WinTuner GUI is available!`n`n"
       $msg += "Current version: v$($script:appVersion)`n"
       $msg += "Latest version:  v$($updateResult.LatestVersion)`n`n"
@@ -1704,6 +1731,7 @@ $checkUpdateButton.Add_Click({
           $success = Invoke-AppSelfUpdate -DownloadUrl $updateResult.DownloadUrl -HashUrl $updateResult.HashUrl
 
           if ($success) {
+            Update-Status "Update installed successfully. Please restart WinTuner GUI."
             $restartMsg  = "Update installed successfully!`n`n"
             $restartMsg += "WinTuner GUI needs to restart to apply the update.`n"
             $restartMsg += "Click OK to close. Please start the script again manually."
@@ -1716,11 +1744,14 @@ $checkUpdateButton.Add_Click({
             )
 
             $form.Close()
+          } else {
+            Update-Status "Update download/install failed. See log for details."
           }
         } else {
           Update-Status "Update postponed by user"
         }
       } else {
+        Update-Status "Update available: v$($updateResult.LatestVersion) (manual download required)"
         $msg += "No direct download available for this release.`n"
         $msg += "Please download manually from:`n$($updateResult.ReleaseUrl)"
 
@@ -3205,6 +3236,7 @@ $form.Add_Shown({
     param($updateResult)
     if ($updateResult -and -not $updateResult.Error -and -not $updateResult.ErrorMessage) {
       if ($updateResult.UpdateAvailable) {
+        Update-Status "Update available: v$($updateResult.LatestVersion)"
         try {
           $msg  = "A new version of WinTuner GUI is available!`n`n"
           $msg += "Current version: v$($script:appVersion)`n"
@@ -3228,6 +3260,7 @@ $form.Add_Shown({
               $success = Invoke-AppSelfUpdate -DownloadUrl $updateResult.DownloadUrl -HashUrl $updateResult.HashUrl
 
               if ($success) {
+                Update-Status "Update installed successfully. Please restart WinTuner GUI."
                 $restartMsg  = "Update installed successfully!`n`n"
                 $restartMsg += "WinTuner GUI needs to restart to apply the update.`n"
                 $restartMsg += "Click OK to close. Please start the script again manually."
@@ -3240,11 +3273,14 @@ $form.Add_Shown({
                 )
 
                 $form.Close()
+              } else {
+                Update-Status "Update download/install failed. See log for details."
               }
             } else {
               Update-Status "Update available: v$($updateResult.LatestVersion) - Go to Settings to update later."
             }
           } else {
+            Update-Status "Update available: v$($updateResult.LatestVersion) (manual download required)"
             $msg += "No direct download available for this release.`n"
             $msg += "Please download manually from:`n$($updateResult.ReleaseUrl)"
 
