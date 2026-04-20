@@ -974,42 +974,50 @@ function Invoke-AsyncOperation {
   # aber $script:progressBar darf NICHT eingefroren werden (wäre $null zur Definitionszeit).
   $runCompleted = {
     param($sender, $e)
-
-    # Restore progress bar to normal
-    # $script:progressBar wird zur Laufzeit aus dem Script-Scope aufgelöst (nicht eingefroren)
-    $script:progressBar.Style   = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $script:progressBar.Maximum = 100
-    $script:progressBar.Value   = 100
-
-    # Re-enable controls
-    foreach ($ctrl in $_DisableControls) {
-      if ($ctrl) { $ctrl.Enabled = $true }
-    }
-
-    # Execute completion callback with result
-    if ($_OnComplete) {
+    try {
+      # Restore progress bar to normal
+      # $script:progressBar wird zur Laufzeit aus dem Script-Scope aufgelöst (nicht eingefroren)
       try {
-        & $_OnComplete $e.Result
+        $script:progressBar.Style   = [System.Windows.Forms.ProgressBarStyle]::Continuous
+        $script:progressBar.Maximum = 100
+        $script:progressBar.Value   = 100
       } catch {
-        Write-Log "Async completion callback error: $($_.Exception.Message)"
-        Update-Status "Operation completed with errors"
+        Write-Log "Async completion UI reset warning: $($_.Exception.Message)"
       }
-    }
 
-    # Hide progress after short delay
-    $hideTimer = New-Object System.Windows.Forms.Timer
-    $hideTimer.Interval = 1000
-    $hideTimer.Add_Tick({
-      param($sender, $e)
-      $script:progressBar.Visible = $false
-      $script:progressBar.Value = 0
-      $sender.Stop()
+      # Execute completion callback with result
+      if ($_OnComplete) {
+        try {
+          & $_OnComplete $e.Result
+        } catch {
+          Write-Log "Async completion callback error: $($_.Exception.Message)"
+          Update-Status "Operation completed with errors"
+        }
+      }
+
+      # Hide progress after short delay
+      try {
+        $hideTimer = New-Object System.Windows.Forms.Timer
+        $hideTimer.Interval = 1000
+        $hideTimer.Add_Tick({
+          param($sender, $e)
+          $script:progressBar.Visible = $false
+          $script:progressBar.Value = 0
+          $sender.Stop()
+          $sender.Dispose()
+        })
+        $hideTimer.Start()
+      } catch {
+        Write-Log "Async completion timer warning: $($_.Exception.Message)"
+      }
+    } finally {
+      # Re-enable controls even if callback/UI reset throws
+      foreach ($ctrl in $_DisableControls) {
+        if ($ctrl) { $ctrl.Enabled = $true }
+      }
+      # Dispose the BackgroundWorker to prevent memory leaks
       $sender.Dispose()
-    })
-    $hideTimer.Start()
-
-    # Dispose the BackgroundWorker to prevent memory leaks
-    $sender.Dispose()
+    }
   }.GetNewClosure()
   $bw.Add_RunWorkerCompleted($runCompleted)
 
@@ -3293,6 +3301,7 @@ $form.Add_Shown({
           }
         } catch {
           try { Write-Log "Startup update dialog error: $($_.Exception.Message)" } catch {}
+          Update-Status "Update check completed (dialog error). See log for details."
         }
       } else {
         $latestVer = if ($updateResult -and $updateResult.LatestVersion) { $updateResult.LatestVersion } else { "unknown" }
