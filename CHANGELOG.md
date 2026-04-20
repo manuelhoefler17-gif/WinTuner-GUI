@@ -31,6 +31,7 @@ All notable changes to this project will be documented in this file.
 - `Update-Status` now performs thread-safe UI updates via new `Invoke-UiAction` helper and gracefully handles disposed/cross-thread control races to avoid sporadic WinForms update exceptions.
 - Startup/self update checks now always write a final status message (update available, manual download required, postponed, install failed/success) so the status bar no longer remains on "Checking for updates...".
 - `Invoke-AsyncOperation` completion flow hardened: UI-reset, callback, and timer logic are now individually protected so callback status messages still run even if progress-bar reset/timer setup throws.
+- Startup and manual update-check callbacks now share one centralized `Invoke-UpdateCheckFeedback` handler to prevent status/message divergence between both flows.
 
 ## [0.10.0] – 2026-04-10
 
