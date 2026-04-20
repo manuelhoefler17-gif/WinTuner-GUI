@@ -21,7 +21,7 @@
 
 ## 🎯 Overview
 
-**WinTuner GUI** is a comprehensive graphical interface built on top of the [WinTuner PowerShell module] by Stephan van Rooij. It simplifies the process of packaging and deploying WinGet applications to Microsoft Intune and managing app updates.
+**WinTuner GUI** is a comprehensive graphical interface built on top of the [WinTuner PowerShell module](https://www.powershellgallery.com/packages/WinTuner) by Stephan van Rooij. It simplifies the process of packaging and deploying WinGet applications to Microsoft Intune and managing app updates.
 
 ### Key Capabilities
 
@@ -117,6 +117,17 @@ On first run, the script will:
 2. Check for WinTuner module
 3. Prompt to install WinTuner if missing
 4. Create settings file in `%LOCALAPPDATA%\WinTuner_Settings.json`
+
+### Recommended Pre-Flight Checks
+Before the first productive run, verify your local environment:
+
+```powershell
+$PSVersionTable.PSVersion
+Get-Module -ListAvailable WinTuner
+Test-NetConnection graph.microsoft.com -Port 443
+```
+
+If `WinTuner` is not listed, install it as shown in the Requirements section.
 
 ## 💻 Usage
 
