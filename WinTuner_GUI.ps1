@@ -871,10 +871,36 @@ function Write-Log {
   }
 }
 
+# Runs an action on the UI thread if required
+function Invoke-UiAction {
+  param(
+    [Parameter(Mandatory=$true)]
+    [System.Windows.Forms.Control]$Control,
+    [Parameter(Mandatory=$true)]
+    [scriptblock]$Action
+  )
+
+  if (-not $Control) { return }
+  if ($Control.IsDisposed) { return }
+
+  if ($Control.InvokeRequired) {
+    $Control.Invoke([Action]$Action)
+  } else {
+    & $Action
+  }
+}
+
 # Status update function
 function Update-Status {
   param([string]$status)
-  $script:statusLabel.Text = $status
+  $statusText = if ([string]::IsNullOrWhiteSpace($status)) { "" } else { $status }
+  try {
+    Invoke-UiAction -Control $script:statusLabel -Action {
+      $script:statusLabel.Text = $statusText
+    }
+  } catch {
+    # Keep status updates non-fatal even on cross-thread/disposed-control races
+  }
   Write-Log $status
 }
 
