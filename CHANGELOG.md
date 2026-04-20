@@ -24,6 +24,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- README improvements: fixed WinTuner module hyperlink and added a "Recommended Pre-Flight Checks" section with quick environment validation commands.
+
 ## [0.10.0] – 2026-04-10
 
 ### Added
