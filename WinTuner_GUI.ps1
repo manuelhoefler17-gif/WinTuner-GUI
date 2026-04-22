@@ -1057,12 +1057,24 @@ function Invoke-AsyncOperation {
     [string]$StatusText = "Processing...",
     [System.Windows.Forms.Control[]]$DisableControls = @()
   )
+
+  # Capture a stable ProgressBar reference for async callbacks (avoid script-scope resolution drift)
+  $progressControl = $null
+  if ($script:progressBar -is [System.Windows.Forms.ProgressBar] -and -not $script:progressBar.IsDisposed) {
+    $progressControl = $script:progressBar
+  }
   
   # Update UI - show progress in marquee style (indefinite)
   Update-Status $StatusText
-  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-  $script:progressBar.MarqueeAnimationSpeed = 30
-  $script:progressBar.Visible = $true
+  if ($progressControl) {
+    try {
+      $progressControl.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+      $progressControl.MarqueeAnimationSpeed = 30
+      $progressControl.Visible = $true
+    } catch {
+      Write-LogSafe "Async start progress warning: $($_.Exception.Message)"
+    }
+  }
   
   # Disable controls
   foreach ($ctrl in $DisableControls) {
@@ -1119,18 +1131,17 @@ function Invoke-AsyncOperation {
   $bw.Add_DoWork($doWork)
 
   # On completion (runs on UI thread)
-  # WICHTIG: $script:progressBar ist eine Script-Variable und wird zur Laufzeit aufgelöst.
-  # .GetNewClosure() hier ist nötig um $_OnComplete und $_DisableControls einzufangen,
-  # aber $script:progressBar darf NICHT eingefroren werden (wäre $null zur Definitionszeit).
+  # .GetNewClosure() wird genutzt, um $_OnComplete und $_DisableControls sowie
+  # die stabile $progressControl-Referenz sicher in die Delegate-Scopes zu übernehmen.
   $runCompleted = {
     param($sender, $e)
     try {
-      # Restore progress bar to normal
-      # $script:progressBar wird zur Laufzeit aus dem Script-Scope aufgelöst (nicht eingefroren)
       try {
-        $script:progressBar.Style   = [System.Windows.Forms.ProgressBarStyle]::Continuous
-        $script:progressBar.Maximum = 100
-        $script:progressBar.Value   = 100
+        if ($progressControl -and -not $progressControl.IsDisposed) {
+          $progressControl.Style   = [System.Windows.Forms.ProgressBarStyle]::Continuous
+          $progressControl.Maximum = 100
+          $progressControl.Value   = 100
+        }
       } catch {
         & $_SafeLog "Async completion UI reset warning: $($_.Exception.Message)"
       }
@@ -1152,14 +1163,10 @@ function Invoke-AsyncOperation {
         $hideTimer.Add_Tick({
           param($sender, $e)
           try {
-            if ($script:progressBar -is [System.Windows.Forms.ProgressBar]) {
-              if (-not $script:progressBar.IsDisposed) {
-                $script:progressBar.Visible = $false
-                $script:progressBar.Value = 0
+            if ($progressControl -and -not $progressControl.IsDisposed) {
+                $progressControl.Visible = $false
+                $progressControl.Value = 0
               }
-            } else {
-              & $_SafeLog "Async completion timer: progressBar is not a ProgressBar instance."
-            }
           } catch {
             & $_SafeLog "Async completion timer tick warning: $($_.Exception.Message)"
           } finally {
