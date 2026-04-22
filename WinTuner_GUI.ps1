@@ -1151,10 +1151,21 @@ function Invoke-AsyncOperation {
         $hideTimer.Interval = 1000
         $hideTimer.Add_Tick({
           param($sender, $e)
-          $script:progressBar.Visible = $false
-          $script:progressBar.Value = 0
-          $sender.Stop()
-          $sender.Dispose()
+          try {
+            if ($script:progressBar -is [System.Windows.Forms.ProgressBar]) {
+              if (-not $script:progressBar.IsDisposed) {
+                $script:progressBar.Visible = $false
+                $script:progressBar.Value = 0
+              }
+            } else {
+              & $_SafeLog "Async completion timer: progressBar is not a ProgressBar instance."
+            }
+          } catch {
+            & $_SafeLog "Async completion timer tick warning: $($_.Exception.Message)"
+          } finally {
+            try { $sender.Stop() } catch {}
+            try { $sender.Dispose() } catch {}
+          }
         })
         $hideTimer.Start()
       } catch {
