@@ -3046,8 +3046,22 @@ $scanDiscoveredButton.Add_Click({
     })
 
     $total = $filteredApps.Count
-    $current = 0
     $matchCount = 0
+
+    # Prepare normalized list first (phase 1) so matching can run with cached query results (phase 2)
+    $normalizedApps = [System.Collections.Generic.List[object]]::new()
+    foreach ($app in $filteredApps) {
+        # 1. Entfernt restlos alles, was in Klammern steht (z.B. "(x64 de)", "(x86 en-US)")
+        $searchName = $app.displayName -replace '\s*\([^)]*\)', ''
+        # 2. Entfernt typische Versionsnummern, die aus Zahlen und Punkten bestehen
+        $searchName = $searchName -replace '\s+[\d\.]+', ''
+        $searchName = $searchName.Trim()
+        if ([string]::IsNullOrWhiteSpace($searchName)) { continue }
+        $normalizedApps.Add([pscustomobject]@{
+            App        = $app
+            SearchName = $searchName
+        })
+    }
 
     # Cache Search-WtWinGetPackage results by normalized search term
     # to reduce expensive/repetitive module calls in large environments
@@ -3055,39 +3069,52 @@ $scanDiscoveredButton.Add_Click({
     # Fast lookup for already created discovered entries by PackageID
     $discoveredByPackageId = @{}
 
+    $uniqueSearchNames = @($normalizedApps | Select-Object -ExpandProperty SearchName -Unique)
+    $queryTotal = $uniqueSearchNames.Count
+    $queryCurrent = 0
+
+    # Phase 1: fetch/search all unique terms
     $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $script:progressBar.Maximum = $total
+    $script:progressBar.Maximum = if ($queryTotal -gt 0) { $queryTotal } else { 1 }
     $script:progressBar.Value = 0
 
-    foreach ($app in $filteredApps) {
+    foreach ($searchName in $uniqueSearchNames) {
+        $queryCurrent++
+        $script:progressBar.Value = $queryCurrent
+        if (($queryCurrent -eq 1) -or ($queryCurrent % 25 -eq 0) -or ($queryCurrent -eq $queryTotal)) {
+            Update-Status "Querying WinGet ($queryCurrent/$queryTotal): $searchName"
+            [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
+        }
+        try {
+            $searchResultCache[$searchName] = @(Search-WtWinGetPackage -SearchQuery $searchName -ErrorAction SilentlyContinue 2>$null 3>$null 4>$null 5>$null 6>$null)
+        } catch {
+            $searchResultCache[$searchName] = @()
+            Write-Log "Search failed for '$searchName': $($_.Exception.Message)"
+        }
+    }
+
+    # Phase 2: match normalized discovered apps against cached results
+    $processTotal = $normalizedApps.Count
+    $processCurrent = 0
+    $script:progressBar.Maximum = if ($processTotal -gt 0) { $processTotal } else { 1 }
+    $script:progressBar.Value = 0
+
+    foreach ($entry in $normalizedApps) {
         [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-        $current++
-        $script:progressBar.Value = $current
-        # Throttle UI/log updates for very large scans
-        if (($current -eq 1) -or ($current % 25 -eq 0) -or ($current -eq $total)) {
-            Update-Status "Analyzing ($current/$total): $($app.displayName)..."
+        $processCurrent++
+        $script:progressBar.Value = $processCurrent
+        if (($processCurrent -eq 1) -or ($processCurrent % 25 -eq 0) -or ($processCurrent -eq $processTotal)) {
+            Update-Status "Matching apps ($processCurrent/$processTotal): $($entry.App.displayName)..."
             [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
         }
 
         try {
-            # 1. Entfernt restlos alles, was in Klammern steht (z.B. "(x64 de)", "(x86 en-US)")
-            $searchName = $app.displayName -replace '\s*\([^)]*\)', ''
-            # 2. Entfernt typische Versionsnummern, die aus Zahlen und Punkten bestehen
-            $searchName = $searchName -replace '\s+[\d\.]+', ''
-            $searchName = $searchName.Trim()
+            $app = $entry.App
+            $searchName = $entry.SearchName
+            $wingetResults = if ($searchResultCache.ContainsKey($searchName)) { @($searchResultCache[$searchName]) } else { @() }
 
-            if ([string]::IsNullOrWhiteSpace($searchName)) { continue }
-
-            if ($searchResultCache.ContainsKey($searchName)) {
-                $wingetResults = @($searchResultCache[$searchName])
-            } else {
-                $wingetResults = @(Search-WtWinGetPackage -SearchQuery $searchName -ErrorAction SilentlyContinue 2>$null 3>$null 4>$null 5>$null 6>$null)
-                $searchResultCache[$searchName] = @($wingetResults)
-            }
-            
             $bestMatch = $null
             $highestScore = 0
-            
             foreach ($wgApp in $wingetResults) {
                 $score = Get-StringSimilarity -str1 $app.displayName -str2 $wgApp.Name
                 if ($score -gt $highestScore) {
@@ -3112,7 +3139,7 @@ $scanDiscoveredButton.Add_Click({
                     $existingEntry.DisplayText = "[$($existingEntry.DeviceCount) PCs] $($existingEntry.DisplayName) ($($existingEntry.Publisher))  -->  Winget: $($existingEntry.WingetApp.Name)"
                 } else {
                     # App ist neu: Wir nutzen den sauberen Winget-Namen (ohne Versionsnummern aus Intune)
-                    $cleanName = $bestMatch.Name 
+                    $cleanName = $bestMatch.Name
                     $itemObj = [pscustomobject]@{
                         DisplayName = $cleanName
                         Publisher   = $app.publisher
@@ -3127,7 +3154,7 @@ $scanDiscoveredButton.Add_Click({
                 }
             }
         } catch {
-            Write-Log "Failed to process '$($app.displayName)': $($_.Exception.Message)"
+            Write-Log "Failed to process '$($entry.App.displayName)': $($_.Exception.Message)"
         }
     }
     
