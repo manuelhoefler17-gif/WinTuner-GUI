@@ -3049,16 +3049,25 @@ $scanDiscoveredButton.Add_Click({
     $current = 0
     $matchCount = 0
 
+    # Cache Search-WtWinGetPackage results by normalized search term
+    # to reduce expensive/repetitive module calls in large environments
+    $searchResultCache = @{}
+    # Fast lookup for already created discovered entries by PackageID
+    $discoveredByPackageId = @{}
+
     $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
     $script:progressBar.Maximum = $total
     $script:progressBar.Value = 0
 
     foreach ($app in $filteredApps) {
-		[System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
+        [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
         $current++
         $script:progressBar.Value = $current
-        Update-Status "Analyzing ($current/$total): $($app.displayName)..."
-        [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
+        # Throttle UI/log updates for very large scans
+        if (($current -eq 1) -or ($current % 25 -eq 0) -or ($current -eq $total)) {
+            Update-Status "Analyzing ($current/$total): $($app.displayName)..."
+            [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
+        }
 
         try {
             # 1. Entfernt restlos alles, was in Klammern steht (z.B. "(x64 de)", "(x86 en-US)")
@@ -3069,13 +3078,17 @@ $scanDiscoveredButton.Add_Click({
 
             if ([string]::IsNullOrWhiteSpace($searchName)) { continue }
 
-            $wingetResults = @(Search-WtWinGetPackage -SearchQuery $searchName -ErrorAction SilentlyContinue 2>$null 3>$null 4>$null 5>$null 6>$null)
+            if ($searchResultCache.ContainsKey($searchName)) {
+                $wingetResults = @($searchResultCache[$searchName])
+            } else {
+                $wingetResults = @(Search-WtWinGetPackage -SearchQuery $searchName -ErrorAction SilentlyContinue 2>$null 3>$null 4>$null 5>$null 6>$null)
+                $searchResultCache[$searchName] = @($wingetResults)
+            }
             
             $bestMatch = $null
             $highestScore = 0
             
             foreach ($wgApp in $wingetResults) {
-				[System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
                 $score = Get-StringSimilarity -str1 $app.displayName -str2 $wgApp.Name
                 if ($score -gt $highestScore) {
                     $highestScore = $score
@@ -3086,8 +3099,11 @@ $scanDiscoveredButton.Add_Click({
             if ($bestMatch -and $highestScore -ge 50) {
                 if ($existingPackageIds -contains $bestMatch.PackageID) { continue }
 
-                # NEU: Prüfen, ob wir diese Winget-App (PackageID) schon in der Liste haben
-                $existingEntry = $script:discoveredRaw | Where-Object { $_.WingetApp.PackageID -eq $bestMatch.PackageID } | Select-Object -First 1
+                # Prüfen, ob diese Winget-App (PackageID) bereits vorhanden ist
+                $existingEntry = $null
+                if ($discoveredByPackageId.ContainsKey($bestMatch.PackageID)) {
+                    $existingEntry = $discoveredByPackageId[$bestMatch.PackageID]
+                }
 
                 if ($existingEntry) {
                     # App existiert bereits in der Liste: Wir addieren die Geräteanzahl (DeviceCount)
@@ -3106,6 +3122,7 @@ $scanDiscoveredButton.Add_Click({
                         DisplayText = "[$($app.deviceCount) PCs] $cleanName ($($app.publisher))  -->  Winget: $($bestMatch.Name)"
                     }
                     $script:discoveredRaw.Add($itemObj)
+                    $discoveredByPackageId[$bestMatch.PackageID] = $itemObj
                     $matchCount++
                 }
             }
