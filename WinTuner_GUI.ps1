@@ -977,6 +977,27 @@ function Write-Log {
   }
 }
 
+# Logging helper that never throws if Write-Log is unavailable in delegate scopes
+function Write-LogSafe {
+  param([string]$Message)
+  if ([string]::IsNullOrWhiteSpace($Message)) { return }
+  try {
+    if (Get-Command -Name Write-Log -CommandType Function -ErrorAction SilentlyContinue) {
+      & (Get-Command -Name Write-Log -CommandType Function) $Message
+      return
+    }
+  } catch {}
+  try {
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logLine = "$timestamp - $Message"
+    $base = if ($PSScriptRoot) { $PSScriptRoot } else { [Environment]::GetFolderPath('LocalApplicationData') }
+    if ([string]::IsNullOrWhiteSpace($base)) { $base = [Environment]::GetFolderPath('LocalApplicationData') }
+    if (-not (Test-Path $base)) { New-Item -ItemType Directory -Path $base -Force | Out-Null }
+    $logPath = Join-Path $base 'WinTuner_GUI.log'
+    Add-Content -Path $logPath -Value $logLine -Encoding utf8 -ErrorAction SilentlyContinue
+  } catch {}
+}
+
 # Runs an action on the UI thread if required
 function Invoke-UiAction {
   param(
@@ -1007,7 +1028,12 @@ function Update-Status {
   } catch {
     # Keep status updates non-fatal even on cross-thread/disposed-control races
   }
-  Write-Log $status
+  try {
+    $safeLogger = Get-Command -Name Write-LogSafe -CommandType Function -ErrorAction SilentlyContinue
+    if ($safeLogger) {
+      & $safeLogger $status
+    }
+  } catch {}
 }
 
 # Async operation helper - runs long operations in background
@@ -1031,12 +1057,24 @@ function Invoke-AsyncOperation {
     [string]$StatusText = "Processing...",
     [System.Windows.Forms.Control[]]$DisableControls = @()
   )
+
+  # Capture a stable ProgressBar reference for async callbacks (avoid script-scope resolution drift)
+  $progressControl = $null
+  if ($script:progressBar -is [System.Windows.Forms.ProgressBar] -and -not $script:progressBar.IsDisposed) {
+    $progressControl = $script:progressBar
+  }
   
   # Update UI - show progress in marquee style (indefinite)
   Update-Status $StatusText
-  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-  $script:progressBar.MarqueeAnimationSpeed = 30
-  $script:progressBar.Visible = $true
+  if ($progressControl) {
+    try {
+      $progressControl.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+      $progressControl.MarqueeAnimationSpeed = 30
+      $progressControl.Visible = $true
+    } catch {
+      Write-LogSafe "Async start progress warning: $($_.Exception.Message)"
+    }
+  }
   
   # Disable controls
   foreach ($ctrl in $DisableControls) {
@@ -1055,6 +1093,24 @@ function Invoke-AsyncOperation {
   $_ScriptBlock     = $ScriptBlock
   $_OnComplete      = $OnComplete
   $_DisableControls = $DisableControls
+  $_SafeLog         = {
+    param([string]$Msg)
+    if ([string]::IsNullOrWhiteSpace($Msg)) { return }
+    try {
+      $safeLogger = Get-Command -Name Write-LogSafe -CommandType Function -ErrorAction SilentlyContinue
+      if ($safeLogger) {
+        & $safeLogger $Msg
+        return
+      }
+    } catch {}
+    try {
+      $base = if ($PSScriptRoot) { $PSScriptRoot } else { [Environment]::GetFolderPath('LocalApplicationData') }
+      if (-not (Test-Path $base)) { New-Item -ItemType Directory -Path $base -Force | Out-Null }
+      $logPath = Join-Path $base 'WinTuner_GUI.log'
+      $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+      Add-Content -Path $logPath -Value "$timestamp - $Msg" -Encoding utf8 -ErrorAction SilentlyContinue
+    } catch {}
+  }.GetNewClosure()
 
   # Do work in background
   $doWork = {
@@ -1075,20 +1131,19 @@ function Invoke-AsyncOperation {
   $bw.Add_DoWork($doWork)
 
   # On completion (runs on UI thread)
-  # WICHTIG: $script:progressBar ist eine Script-Variable und wird zur Laufzeit aufgelöst.
-  # .GetNewClosure() hier ist nötig um $_OnComplete und $_DisableControls einzufangen,
-  # aber $script:progressBar darf NICHT eingefroren werden (wäre $null zur Definitionszeit).
+  # .GetNewClosure() wird genutzt, um $_OnComplete und $_DisableControls sowie
+  # die stabile $progressControl-Referenz sicher in die Delegate-Scopes zu übernehmen.
   $runCompleted = {
     param($sender, $e)
     try {
-      # Restore progress bar to normal
-      # $script:progressBar wird zur Laufzeit aus dem Script-Scope aufgelöst (nicht eingefroren)
       try {
-        $script:progressBar.Style   = [System.Windows.Forms.ProgressBarStyle]::Continuous
-        $script:progressBar.Maximum = 100
-        $script:progressBar.Value   = 100
+        if ($progressControl -and -not $progressControl.IsDisposed) {
+          $progressControl.Style   = [System.Windows.Forms.ProgressBarStyle]::Continuous
+          $progressControl.Maximum = 100
+          $progressControl.Value   = 100
+        }
       } catch {
-        Write-Log "Async completion UI reset warning: $($_.Exception.Message)"
+        & $_SafeLog "Async completion UI reset warning: $($_.Exception.Message)"
       }
 
       # Execute completion callback with result
@@ -1096,7 +1151,7 @@ function Invoke-AsyncOperation {
         try {
           & $_OnComplete $e.Result
         } catch {
-          Write-Log "Async completion callback error: $($_.Exception.Message)"
+          & $_SafeLog "Async completion callback error: $($_.Exception.Message)"
           Update-Status "Operation completed with errors"
         }
       }
@@ -1107,14 +1162,21 @@ function Invoke-AsyncOperation {
         $hideTimer.Interval = 1000
         $hideTimer.Add_Tick({
           param($sender, $e)
-          $script:progressBar.Visible = $false
-          $script:progressBar.Value = 0
-          $sender.Stop()
-          $sender.Dispose()
+          try {
+            if ($progressControl -and -not $progressControl.IsDisposed) {
+                $progressControl.Visible = $false
+                $progressControl.Value = 0
+              }
+          } catch {
+            & $_SafeLog "Async completion timer tick warning: $($_.Exception.Message)"
+          } finally {
+            try { $sender.Stop() } catch {}
+            try { $sender.Dispose() } catch {}
+          }
         })
         $hideTimer.Start()
       } catch {
-        Write-Log "Async completion timer warning: $($_.Exception.Message)"
+        & $_SafeLog "Async completion timer warning: $($_.Exception.Message)"
       }
     } finally {
       # Re-enable controls even if callback/UI reset throws
@@ -2946,11 +3008,11 @@ $scanDiscoveredButton.Add_Click({
     # 1. Vorhandene Apps checken (EXTREM SCHNELL DURCH "Resolve" STATT "Try-Resolve")
     Update-Status "Loading existing managed apps to filter them out..."
     [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-    $existingApps = @(Get-WtWin32Apps -Superseded:$false -ErrorAction SilentlyContinue 3>$null 4>$null)
+    $existingApps = @(Get-WtWin32Apps -Superseded:$false -ErrorAction SilentlyContinue 2>$null 3>$null 4>$null 5>$null 6>$null)
     $existingPackageIds = [System.Collections.Generic.List[object]]::new()
     foreach ($eApp in $existingApps) {
 		[System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-        $id = Resolve-WtWingetId -AppOrResult $eApp
+        $id = Resolve-WtWingetId -AppOrResult $eApp 2>$null 3>$null 4>$null 5>$null 6>$null
         if ($id) { $existingPackageIds.Add($id) }
     }
 
@@ -2964,7 +3026,7 @@ $scanDiscoveredButton.Add_Click({
     $pageCount = 0
 
     do {
-        $response = Invoke-MgRestMethod -Uri $uri -Method GET -ErrorAction Stop
+        $response = Invoke-MgRestMethod -Uri $uri -Method GET -ErrorAction Stop 2>$null 3>$null 4>$null 5>$null 6>$null
         if ($response.value) { $detectedApps.AddRange([object[]]$response.value) }
         $uri = $response.'@odata.nextLink'
         $pageCount++
@@ -3007,7 +3069,7 @@ $scanDiscoveredButton.Add_Click({
 
             if ([string]::IsNullOrWhiteSpace($searchName)) { continue }
 
-            $wingetResults = @(Search-WtWinGetPackage -SearchQuery $searchName -ErrorAction SilentlyContinue 3>$null 4>$null)
+            $wingetResults = @(Search-WtWinGetPackage -SearchQuery $searchName -ErrorAction SilentlyContinue 2>$null 3>$null 4>$null 5>$null 6>$null)
             
             $bestMatch = $null
             $highestScore = 0
