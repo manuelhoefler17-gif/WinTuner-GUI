@@ -977,6 +977,27 @@ function Write-Log {
   }
 }
 
+# Logging helper that never throws if Write-Log is unavailable in delegate scopes
+function Write-LogSafe {
+  param([string]$Message)
+  if ([string]::IsNullOrWhiteSpace($Message)) { return }
+  try {
+    if (Get-Command -Name Write-Log -CommandType Function -ErrorAction SilentlyContinue) {
+      & (Get-Command -Name Write-Log -CommandType Function) $Message
+      return
+    }
+  } catch {}
+  try {
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logLine = "$timestamp - $Message"
+    $base = if ($PSScriptRoot) { $PSScriptRoot } else { [Environment]::GetFolderPath('LocalApplicationData') }
+    if ([string]::IsNullOrWhiteSpace($base)) { $base = [Environment]::GetFolderPath('LocalApplicationData') }
+    if (-not (Test-Path $base)) { New-Item -ItemType Directory -Path $base -Force | Out-Null }
+    $logPath = Join-Path $base 'WinTuner_GUI.log'
+    Add-Content -Path $logPath -Value $logLine -Encoding utf8 -ErrorAction SilentlyContinue
+  } catch {}
+}
+
 # Runs an action on the UI thread if required
 function Invoke-UiAction {
   param(
@@ -1007,7 +1028,12 @@ function Update-Status {
   } catch {
     # Keep status updates non-fatal even on cross-thread/disposed-control races
   }
-  Write-Log $status
+  try {
+    $safeLogger = Get-Command -Name Write-LogSafe -CommandType Function -ErrorAction SilentlyContinue
+    if ($safeLogger) {
+      & $safeLogger $status
+    }
+  } catch {}
 }
 
 # Async operation helper - runs long operations in background
@@ -1059,8 +1085,9 @@ function Invoke-AsyncOperation {
     param([string]$Msg)
     if ([string]::IsNullOrWhiteSpace($Msg)) { return }
     try {
-      if (Get-Command -Name Write-Log -CommandType Function -ErrorAction SilentlyContinue) {
-        Write-Log $Msg
+      $safeLogger = Get-Command -Name Write-LogSafe -CommandType Function -ErrorAction SilentlyContinue
+      if ($safeLogger) {
+        & $safeLogger $Msg
         return
       }
     } catch {}
