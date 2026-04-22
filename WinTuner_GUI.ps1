@@ -2946,11 +2946,11 @@ $scanDiscoveredButton.Add_Click({
     # 1. Vorhandene Apps checken (EXTREM SCHNELL DURCH "Resolve" STATT "Try-Resolve")
     Update-Status "Loading existing managed apps to filter them out..."
     [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-    $existingApps = @(Get-WtWin32Apps -Superseded:$false -ErrorAction SilentlyContinue 3>$null 4>$null)
+    $existingApps = @(Get-WtWin32Apps -Superseded:$false -ErrorAction SilentlyContinue 2>$null 3>$null 4>$null 5>$null 6>$null)
     $existingPackageIds = [System.Collections.Generic.List[object]]::new()
     foreach ($eApp in $existingApps) {
 		[System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-        $id = Resolve-WtWingetId -AppOrResult $eApp
+        $id = Resolve-WtWingetId -AppOrResult $eApp 2>$null 3>$null 4>$null 5>$null 6>$null
         if ($id) { $existingPackageIds.Add($id) }
     }
 
@@ -2964,7 +2964,7 @@ $scanDiscoveredButton.Add_Click({
     $pageCount = 0
 
     do {
-        $response = Invoke-MgRestMethod -Uri $uri -Method GET -ErrorAction Stop
+        $response = Invoke-MgRestMethod -Uri $uri -Method GET -ErrorAction Stop 2>$null 3>$null 4>$null 5>$null 6>$null
         if ($response.value) { $detectedApps.AddRange([object[]]$response.value) }
         $uri = $response.'@odata.nextLink'
         $pageCount++
@@ -3007,7 +3007,7 @@ $scanDiscoveredButton.Add_Click({
 
             if ([string]::IsNullOrWhiteSpace($searchName)) { continue }
 
-            $wingetResults = @(Search-WtWinGetPackage -SearchQuery $searchName -ErrorAction SilentlyContinue 3>$null 4>$null)
+            $wingetResults = @(Search-WtWinGetPackage -SearchQuery $searchName -ErrorAction SilentlyContinue 2>$null 3>$null 4>$null 5>$null 6>$null)
             
             $bestMatch = $null
             $highestScore = 0
