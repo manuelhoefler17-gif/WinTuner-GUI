@@ -1055,6 +1055,23 @@ function Invoke-AsyncOperation {
   $_ScriptBlock     = $ScriptBlock
   $_OnComplete      = $OnComplete
   $_DisableControls = $DisableControls
+  $_SafeLog         = {
+    param([string]$Msg)
+    if ([string]::IsNullOrWhiteSpace($Msg)) { return }
+    try {
+      if (Get-Command -Name Write-Log -CommandType Function -ErrorAction SilentlyContinue) {
+        Write-Log $Msg
+        return
+      }
+    } catch {}
+    try {
+      $base = if ($PSScriptRoot) { $PSScriptRoot } else { [Environment]::GetFolderPath('LocalApplicationData') }
+      if (-not (Test-Path $base)) { New-Item -ItemType Directory -Path $base -Force | Out-Null }
+      $logPath = Join-Path $base 'WinTuner_GUI.log'
+      $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+      Add-Content -Path $logPath -Value "$timestamp - $Msg" -Encoding utf8 -ErrorAction SilentlyContinue
+    } catch {}
+  }.GetNewClosure()
 
   # Do work in background
   $doWork = {
@@ -1088,7 +1105,7 @@ function Invoke-AsyncOperation {
         $script:progressBar.Maximum = 100
         $script:progressBar.Value   = 100
       } catch {
-        Write-Log "Async completion UI reset warning: $($_.Exception.Message)"
+        & $_SafeLog "Async completion UI reset warning: $($_.Exception.Message)"
       }
 
       # Execute completion callback with result
@@ -1096,7 +1113,7 @@ function Invoke-AsyncOperation {
         try {
           & $_OnComplete $e.Result
         } catch {
-          Write-Log "Async completion callback error: $($_.Exception.Message)"
+          & $_SafeLog "Async completion callback error: $($_.Exception.Message)"
           Update-Status "Operation completed with errors"
         }
       }
@@ -1114,7 +1131,7 @@ function Invoke-AsyncOperation {
         })
         $hideTimer.Start()
       } catch {
-        Write-Log "Async completion timer warning: $($_.Exception.Message)"
+        & $_SafeLog "Async completion timer warning: $($_.Exception.Message)"
       }
     } finally {
       # Re-enable controls even if callback/UI reset throws
