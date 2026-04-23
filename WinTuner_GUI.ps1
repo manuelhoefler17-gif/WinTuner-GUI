@@ -58,6 +58,7 @@ $PSDefaultParameterValues = @{
 $script:appVersion  = "0.10.11"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
+$script:skipLowValueWingetCandidates = $false  # keep all apps by default; set $true for faster scans with possible omissions
 
 # --- Runtime state (set during execution) ---
 # $script:isConnected      – whether the user is logged in to a tenant
@@ -1238,6 +1239,26 @@ function Test-WtConnected {
   } catch { return $false }
 }
 
+# Heuristic filter to avoid very slow/low-value WinGet queries (mainly mobile/system artifacts)
+function Test-WingetSearchCandidate {
+  param(
+    [string]$DisplayName
+  )
+
+  if ([string]::IsNullOrWhiteSpace($DisplayName)) { return $false }
+  $name = $DisplayName.Trim()
+  if ($name.Length -lt 3) { return $false }
+
+  # Android-style package ids and similar technical identifiers are typically not useful for WinGet search
+  if ($name -match '^[a-z0-9]+(\.[a-z0-9_]+){2,}$') { return $false }
+  if ($name -match '(?i)^com\.') { return $false }
+
+  # Skip common mobile/system terms that frequently stall searches and rarely map to WinGet packages
+  if ($name -match '(?i)\b(apn|provisioner|sim toolkit|sim card|carrier services|system ui|one ui home|setup wizard)\b') { return $false }
+
+  return $true
+}
+
 # Helper: toggle UI based on connection state
 function Set-ConnectedUIState {
   param([bool]$Connected)
@@ -1261,6 +1282,7 @@ function Set-ConnectedUIState {
   if ($rememberCheckBox) { $rememberCheckBox.Visible = -not $Connected }
   if ($updateSearchButton) { $updateSearchButton.Enabled = $Connected }
   if ($scanDiscoveredButton) { $scanDiscoveredButton.Enabled = $Connected }
+  if ($exportDiscoveredCsvButton) { $exportDiscoveredCsvButton.Enabled = ($Connected -and $script:discoveredRaw -and $script:discoveredRaw.Count -gt 0) }
   if ($updateSelectedButton) { $updateSelectedButton.Enabled = $Connected }
   if ($updateAllButton) { $updateAllButton.Enabled = $Connected }
   if ($supersededSearchButton) { $supersededSearchButton.Enabled = $Connected }
@@ -1646,6 +1668,13 @@ $deployDiscoveredButton.Location = New-Object System.Drawing.Point(230,50)
 $deployDiscoveredButton.Width = 200
 $deployDiscoveredButton.Enabled = $false
 $tabDiscovered.Controls.Add($deployDiscoveredButton)
+
+$exportDiscoveredCsvButton = New-Object System.Windows.Forms.Button
+$exportDiscoveredCsvButton.Text = "3. Export Winget IDs CSV"
+$exportDiscoveredCsvButton.Location = New-Object System.Drawing.Point(440,50)
+$exportDiscoveredCsvButton.Width = 190
+$exportDiscoveredCsvButton.Enabled = $false
+$tabDiscovered.Controls.Add($exportDiscoveredCsvButton)
 
 $checkAllDiscoveredButton = New-Object System.Windows.Forms.Button
 $checkAllDiscoveredButton.Text = "☑ Check All"
@@ -2856,7 +2885,7 @@ function Update-DiscoveredListUI {
         if (-not [string]::IsNullOrWhiteSpace($searchText)) {
             $escapedSearch = [regex]::Escape($searchText)
             # Wenn der Text weder im Anzeigenamen noch im Winget-Namen vorkommt, ist es kein Match
-            if (($item.DisplayName -notmatch "(?i)$escapedSearch") -and ($item.WingetApp.Name -notmatch "(?i)$escapedSearch")) {
+            if (($item.DisplayName -notmatch "(?i)$escapedSearch") -and ($item.WingetApp.Name -notmatch "(?i)$escapedSearch") -and ($item.WingetApp.PackageID -notmatch "(?i)$escapedSearch")) {
                 $match = $false
             }
         }
@@ -2946,6 +2975,7 @@ $scanDiscoveredButton.Add_Click({
   try {
     $scanDiscoveredButton.Enabled = $false
     $deployDiscoveredButton.Enabled = $false
+    $exportDiscoveredCsvButton.Enabled = $false
     $discoveredListBox.Items.Clear()
     $script:discoveredRaw = [System.Collections.Generic.List[object]]::new()
     
@@ -3051,6 +3081,7 @@ $scanDiscoveredButton.Add_Click({
 
     # Prepare normalized list first (phase 1) so matching can run with cached query results (phase 2)
     $normalizedApps = [System.Collections.Generic.List[object]]::new()
+    $skippedNonCandidateCount = 0
     foreach ($app in $filteredApps) {
         # 1. Entfernt restlos alles, was in Klammern steht (z.B. "(x64 de)", "(x86 en-US)")
         $searchName = $app.displayName -replace '\s*\([^)]*\)', ''
@@ -3058,6 +3089,12 @@ $scanDiscoveredButton.Add_Click({
         $searchName = $searchName -replace '\s+[\d\.]+', ''
         $searchName = $searchName.Trim()
         if ([string]::IsNullOrWhiteSpace($searchName)) { continue }
+        if (-not (Test-WingetSearchCandidate -DisplayName $searchName)) {
+            if ($script:skipLowValueWingetCandidates) {
+                $skippedNonCandidateCount++
+                continue
+            }
+        }
         $normalizedApps.Add([pscustomobject]@{
             App        = $app
             SearchName = $searchName
@@ -3073,8 +3110,8 @@ $scanDiscoveredButton.Add_Click({
     $uniqueSearchNames = @($normalizedApps | Select-Object -ExpandProperty SearchName -Unique)
     $queryTotal = $uniqueSearchNames.Count
     $queryCurrent = 0
-    Update-Status "Prepared $($normalizedApps.Count) apps for matching ($queryTotal unique search terms)."
-    Write-Log "Discovery prep -> Filtered apps: $total, Normalized apps: $($normalizedApps.Count), Unique search terms: $queryTotal"
+    Update-Status "Prepared $($normalizedApps.Count) apps for matching ($queryTotal unique search terms, skipped: $skippedNonCandidateCount, skip-mode: $($script:skipLowValueWingetCandidates))."
+    Write-Log "Discovery prep -> Filtered apps: $total, Normalized apps: $($normalizedApps.Count), Unique search terms: $queryTotal, Skipped non-candidates: $skippedNonCandidateCount, Skip-mode: $($script:skipLowValueWingetCandidates)"
 
     # Phase 1: fetch/search all unique terms
     $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
@@ -3140,7 +3177,7 @@ $scanDiscoveredButton.Add_Click({
                     # App existiert bereits in der Liste: Wir addieren die Geräteanzahl (DeviceCount)
                     $existingEntry.DeviceCount += $app.deviceCount
                     # Den Anzeigetext mit der neuen, kombinierten Anzahl aktualisieren
-                    $existingEntry.DisplayText = "[$($existingEntry.DeviceCount) PCs] $($existingEntry.DisplayName) ($($existingEntry.Publisher))  -->  Winget: $($existingEntry.WingetApp.Name)"
+                    $existingEntry.DisplayText = "[$($existingEntry.DeviceCount) PCs] $($existingEntry.DisplayName) ($($existingEntry.Publisher))  -->  Winget: $($existingEntry.WingetApp.Name) [$($existingEntry.WingetApp.PackageID)]"
                 } else {
                     # App ist neu: Wir nutzen den sauberen Winget-Namen (ohne Versionsnummern aus Intune)
                     $cleanName = $bestMatch.Name
@@ -3150,7 +3187,7 @@ $scanDiscoveredButton.Add_Click({
                         DeviceCount = $app.deviceCount
                         WingetApp   = $bestMatch
                         Checked     = $false
-                        DisplayText = "[$($app.deviceCount) PCs] $cleanName ($($app.publisher))  -->  Winget: $($bestMatch.Name)"
+                        DisplayText = "[$($app.deviceCount) PCs] $cleanName ($($app.publisher))  -->  Winget: $($bestMatch.Name) [$($bestMatch.PackageID)]"
                     }
                     $script:discoveredRaw.Add($itemObj)
                     $discoveredByPackageId[$bestMatch.PackageID] = $itemObj
@@ -3183,10 +3220,12 @@ $scanDiscoveredButton.Add_Click({
         Update-Status "Scanned: $($detectedApps.Count) | Filtered: $total | Matched apps: $matchedRawCount | Unique packages: $matchCount"
         Write-Log "Discovery summary -> Scanned: $($detectedApps.Count), Filtered: $total, Matched apps: $matchedRawCount, Unique packages: $matchCount"
         $deployDiscoveredButton.Enabled = $true
+        $exportDiscoveredCsvButton.Enabled = $true
         $checkAllDiscoveredButton.Enabled = $true
         $uncheckAllDiscoveredButton.Enabled = $true
     } else {
         Update-Status "No Winget matches found (or all are already managed)."
+        $exportDiscoveredCsvButton.Enabled = $false
     }
 
   } catch {
@@ -3290,6 +3329,43 @@ $deployDiscoveredButton.Add_Click({
         $script:progressBar.Maximum = 100
         $script:progressBar.Value = 0
         $script:progressBar.Visible = $false
+    }
+})
+
+$exportDiscoveredCsvButton.Add_Click({
+    if (-not $script:discoveredRaw -or $script:discoveredRaw.Count -eq 0) {
+        Update-Status "No discovered Winget matches to export."
+        return
+    }
+
+    $sfd = New-Object System.Windows.Forms.SaveFileDialog
+    $sfd.Title = "Export Discovered Winget IDs"
+    $sfd.Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*"
+    $sfd.FileName = ("Discovered_WingetIDs_{0}.csv" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
+
+    if ($sfd.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
+        Update-Status "CSV export canceled."
+        return
+    }
+
+    try {
+        $rows = @($script:discoveredRaw | Sort-Object DisplayName | ForEach-Object {
+            [pscustomobject]@{
+                DisplayName   = $_.DisplayName
+                Publisher     = $_.Publisher
+                DeviceCount   = $_.DeviceCount
+                WingetName    = $_.WingetApp.Name
+                WingetId      = $_.WingetApp.PackageID
+                WingetVersion = $_.WingetApp.Version
+            }
+        })
+
+        $rows | Export-Csv -Path $sfd.FileName -NoTypeInformation -Encoding utf8
+        Write-Log "Exported discovered Winget IDs: $($rows.Count) row(s) -> $($sfd.FileName)"
+        Update-Status "Export completed: $($rows.Count) row(s) saved to $($sfd.FileName)"
+    } catch {
+        Write-Log "Export discovered Winget IDs failed: $($_.Exception.Message)"
+        Update-Status "CSV export failed: $($_.Exception.Message)"
     }
 })
 # Apply initial theme (Dark by default)
@@ -3415,6 +3491,7 @@ if ($removeOldAppsButton)   { $toolTip.SetToolTip($removeOldAppsButton,   "Delet
 
 # tabDiscovered
 if ($deployDiscoveredButton){ $toolTip.SetToolTip($deployDiscoveredButton,"Deploy the checked discovered apps to Microsoft Intune") }
+if ($exportDiscoveredCsvButton){ $toolTip.SetToolTip($exportDiscoveredCsvButton,"Export discovered apps with Winget IDs to a CSV file") }
 if ($checkAllDiscoveredButton)  { $toolTip.SetToolTip($checkAllDiscoveredButton,   "Check all apps in the discovered apps list") }
 if ($uncheckAllDiscoveredButton){ $toolTip.SetToolTip($uncheckAllDiscoveredButton, "Uncheck all apps in the discovered apps list") }
 
