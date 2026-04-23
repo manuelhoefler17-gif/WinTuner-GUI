@@ -3046,7 +3046,8 @@ $scanDiscoveredButton.Add_Click({
     })
 
     $total = $filteredApps.Count
-    $matchCount = 0
+    $matchCount = 0              # unique PackageIDs shown in UI
+    $matchedRawCount = 0         # total matched detected apps (before dedupe)
 
     # Prepare normalized list first (phase 1) so matching can run with cached query results (phase 2)
     $normalizedApps = [System.Collections.Generic.List[object]]::new()
@@ -3072,6 +3073,8 @@ $scanDiscoveredButton.Add_Click({
     $uniqueSearchNames = @($normalizedApps | Select-Object -ExpandProperty SearchName -Unique)
     $queryTotal = $uniqueSearchNames.Count
     $queryCurrent = 0
+    Update-Status "Prepared $($normalizedApps.Count) apps for matching ($queryTotal unique search terms)."
+    Write-Log "Discovery prep -> Filtered apps: $total, Normalized apps: $($normalizedApps.Count), Unique search terms: $queryTotal"
 
     # Phase 1: fetch/search all unique terms
     $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
@@ -3082,7 +3085,7 @@ $scanDiscoveredButton.Add_Click({
         $queryCurrent++
         $script:progressBar.Value = $queryCurrent
         if (($queryCurrent -eq 1) -or ($queryCurrent % 25 -eq 0) -or ($queryCurrent -eq $queryTotal)) {
-            Update-Status "Querying WinGet ($queryCurrent/$queryTotal): $searchName"
+            Update-Status "Querying WinGet unique terms ($queryCurrent/$queryTotal) from $($normalizedApps.Count) apps: $searchName"
             [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
         }
         try {
@@ -3124,6 +3127,7 @@ $scanDiscoveredButton.Add_Click({
             }
 
             if ($bestMatch -and $highestScore -ge 50) {
+                $matchedRawCount++
                 if ($existingPackageIds -contains $bestMatch.PackageID) { continue }
 
                 # Prüfen, ob diese Winget-App (PackageID) bereits vorhanden ist
@@ -3176,7 +3180,8 @@ $scanDiscoveredButton.Add_Click({
     Update-DiscoveredListUI
 
     if ($matchCount -gt 0) {
-        Update-Status "Found $matchCount Winget match(es). Filter, sort, or deploy them!"
+        Update-Status "Scanned: $($detectedApps.Count) | Filtered: $total | Matched apps: $matchedRawCount | Unique packages: $matchCount"
+        Write-Log "Discovery summary -> Scanned: $($detectedApps.Count), Filtered: $total, Matched apps: $matchedRawCount, Unique packages: $matchCount"
         $deployDiscoveredButton.Enabled = $true
         $checkAllDiscoveredButton.Enabled = $true
         $uncheckAllDiscoveredButton.Enabled = $true
