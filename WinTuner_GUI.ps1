@@ -1671,8 +1671,8 @@ $tabDiscovered.Controls.Add($deployDiscoveredButton)
 
 $exportDiscoveredCsvButton = New-Object System.Windows.Forms.Button
 $exportDiscoveredCsvButton.Text = "3. Export Winget IDs CSV"
-$exportDiscoveredCsvButton.Location = New-Object System.Drawing.Point(440,50)
-$exportDiscoveredCsvButton.Width = 190
+$exportDiscoveredCsvButton.Location = New-Object System.Drawing.Point(250,74)
+$exportDiscoveredCsvButton.Width = 180
 $exportDiscoveredCsvButton.Enabled = $false
 $tabDiscovered.Controls.Add($exportDiscoveredCsvButton)
 
