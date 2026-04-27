@@ -12,6 +12,7 @@
 # v0.10.1 – Fix: Synchronize RememberMe checkboxes (login page ↔ Settings tab)
 # v0.10.0 – Phase 6: Login/Logout improvements & recent users ComboBox
 # --- PowerShell version gate (runs on PS<7 without parsing the main body) ---
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 try { $psMajor = $PSVersionTable.PSVersion.Major } catch { $psMajor = 0 }
 if ($psMajor -lt 7) {
     try { Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue } catch {}
