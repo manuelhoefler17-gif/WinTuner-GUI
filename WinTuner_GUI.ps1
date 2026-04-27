@@ -55,7 +55,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.7"
+$script:appVersion  = "0.10.11"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 $script:skipLowValueWingetCandidates = $false  # keep all apps by default; set $true for faster scans with possible omissions
