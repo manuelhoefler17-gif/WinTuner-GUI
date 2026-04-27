@@ -1,4 +1,9 @@
 # WinTuner GUI by Manuel Höfler
+# v0.10.11 – Hotfix: $progressBar/$statusLabel/$outputBox als $script: Variablen für BackgroundWorker-Closures
+# v0.10.10 – Hotfix: Invoke-AsyncOperation Closure-Bug – $progressBar war $null in RunWorkerCompleted
+# v0.10.9 – Hotfix: ProgressBar Maximum-Reset an allen Stellen + graceful "not found" bei Remove
+# v0.10.8 – Hotfix: Update-Check status feedback & checkUpdateButton re-enable after async
+# v0.10.7 – Fix: Phase 5 – error handling, security, module import guard
 # v0.10.6 – Fix: Phase 4 – performance improvements & code quality
 # v0.10.5 – Fix: Phase 3 – UX improvements, ProgressBar crash hotfix, batch update summary
 # v0.10.4 – Fix: Phase 2 – async update check, disconnect timeout, dead code removal
@@ -50,9 +55,10 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.6"
+$script:appVersion  = "0.10.11"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
+$script:skipLowValueWingetCandidates = $false  # keep all apps by default; set $true for faster scans with possible omissions
 
 # --- Runtime state (set during execution) ---
 # $script:isConnected      – whether the user is logged in to a tenant
@@ -276,6 +282,112 @@ function Invoke-AppSelfUpdate {
       [System.Windows.Forms.MessageBoxIcon]::Error
     )
     return $false
+  }
+}
+
+function Invoke-UpdateCheckFeedback {
+  param(
+    [object]$UpdateResult,
+    [ValidateSet('Manual','Startup')]
+    [string]$Context = 'Manual'
+  )
+
+  $isManual = ($Context -eq 'Manual')
+  $errorDetail = if ($UpdateResult -and $UpdateResult.Error) { $UpdateResult.Error } `
+                 elseif ($UpdateResult -and $UpdateResult.ErrorMessage) { $UpdateResult.ErrorMessage } `
+                 else { $null }
+
+  if ($errorDetail) {
+    if ($isManual) {
+      [System.Windows.Forms.MessageBox]::Show(
+        "Could not check for updates.`n`nError: $errorDetail`n`nCheck your internet connection and try again.",
+        "Update Check Failed",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+      )
+    }
+    Update-Status "Update check failed (v$($script:appVersion)) – check internet connection"
+    return
+  }
+
+  if ($UpdateResult -and $UpdateResult.UpdateAvailable) {
+    Update-Status "Update available: v$($UpdateResult.LatestVersion)"
+    try {
+      $msg  = "A new version of WinTuner GUI is available!`n`n"
+      $msg += "Current version: v$($script:appVersion)`n"
+      $msg += "Latest version:  v$($UpdateResult.LatestVersion)`n`n"
+
+      if ($UpdateResult.DownloadUrl) {
+        $msg += "Do you want to download and install the update now?`n`n"
+        $msg += "(A backup of your current version will be created)"
+
+        $answer = [System.Windows.Forms.MessageBox]::Show(
+          $msg,
+          "Update Available",
+          [System.Windows.Forms.MessageBoxButtons]::YesNo,
+          [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+
+        if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
+          Update-Status "Downloading update..."
+          [System.Windows.Forms.Application]::DoEvents()
+
+          $success = Invoke-AppSelfUpdate -DownloadUrl $UpdateResult.DownloadUrl -HashUrl $UpdateResult.HashUrl
+
+          if ($success) {
+            Update-Status "Update installed successfully. Please restart WinTuner GUI."
+            $restartMsg  = "Update installed successfully!`n`n"
+            $restartMsg += "WinTuner GUI needs to restart to apply the update.`n"
+            $restartMsg += "Click OK to close. Please start the script again manually."
+
+            [System.Windows.Forms.MessageBox]::Show(
+              $restartMsg,
+              "Update Complete",
+              [System.Windows.Forms.MessageBoxButtons]::OK,
+              [System.Windows.Forms.MessageBoxIcon]::Information
+            )
+
+            $form.Close()
+          } else {
+            Update-Status "Update download/install failed. See log for details."
+          }
+        } else {
+          if ($isManual) {
+            Update-Status "Update postponed by user"
+          } else {
+            Update-Status "Update available: v$($UpdateResult.LatestVersion) - Go to Settings to update later."
+          }
+        }
+      } else {
+        Update-Status "Update available: v$($UpdateResult.LatestVersion) (manual download required)"
+        $msg += "No direct download available for this release.`n"
+        $msg += "Please download manually from:`n$($UpdateResult.ReleaseUrl)"
+
+        [System.Windows.Forms.MessageBox]::Show(
+          $msg,
+          "Update Available",
+          [System.Windows.Forms.MessageBoxButtons]::OK,
+          [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+      }
+    } catch {
+      Write-Log "$Context update dialog error: $($_.Exception.Message)"
+      Update-Status "Update check completed (dialog error). See log for details."
+    }
+    return
+  }
+
+  $latestVer = if ($UpdateResult -and $UpdateResult.LatestVersion) { $UpdateResult.LatestVersion } else { "unknown" }
+  $statusMsg = "Up to date – Local: v$($script:appVersion) | GitHub: v$latestVer"
+  Update-Status $statusMsg
+
+  if ($isManual) {
+    [System.Windows.Forms.MessageBox]::Show(
+      "WinTuner GUI is up to date.`n`nLocal version:  v$($script:appVersion)`nGitHub version: v$latestVer",
+      "No Update Available",
+      [System.Windows.Forms.MessageBoxButtons]::OK,
+      [System.Windows.Forms.MessageBoxIcon]::Information
+    )
   }
 }
 
@@ -649,9 +761,9 @@ function Invoke-AppUpdateBatch {
   $checkAllButton.Enabled = $false
   $uncheckAllButton.Enabled = $false
 
-  $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-  $progressBar.MarqueeAnimationSpeed = 30
-  $progressBar.Visible = $true
+  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+  $script:progressBar.MarqueeAnimationSpeed = 30
+  $script:progressBar.Visible = $true
 
   $successCount = 0
   $failedCount = 0
@@ -717,9 +829,9 @@ function Invoke-AppUpdateBatch {
 
     return @{ SuccessCount = $successCount; FailedList = $failedList }
   } finally {
-    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $progressBar.Visible = $false
-    $progressBar.Value = 0
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $script:progressBar.Visible = $false
+    $script:progressBar.Value = 0
     $updateSelectedButton.Enabled = $true
     $updateAllButton.Enabled = $true
     $updateSearchButton.Enabled = $true
@@ -846,16 +958,16 @@ function Write-Log {
     }
     
     # Update UI - always try to append (suppress any errors)
-    if ($outputBox) {
+    if ($script:outputBox) {
       try {
-        if ($outputBox.InvokeRequired) {
+        if ($script:outputBox.InvokeRequired) {
           # Cross-thread call - use Invoke
-          $outputBox.Invoke([Action]{
-            $outputBox.AppendText("$logLine`r`n")
+          $script:outputBox.Invoke([Action]{
+            $script:outputBox.AppendText("$logLine`r`n")
           })
         } else {
           # Same thread - direct call
-          $outputBox.AppendText("$logLine`r`n")
+          $script:outputBox.AppendText("$logLine`r`n")
         }
       } catch {
         # Silently ignore UI update errors (threading issues)
@@ -866,11 +978,63 @@ function Write-Log {
   }
 }
 
+# Logging helper that never throws if Write-Log is unavailable in delegate scopes
+function Write-LogSafe {
+  param([string]$Message)
+  if ([string]::IsNullOrWhiteSpace($Message)) { return }
+  try {
+    if (Get-Command -Name Write-Log -CommandType Function -ErrorAction SilentlyContinue) {
+      & (Get-Command -Name Write-Log -CommandType Function) $Message
+      return
+    }
+  } catch {}
+  try {
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logLine = "$timestamp - $Message"
+    $base = if ($PSScriptRoot) { $PSScriptRoot } else { [Environment]::GetFolderPath('LocalApplicationData') }
+    if ([string]::IsNullOrWhiteSpace($base)) { $base = [Environment]::GetFolderPath('LocalApplicationData') }
+    if (-not (Test-Path $base)) { New-Item -ItemType Directory -Path $base -Force | Out-Null }
+    $logPath = Join-Path $base 'WinTuner_GUI.log'
+    Add-Content -Path $logPath -Value $logLine -Encoding utf8 -ErrorAction SilentlyContinue
+  } catch {}
+}
+
+# Runs an action on the UI thread if required
+function Invoke-UiAction {
+  param(
+    [Parameter(Mandatory=$true)]
+    [System.Windows.Forms.Control]$Control,
+    [Parameter(Mandatory=$true)]
+    [scriptblock]$Action
+  )
+
+  if (-not $Control) { return }
+  if ($Control.IsDisposed) { return }
+
+  if ($Control.InvokeRequired) {
+    $Control.Invoke([Action]$Action)
+  } else {
+    & $Action
+  }
+}
+
 # Status update function
 function Update-Status {
   param([string]$status)
-  $statusLabel.Text = $status
-  Write-Log $status
+  $statusText = if ([string]::IsNullOrWhiteSpace($status)) { "" } else { $status }
+  try {
+    Invoke-UiAction -Control $script:statusLabel -Action {
+      $script:statusLabel.Text = $statusText
+    }
+  } catch {
+    # Keep status updates non-fatal even on cross-thread/disposed-control races
+  }
+  try {
+    $safeLogger = Get-Command -Name Write-LogSafe -CommandType Function -ErrorAction SilentlyContinue
+    if ($safeLogger) {
+      & $safeLogger $status
+    }
+  } catch {}
 }
 
 # Async operation helper - runs long operations in background
@@ -894,12 +1058,24 @@ function Invoke-AsyncOperation {
     [string]$StatusText = "Processing...",
     [System.Windows.Forms.Control[]]$DisableControls = @()
   )
+
+  # Capture a stable ProgressBar reference for async callbacks (avoid script-scope resolution drift)
+  $progressControl = $null
+  if ($script:progressBar -is [System.Windows.Forms.ProgressBar] -and -not $script:progressBar.IsDisposed) {
+    $progressControl = $script:progressBar
+  }
   
   # Update UI - show progress in marquee style (indefinite)
   Update-Status $StatusText
-  $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-  $progressBar.MarqueeAnimationSpeed = 30
-  $progressBar.Visible = $true
+  if ($progressControl) {
+    try {
+      $progressControl.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+      $progressControl.MarqueeAnimationSpeed = 30
+      $progressControl.Visible = $true
+    } catch {
+      Write-LogSafe "Async start progress warning: $($_.Exception.Message)"
+    }
+  }
   
   # Disable controls
   foreach ($ctrl in $DisableControls) {
@@ -914,15 +1090,37 @@ function Invoke-AsyncOperation {
   # Store result
   $script:asyncResult = $null
   
+  # Lokale Kopien der Parameter für Closure-Binding
+  $_ScriptBlock     = $ScriptBlock
+  $_OnComplete      = $OnComplete
+  $_DisableControls = $DisableControls
+  $_SafeLog         = {
+    param([string]$Msg)
+    if ([string]::IsNullOrWhiteSpace($Msg)) { return }
+    try {
+      $safeLogger = Get-Command -Name Write-LogSafe -CommandType Function -ErrorAction SilentlyContinue
+      if ($safeLogger) {
+        & $safeLogger $Msg
+        return
+      }
+    } catch {}
+    try {
+      $base = if ($PSScriptRoot) { $PSScriptRoot } else { [Environment]::GetFolderPath('LocalApplicationData') }
+      if (-not (Test-Path $base)) { New-Item -ItemType Directory -Path $base -Force | Out-Null }
+      $logPath = Join-Path $base 'WinTuner_GUI.log'
+      $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+      Add-Content -Path $logPath -Value "$timestamp - $Msg" -Encoding utf8 -ErrorAction SilentlyContinue
+    } catch {}
+  }.GetNewClosure()
+
   # Do work in background
-  $bw.Add_DoWork({
+  $doWork = {
     param($sender, $e)
     try {
-      $e.Result = & $ScriptBlock
+      $e.Result = & $_ScriptBlock
     } catch {
       $errMsg = $_.Exception.Message
       $e.Result = @{ Error = $errMsg }
-      # Write directly to log file (thread-safe, no UI access)
       try {
         $base = if ($PSScriptRoot) { $PSScriptRoot } else { [Environment]::GetFolderPath('LocalApplicationData') }
         $logPath = Join-Path $base 'WinTuner_GUI.log'
@@ -930,48 +1128,68 @@ function Invoke-AsyncOperation {
         Add-Content -Path $logPath -Value "$timestamp - Async operation error: $errMsg" -Encoding utf8 -ErrorAction SilentlyContinue
       } catch {}
     }
-  })
-  
+  }.GetNewClosure()
+  $bw.Add_DoWork($doWork)
+
   # On completion (runs on UI thread)
-  $bw.Add_RunWorkerCompleted({
+  # .GetNewClosure() wird genutzt, um $_OnComplete und $_DisableControls sowie
+  # die stabile $progressControl-Referenz sicher in die Delegate-Scopes zu übernehmen.
+  $runCompleted = {
     param($sender, $e)
-    
-    # Restore progress bar to normal
-	$progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-	$progressBar.Maximum = 100   # ← Zeile hinzufügen
-	$progressBar.Value = 100
-    
-    # Re-enable controls
-    foreach ($ctrl in $DisableControls) {
-      if ($ctrl) { $ctrl.Enabled = $true }
-    }
-    
-    # Execute completion callback with result
-    if ($OnComplete) {
+    try {
       try {
-        & $OnComplete $e.Result
+        if ($progressControl -and -not $progressControl.IsDisposed) {
+          $progressControl.Style   = [System.Windows.Forms.ProgressBarStyle]::Continuous
+          $progressControl.Maximum = 100
+          $progressControl.Value   = 100
+        }
       } catch {
-        Write-Log "Async completion callback error: $($_.Exception.Message)"
-        Update-Status "Operation completed with errors"
+        & $_SafeLog "Async completion UI reset warning: $($_.Exception.Message)"
       }
-    }
-    
-    # Hide progress after short delay
-    $hideTimer = New-Object System.Windows.Forms.Timer
-    $hideTimer.Interval = 1000
-    $hideTimer.Add_Tick({
-      param($sender, $e)
-      $progressBar.Visible = $false
-      $progressBar.Value = 0
-      $sender.Stop()
+
+      # Execute completion callback with result
+      if ($_OnComplete) {
+        try {
+          & $_OnComplete $e.Result
+        } catch {
+          & $_SafeLog "Async completion callback error: $($_.Exception.Message)"
+          Update-Status "Operation completed with errors"
+        }
+      }
+
+      # Hide progress after short delay
+      try {
+        $hideTimer = New-Object System.Windows.Forms.Timer
+        $hideTimer.Interval = 1000
+        $hideTimer.Add_Tick({
+          param($sender, $e)
+          try {
+            if ($progressControl -and -not $progressControl.IsDisposed) {
+                $progressControl.Visible = $false
+                $progressControl.Value = 0
+              }
+          } catch {
+            & $_SafeLog "Async completion timer tick warning: $($_.Exception.Message)"
+          } finally {
+            try { $sender.Stop() } catch {}
+            try { $sender.Dispose() } catch {}
+          }
+        })
+        $hideTimer.Start()
+      } catch {
+        & $_SafeLog "Async completion timer warning: $($_.Exception.Message)"
+      }
+    } finally {
+      # Re-enable controls even if callback/UI reset throws
+      foreach ($ctrl in $_DisableControls) {
+        if ($ctrl) { $ctrl.Enabled = $true }
+      }
+      # Dispose the BackgroundWorker to prevent memory leaks
       $sender.Dispose()
-    })
-    $hideTimer.Start()
-    
-    # Dispose the BackgroundWorker to prevent memory leaks
-    $sender.Dispose()
-  })
-  
+    }
+  }.GetNewClosure()
+  $bw.Add_RunWorkerCompleted($runCompleted)
+
   # Start async operation
   $bw.RunWorkerAsync()
 }
@@ -1021,6 +1239,26 @@ function Test-WtConnected {
   } catch { return $false }
 }
 
+# Heuristic filter to avoid very slow/low-value WinGet queries (mainly mobile/system artifacts)
+function Test-WingetSearchCandidate {
+  param(
+    [string]$DisplayName
+  )
+
+  if ([string]::IsNullOrWhiteSpace($DisplayName)) { return $false }
+  $name = $DisplayName.Trim()
+  if ($name.Length -lt 3) { return $false }
+
+  # Android-style package ids and similar technical identifiers are typically not useful for WinGet search
+  if ($name -match '^[a-z0-9]+(\.[a-z0-9_]+){2,}$') { return $false }
+  if ($name -match '(?i)^com\.') { return $false }
+
+  # Skip common mobile/system terms that frequently stall searches and rarely map to WinGet packages
+  if ($name -match '(?i)\b(apn|provisioner|sim toolkit|sim card|carrier services|system ui|one ui home|setup wizard)\b') { return $false }
+
+  return $true
+}
+
 # Helper: toggle UI based on connection state
 function Set-ConnectedUIState {
   param([bool]$Connected)
@@ -1044,6 +1282,7 @@ function Set-ConnectedUIState {
   if ($rememberCheckBox) { $rememberCheckBox.Visible = -not $Connected }
   if ($updateSearchButton) { $updateSearchButton.Enabled = $Connected }
   if ($scanDiscoveredButton) { $scanDiscoveredButton.Enabled = $Connected }
+  if ($exportDiscoveredCsvButton) { $exportDiscoveredCsvButton.Enabled = ($Connected -and $script:discoveredRaw -and $script:discoveredRaw.Count -gt 0) }
   if ($updateSelectedButton) { $updateSelectedButton.Enabled = $Connected }
   if ($updateAllButton) { $updateAllButton.Enabled = $Connected }
   if ($supersededSearchButton) { $supersededSearchButton.Enabled = $Connected }
@@ -1159,31 +1398,31 @@ $usernameBox.add_TextChanged({
 })
 
 # Status label
-$statusLabel = New-Object System.Windows.Forms.Label
-$statusLabel.Text = ""
-$statusLabel.Location = New-Object System.Drawing.Point(10, 745)
-$statusLabel.Width = 750
-$statusLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
-$form.Controls.Add($statusLabel)
+$script:statusLabel = New-Object System.Windows.Forms.Label
+$script:statusLabel.Text = ""
+$script:statusLabel.Location = New-Object System.Drawing.Point(10, 745)
+$script:statusLabel.Width = 750
+$script:statusLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+$form.Controls.Add($script:statusLabel)
 
 # Output textbox (Log area below tabs and progress bar)
-$outputBox = New-Object System.Windows.Forms.TextBox
-$outputBox.Location = New-Object System.Drawing.Point(10, 620)
-$outputBox.Size = New-Object System.Drawing.Size(760, 120)
-$outputBox.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
-$outputBox.Multiline = $true
-$outputBox.ScrollBars = "Vertical"
-$outputBox.ReadOnly = $true
-$form.Controls.Add($outputBox)
+$script:outputBox = New-Object System.Windows.Forms.TextBox
+$script:outputBox.Location = New-Object System.Drawing.Point(10, 620)
+$script:outputBox.Size = New-Object System.Drawing.Size(760, 120)
+$script:outputBox.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+$script:outputBox.Multiline = $true
+$script:outputBox.ScrollBars = "Vertical"
+$script:outputBox.ReadOnly = $true
+$form.Controls.Add($script:outputBox)
 
 # Progress bar (appears between tabs and log when active)
-$progressBar = New-Object System.Windows.Forms.ProgressBar
-$progressBar.Location = New-Object System.Drawing.Point(10, 595)
-$progressBar.Width = 760
-$progressBar.Height = 20
-$progressBar.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
-$progressBar.Visible = $false
-$form.Controls.Add($progressBar)
+$script:progressBar = New-Object System.Windows.Forms.ProgressBar
+$script:progressBar.Location = New-Object System.Drawing.Point(10, 595)
+$script:progressBar.Width = 760
+$script:progressBar.Height = 20
+$script:progressBar.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+$script:progressBar.Visible = $false
+$form.Controls.Add($script:progressBar)
 
 # Logout button
 $logoutButton = New-Object System.Windows.Forms.Button
@@ -1430,6 +1669,13 @@ $deployDiscoveredButton.Width = 200
 $deployDiscoveredButton.Enabled = $false
 $tabDiscovered.Controls.Add($deployDiscoveredButton)
 
+$exportDiscoveredCsvButton = New-Object System.Windows.Forms.Button
+$exportDiscoveredCsvButton.Text = "3. Export Winget IDs CSV"
+$exportDiscoveredCsvButton.Location = New-Object System.Drawing.Point(250,74)
+$exportDiscoveredCsvButton.Width = 180
+$exportDiscoveredCsvButton.Enabled = $false
+$tabDiscovered.Controls.Add($exportDiscoveredCsvButton)
+
 $checkAllDiscoveredButton = New-Object System.Windows.Forms.Button
 $checkAllDiscoveredButton.Text = "☑ Check All"
 $checkAllDiscoveredButton.Location = New-Object System.Drawing.Point(20,74)
@@ -1644,85 +1890,13 @@ $checkUpdateButton.Height = 35
 $tabSettings.Controls.Add($checkUpdateButton)
 
 $checkUpdateButton.Add_Click({
-  Invoke-AsyncOperation -StatusText "Checking for updates..." -DisableControls @($checkUpdateButton) -ScriptBlock {
+  $checkUpdateButton.Enabled = $false
+  Invoke-AsyncOperation -StatusText "Checking for updates..." -ScriptBlock {
     Test-AppUpdateAvailable
   } -OnComplete {
     param($updateResult)
-    # Consolidate error checking: Invoke-AsyncOperation wraps thrown exceptions as .Error;
-    # Test-AppUpdateAvailable returns graceful errors as .ErrorMessage
-    $errorDetail = if ($updateResult -and $updateResult.Error) { $updateResult.Error } `
-                   elseif ($updateResult -and $updateResult.ErrorMessage) { $updateResult.ErrorMessage } `
-                   else { $null }
-    if ($errorDetail) {
-      [System.Windows.Forms.MessageBox]::Show(
-        "Could not check for updates.`n`nError: $errorDetail`n`nCheck your internet connection and try again.",
-        "Update Check Failed",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Warning
-      )
-      Update-Status "Update check failed"
-      return
-    }
-
-    if ($updateResult -and $updateResult.UpdateAvailable) {
-      $msg  = "A new version of WinTuner GUI is available!`n`n"
-      $msg += "Current version: v$($script:appVersion)`n"
-      $msg += "Latest version:  v$($updateResult.LatestVersion)`n`n"
-
-      if ($updateResult.DownloadUrl) {
-        $msg += "Do you want to download and install the update now?`n`n"
-        $msg += "(A backup of your current version will be created)"
-
-        $answer = [System.Windows.Forms.MessageBox]::Show(
-          $msg,
-          "Update Available",
-          [System.Windows.Forms.MessageBoxButtons]::YesNo,
-          [System.Windows.Forms.MessageBoxIcon]::Information
-        )
-
-        if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
-          Update-Status "Downloading update..."
-          [System.Windows.Forms.Application]::DoEvents()
-
-          $success = Invoke-AppSelfUpdate -DownloadUrl $updateResult.DownloadUrl -HashUrl $updateResult.HashUrl
-
-          if ($success) {
-            $restartMsg  = "Update installed successfully!`n`n"
-            $restartMsg += "WinTuner GUI needs to restart to apply the update.`n"
-            $restartMsg += "Click OK to close. Please start the script again manually."
-
-            [System.Windows.Forms.MessageBox]::Show(
-              $restartMsg,
-              "Update Complete",
-              [System.Windows.Forms.MessageBoxButtons]::OK,
-              [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-
-            $form.Close()
-          }
-        } else {
-          Update-Status "Update postponed by user"
-        }
-      } else {
-        $msg += "No direct download available for this release.`n"
-        $msg += "Please download manually from:`n$($updateResult.ReleaseUrl)"
-
-        [System.Windows.Forms.MessageBox]::Show(
-          $msg,
-          "Update Available",
-          [System.Windows.Forms.MessageBoxButtons]::OK,
-          [System.Windows.Forms.MessageBoxIcon]::Information
-        )
-      }
-    } else {
-      [System.Windows.Forms.MessageBox]::Show(
-        "You are running the latest version (v$($script:appVersion)).",
-        "No Update Available",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Information
-      )
-      Update-Status "App is up to date (v$($script:appVersion))"
-    }
+    $checkUpdateButton.Enabled = $true
+    Invoke-UpdateCheckFeedback -UpdateResult $updateResult -Context 'Manual'
   }
 })
 
@@ -1781,15 +1955,19 @@ try {
 try { 
   Import-Module WinTuner -ErrorAction Stop 
 } catch {
-  $errMsg = "CRITICAL: Failed to import WinTuner module: $($_.Exception.Message)"
-  Write-Log $errMsg
-  Update-Status $errMsg
+  $errMsg = $_.Exception.Message
+  Write-Log "Failed to import WinTuner module: $errMsg"
   [System.Windows.Forms.MessageBox]::Show(
-    "Failed to import WinTuner module. Please install it manually:\n\nInstall-Module WinTuner -Scope CurrentUser\n\nError: $($_.Exception.Message)",
-    "Module Error",
+    "Failed to import WinTuner module.`n`nError: $errMsg`n`nPlease install it:`nInstall-Module WinTuner -Scope CurrentUser",
+    "Module Import Failed",
     [System.Windows.Forms.MessageBoxButtons]::OK,
     [System.Windows.Forms.MessageBoxIcon]::Error
   )
+  # Disable all functional tabs except Settings
+  foreach ($tab in $tabControl.TabPages) {
+    if ($tab.Text -ne "Settings") { $tab.Enabled = $false }
+  }
+  if ($loginButton) { $loginButton.Enabled = $false }
 }
 Update-Status "Module imported."
 
@@ -2050,7 +2228,25 @@ $createButton.Add_Click({
   $package  = $script:packageMap[$appName]
   if (-not $package -or -not $package.PackageID) { Update-Status "Selected item is invalid."; return }
   $packageID = $package.PackageID
-  $folder    = $pathBox.Text
+  $folder    = [System.IO.Path]::GetFullPath($pathBox.Text.Trim())
+  $forbiddenPaths = @(
+    [Environment]::GetFolderPath('Windows'),
+    [Environment]::GetFolderPath('System'),
+    "$env:SystemRoot\System32",
+    "$env:SystemRoot\SysWOW64",
+    "$env:ProgramFiles",
+    "${env:ProgramFiles(x86)}"
+  )
+  $isForbidden = $forbiddenPaths | Where-Object { $folder -eq $_ -or $folder.StartsWith($_ + '\') }
+  if ($isForbidden) {
+    [System.Windows.Forms.MessageBox]::Show(
+      "The selected folder '$folder' is a protected system directory.`nPlease choose a different folder.",
+      "Invalid Folder",
+      [System.Windows.Forms.MessageBoxButtons]::OK,
+      [System.Windows.Forms.MessageBoxIcon]::Warning
+    )
+    return
+  }
   if (-not (Test-Path $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
   $filePath  = Join-Path $folder "$packageID.wtpackage"
   
@@ -2071,9 +2267,9 @@ $createButton.Add_Click({
     $versionsButton.Enabled = $false
     
     Update-Status "Creating package for $packageID..."
-    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-    $progressBar.MarqueeAnimationSpeed = 30
-    $progressBar.Visible = $true
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+    $script:progressBar.MarqueeAnimationSpeed = 30
+    $script:progressBar.Visible = $true
     [System.Windows.Forms.Application]::DoEvents()  # Update UI - TODO: refactor to use Invoke-AsyncOperation
     
     $desired = $null
@@ -2099,9 +2295,9 @@ $createButton.Add_Click({
       Update-Status "Package creation failed"
     }
   } finally {
-    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $progressBar.Visible = $false
-    $progressBar.Value = 0
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $script:progressBar.Visible = $false
+    $script:progressBar.Value = 0
     $createButton.Enabled = $true
     $searchButton.Enabled = $true
     $versionsButton.Enabled = $true
@@ -2134,7 +2330,25 @@ $uploadButton.Add_Click({
     }
     if ([string]::IsNullOrWhiteSpace($version))   { Update-Status "Version could not be determined."; return }
     if ([string]::IsNullOrWhiteSpace($packageID)) { Update-Status "Cannot upload: failed to resolve PackageId."; return }
-    $folder = $pathBox.Text
+    $folder = [System.IO.Path]::GetFullPath($pathBox.Text.Trim())
+    $forbiddenPaths = @(
+      [Environment]::GetFolderPath('Windows'),
+      [Environment]::GetFolderPath('System'),
+      "$env:SystemRoot\System32",
+      "$env:SystemRoot\SysWOW64",
+      "$env:ProgramFiles",
+      "${env:ProgramFiles(x86)}"
+    )
+    $isForbidden = $forbiddenPaths | Where-Object { $folder -eq $_ -or $folder.StartsWith($_ + '\') }
+    if ($isForbidden) {
+      [System.Windows.Forms.MessageBox]::Show(
+        "The selected folder '$folder' is a protected system directory.`nPlease choose a different folder.",
+        "Invalid Folder",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+      )
+      return
+    }
     if (-not (Test-Path $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
     
     try {
@@ -2142,9 +2356,9 @@ $uploadButton.Add_Click({
         $createButton.Enabled = $false
         
         Update-Status "Uploading $packageID (v$version) to tenant..."
-        $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-        $progressBar.MarqueeAnimationSpeed = 30
-        $progressBar.Visible = $true
+        $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+        $script:progressBar.MarqueeAnimationSpeed = 30
+        $script:progressBar.Visible = $true
         [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
         
         Deploy-WtWin32App -PackageId $packageID -Version $version -RootPackageFolder $folder -ErrorAction Stop
@@ -2181,9 +2395,9 @@ $uploadButton.Add_Click({
             [System.Windows.Forms.MessageBoxIcon]::Error
         )
     } finally {
-        $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-        $progressBar.Visible = $false
-        $progressBar.Value = 0
+        $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+        $script:progressBar.Visible = $false
+        $script:progressBar.Value = 0
         $uploadButton.Enabled = $true
         $createButton.Enabled = $true
     }
@@ -2304,10 +2518,10 @@ $updateSearchButton.Add_Click({
     Write-Log ("Checking {0} apps for updates..." -f $appsToCheck.Count)
     
     # Show progress bar
-    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $progressBar.Value = 0
-    $progressBar.Maximum = $appsToCheck.Count
-    $progressBar.Visible = $true
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $script:progressBar.Value = 0
+    $script:progressBar.Maximum = $appsToCheck.Count
+    $script:progressBar.Visible = $true
 
     $candidates = [System.Collections.Generic.List[object]]::new()
     $processedCount = 0
@@ -2318,7 +2532,7 @@ $updateSearchButton.Add_Click({
       
       # Update progress every app
       try {
-        $progressBar.Value = $processedCount
+        $script:progressBar.Value = $processedCount
         Update-Status ("Checking ({0}/{1}): {2}" -f $processedCount, $totalCount, $app.Name)
         [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
       } catch { }
@@ -2388,8 +2602,9 @@ $updateSearchButton.Add_Click({
     }
   } finally {
     $updateSearchButton.Enabled = $true
-    $progressBar.Visible = $false
-    $progressBar.Value = 0
+    $script:progressBar.Maximum = 100
+    $script:progressBar.Value = 0
+    $script:progressBar.Visible = $false
   }
 })
 
@@ -2432,7 +2647,25 @@ $updateSelectedButton.Add_Click({
 
     Write-Log "Successfully matched $($checkedApps.Count) apps for update"
 
-    $rootPackageFolder = $pathBox.Text
+    $rootPackageFolder = [System.IO.Path]::GetFullPath($pathBox.Text.Trim())
+    $forbiddenPaths = @(
+      [Environment]::GetFolderPath('Windows'),
+      [Environment]::GetFolderPath('System'),
+      "$env:SystemRoot\System32",
+      "$env:SystemRoot\SysWOW64",
+      "$env:ProgramFiles",
+      "${env:ProgramFiles(x86)}"
+    )
+    $isForbidden = $forbiddenPaths | Where-Object { $rootPackageFolder -eq $_ -or $rootPackageFolder.StartsWith($_ + '\') }
+    if ($isForbidden) {
+      [System.Windows.Forms.MessageBox]::Show(
+        "The selected folder '$rootPackageFolder' is a protected system directory.`nPlease choose a different folder.",
+        "Invalid Folder",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+      )
+      return
+    }
     if (-not (Test-Path $rootPackageFolder)) {
         New-Item -ItemType Directory -Path $rootPackageFolder -Force | Out-Null
     }
@@ -2452,7 +2685,25 @@ $updateSelectedButton.Add_Click({
 # UPDATED: Update All flow
 # -------------------------
 $updateAllButton.Add_Click({
-    $rootPackageFolder = $pathBox.Text
+    $rootPackageFolder = [System.IO.Path]::GetFullPath($pathBox.Text.Trim())
+    $forbiddenPaths = @(
+      [Environment]::GetFolderPath('Windows'),
+      [Environment]::GetFolderPath('System'),
+      "$env:SystemRoot\System32",
+      "$env:SystemRoot\SysWOW64",
+      "$env:ProgramFiles",
+      "${env:ProgramFiles(x86)}"
+    )
+    $isForbidden = $forbiddenPaths | Where-Object { $rootPackageFolder -eq $_ -or $rootPackageFolder.StartsWith($_ + '\') }
+    if ($isForbidden) {
+      [System.Windows.Forms.MessageBox]::Show(
+        "The selected folder '$rootPackageFolder' is a protected system directory.`nPlease choose a different folder.",
+        "Invalid Folder",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+      )
+      return
+    }
     if (-not (Test-Path $rootPackageFolder)) {
         New-Item -ItemType Directory -Path $rootPackageFolder -Force | Out-Null
     }
@@ -2501,9 +2752,15 @@ $updateAllButton.Add_Click({
 
 $removeOldAppsButton.Add_Click({
   try {
-    $oldApps = Get-WtWin32Apps -Superseded $true
-    if ($oldApps.Count -eq 0) { Update-Status "No Superseded Apps Found"; return }
-    $appNames = ($oldApps | Select-Object -ExpandProperty Name) -join "`r`n"
+    $supersededApps = @(Get-WtWin32Apps -Superseded:$true -ErrorAction Stop)
+  } catch {
+    Update-Status "Error fetching superseded apps: $($_.Exception.Message)"
+    Write-Log "removeOldApps error: $($_.Exception.Message)"
+    return
+  }
+  try {
+    if ($supersededApps.Count -eq 0) { Update-Status "No Superseded Apps Found"; return }
+    $appNames = ($supersededApps | Select-Object -ExpandProperty Name) -join "`r`n"
     $result = [System.Windows.Forms.MessageBox]::Show(
       "The following outdated apps will be removed:`r`n$appNames",
       "Confirmation",
@@ -2511,18 +2768,24 @@ $removeOldAppsButton.Add_Click({
       [System.Windows.Forms.MessageBoxIcon]::Question
     )
     if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
-      $progressBar.Value = 0
-      $progressBar.Visible = $true
-      foreach ($app in @($oldApps)) {
+      $script:progressBar.Value = 0
+      $script:progressBar.Visible = $true
+      foreach ($app in @($supersededApps)) {
         try {
           Remove-WtWin32App -GraphId $app.GraphId -ErrorAction Stop
           Update-Status ("Removed: {0}" -f $app.Name)
         } catch {
-          Update-Status ("Error removing {0}: {1}" -f $app.Name, $_.Exception.Message)
+          if ($_.Exception.Message -match 'not found') {
+            Write-Log "App already removed or not found in Intune: $($app.Name)"
+            Update-Status "Already removed: $($app.Name)"
+          } else {
+            Update-Status ("Error removing {0}: {1}" -f $app.Name, $_.Exception.Message)
+            Write-Log "Error while removal: $($_.Exception.Message)"
+          }
         }
       }
-      $progressBar.Maximum = 100
-		$progressBar.Value = 100
+      $script:progressBar.Maximum = 100
+      $script:progressBar.Value = 100
       Update-Status "Deleted all superseded Apps..."
       try { $supersededSearchButton.PerformClick() } catch {}
     } else {
@@ -2622,7 +2885,7 @@ function Update-DiscoveredListUI {
         if (-not [string]::IsNullOrWhiteSpace($searchText)) {
             $escapedSearch = [regex]::Escape($searchText)
             # Wenn der Text weder im Anzeigenamen noch im Winget-Namen vorkommt, ist es kein Match
-            if (($item.DisplayName -notmatch "(?i)$escapedSearch") -and ($item.WingetApp.Name -notmatch "(?i)$escapedSearch")) {
+            if (($item.DisplayName -notmatch "(?i)$escapedSearch") -and ($item.WingetApp.Name -notmatch "(?i)$escapedSearch") -and ($item.WingetApp.PackageID -notmatch "(?i)$escapedSearch")) {
                 $match = $false
             }
         }
@@ -2712,18 +2975,19 @@ $scanDiscoveredButton.Add_Click({
   try {
     $scanDiscoveredButton.Enabled = $false
     $deployDiscoveredButton.Enabled = $false
+    $exportDiscoveredCsvButton.Enabled = $false
     $discoveredListBox.Items.Clear()
     $script:discoveredRaw = [System.Collections.Generic.List[object]]::new()
     
-    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-    $progressBar.Visible = $true
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+    $script:progressBar.Visible = $true
     [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
 
 # --- GRAPH-AUTH BLOCK (FIXED) ---
     if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
         Update-Status "Microsoft.Graph module not found..."
         [System.Windows.Forms.MessageBox]::Show(
-            "The Microsoft.Graph module is required for this operation but was not found.`n`nPlease install it by running:`nInstall-Module Microsoft.Graph -Scope CurrentUser",
+            "Microsoft.Graph module not found.`n`nPlease install it first:`nInstall-Module Microsoft.Graph -Scope CurrentUser",
             "Module Not Found",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning
@@ -2774,11 +3038,11 @@ $scanDiscoveredButton.Add_Click({
     # 1. Vorhandene Apps checken (EXTREM SCHNELL DURCH "Resolve" STATT "Try-Resolve")
     Update-Status "Loading existing managed apps to filter them out..."
     [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-    $existingApps = @(Get-WtWin32Apps -Superseded:$false -ErrorAction SilentlyContinue 3>$null 4>$null)
+    $existingApps = @(Get-WtWin32Apps -Superseded:$false -ErrorAction SilentlyContinue 2>$null 3>$null 4>$null 5>$null 6>$null)
     $existingPackageIds = [System.Collections.Generic.List[object]]::new()
     foreach ($eApp in $existingApps) {
 		[System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-        $id = Resolve-WtWingetId -AppOrResult $eApp
+        $id = Resolve-WtWingetId -AppOrResult $eApp 2>$null 3>$null 4>$null 5>$null 6>$null
         if ($id) { $existingPackageIds.Add($id) }
     }
 
@@ -2792,7 +3056,7 @@ $scanDiscoveredButton.Add_Click({
     $pageCount = 0
 
     do {
-        $response = Invoke-MgRestMethod -Uri $uri -Method GET -ErrorAction Stop
+        $response = Invoke-MgRestMethod -Uri $uri -Method GET -ErrorAction Stop 2>$null 3>$null 4>$null 5>$null 6>$null
         if ($response.value) { $detectedApps.AddRange([object[]]$response.value) }
         $uri = $response.'@odata.nextLink'
         $pageCount++
@@ -2812,36 +3076,86 @@ $scanDiscoveredButton.Add_Click({
     })
 
     $total = $filteredApps.Count
-    $current = 0
-    $matchCount = 0
+    $matchCount = 0              # unique PackageIDs shown in UI
+    $matchedRawCount = 0         # total matched detected apps (before dedupe)
 
-    $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $progressBar.Maximum = $total
-    $progressBar.Value = 0
-
+    # Prepare normalized list first (phase 1) so matching can run with cached query results (phase 2)
+    $normalizedApps = [System.Collections.Generic.List[object]]::new()
+    $skippedNonCandidateCount = 0
     foreach ($app in $filteredApps) {
-		[System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-        $current++
-        $progressBar.Value = $current
-        Update-Status "Analyzing ($current/$total): $($app.displayName)..."
+        # 1. Entfernt restlos alles, was in Klammern steht (z.B. "(x64 de)", "(x86 en-US)")
+        $searchName = $app.displayName -replace '\s*\([^)]*\)', ''
+        # 2. Entfernt typische Versionsnummern, die aus Zahlen und Punkten bestehen
+        $searchName = $searchName -replace '\s+[\d\.]+', ''
+        $searchName = $searchName.Trim()
+        if ([string]::IsNullOrWhiteSpace($searchName)) { continue }
+        if (-not (Test-WingetSearchCandidate -DisplayName $searchName)) {
+            if ($script:skipLowValueWingetCandidates) {
+                $skippedNonCandidateCount++
+                continue
+            }
+        }
+        $normalizedApps.Add([pscustomobject]@{
+            App        = $app
+            SearchName = $searchName
+        })
+    }
+
+    # Cache Search-WtWinGetPackage results by normalized search term
+    # to reduce expensive/repetitive module calls in large environments
+    $searchResultCache = @{}
+    # Fast lookup for already created discovered entries by PackageID
+    $discoveredByPackageId = @{}
+
+    $uniqueSearchNames = @($normalizedApps | Select-Object -ExpandProperty SearchName -Unique)
+    $queryTotal = $uniqueSearchNames.Count
+    $queryCurrent = 0
+    Update-Status "Prepared $($normalizedApps.Count) apps for matching ($queryTotal unique search terms, skipped: $skippedNonCandidateCount, skip-mode: $($script:skipLowValueWingetCandidates))."
+    Write-Log "Discovery prep -> Filtered apps: $total, Normalized apps: $($normalizedApps.Count), Unique search terms: $queryTotal, Skipped non-candidates: $skippedNonCandidateCount, Skip-mode: $($script:skipLowValueWingetCandidates)"
+
+    # Phase 1: fetch/search all unique terms
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $script:progressBar.Maximum = if ($queryTotal -gt 0) { $queryTotal } else { 1 }
+    $script:progressBar.Value = 0
+
+    foreach ($searchName in $uniqueSearchNames) {
+        $queryCurrent++
+        $script:progressBar.Value = $queryCurrent
+        if (($queryCurrent -eq 1) -or ($queryCurrent % 25 -eq 0) -or ($queryCurrent -eq $queryTotal)) {
+            Update-Status "Querying WinGet unique terms ($queryCurrent/$queryTotal) from $($normalizedApps.Count) apps: $searchName"
+            [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
+        }
+        try {
+            $searchResultCache[$searchName] = @(Search-WtWinGetPackage -SearchQuery $searchName -ErrorAction SilentlyContinue 2>$null 3>$null 4>$null 5>$null 6>$null)
+        } catch {
+            $searchResultCache[$searchName] = @()
+            Write-Log "Search failed for '$searchName': $($_.Exception.Message)"
+        }
+    }
+
+    # Phase 2: match normalized discovered apps against cached results
+    $processTotal = $normalizedApps.Count
+    $processCurrent = 0
+    $script:progressBar.Maximum = if ($processTotal -gt 0) { $processTotal } else { 1 }
+    $script:progressBar.Value = 0
+
+    foreach ($entry in $normalizedApps) {
         [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
+        $processCurrent++
+        $script:progressBar.Value = $processCurrent
+        if (($processCurrent -eq 1) -or ($processCurrent % 25 -eq 0) -or ($processCurrent -eq $processTotal)) {
+            Update-Status "Matching apps ($processCurrent/$processTotal): $($entry.App.displayName)..."
+            [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
+        }
 
         try {
-            # 1. Entfernt restlos alles, was in Klammern steht (z.B. "(x64 de)", "(x86 en-US)")
-            $searchName = $app.displayName -replace '\s*\([^)]*\)', ''
-            # 2. Entfernt typische Versionsnummern, die aus Zahlen und Punkten bestehen
-            $searchName = $searchName -replace '\s+[\d\.]+', ''
-            $searchName = $searchName.Trim()
+            $app = $entry.App
+            $searchName = $entry.SearchName
+            $wingetResults = if ($searchResultCache.ContainsKey($searchName)) { @($searchResultCache[$searchName]) } else { @() }
 
-            if ([string]::IsNullOrWhiteSpace($searchName)) { continue }
-
-            $wingetResults = @(Search-WtWinGetPackage -SearchQuery $searchName -ErrorAction SilentlyContinue 3>$null 4>$null)
-            
             $bestMatch = $null
             $highestScore = 0
-            
             foreach ($wgApp in $wingetResults) {
-				[System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
                 $score = Get-StringSimilarity -str1 $app.displayName -str2 $wgApp.Name
                 if ($score -gt $highestScore) {
                     $highestScore = $score
@@ -2850,33 +3164,38 @@ $scanDiscoveredButton.Add_Click({
             }
 
             if ($bestMatch -and $highestScore -ge 50) {
+                $matchedRawCount++
                 if ($existingPackageIds -contains $bestMatch.PackageID) { continue }
 
-                # NEU: Prüfen, ob wir diese Winget-App (PackageID) schon in der Liste haben
-                $existingEntry = $script:discoveredRaw | Where-Object { $_.WingetApp.PackageID -eq $bestMatch.PackageID } | Select-Object -First 1
+                # Prüfen, ob diese Winget-App (PackageID) bereits vorhanden ist
+                $existingEntry = $null
+                if ($discoveredByPackageId.ContainsKey($bestMatch.PackageID)) {
+                    $existingEntry = $discoveredByPackageId[$bestMatch.PackageID]
+                }
 
                 if ($existingEntry) {
                     # App existiert bereits in der Liste: Wir addieren die Geräteanzahl (DeviceCount)
                     $existingEntry.DeviceCount += $app.deviceCount
                     # Den Anzeigetext mit der neuen, kombinierten Anzahl aktualisieren
-                    $existingEntry.DisplayText = "[$($existingEntry.DeviceCount) PCs] $($existingEntry.DisplayName) ($($existingEntry.Publisher))  -->  Winget: $($existingEntry.WingetApp.Name)"
+                    $existingEntry.DisplayText = "[$($existingEntry.DeviceCount) PCs] $($existingEntry.DisplayName) ($($existingEntry.Publisher))  -->  Winget: $($existingEntry.WingetApp.Name) [$($existingEntry.WingetApp.PackageID)]"
                 } else {
                     # App ist neu: Wir nutzen den sauberen Winget-Namen (ohne Versionsnummern aus Intune)
-                    $cleanName = $bestMatch.Name 
+                    $cleanName = $bestMatch.Name
                     $itemObj = [pscustomobject]@{
                         DisplayName = $cleanName
                         Publisher   = $app.publisher
                         DeviceCount = $app.deviceCount
                         WingetApp   = $bestMatch
                         Checked     = $false
-                        DisplayText = "[$($app.deviceCount) PCs] $cleanName ($($app.publisher))  -->  Winget: $($bestMatch.Name)"
+                        DisplayText = "[$($app.deviceCount) PCs] $cleanName ($($app.publisher))  -->  Winget: $($bestMatch.Name) [$($bestMatch.PackageID)]"
                     }
                     $script:discoveredRaw.Add($itemObj)
+                    $discoveredByPackageId[$bestMatch.PackageID] = $itemObj
                     $matchCount++
                 }
             }
         } catch {
-            Write-Log "Failed to process app '$($app.displayName)': $($_.Exception.Message)"
+            Write-Log "Failed to process '$($entry.App.displayName)': $($_.Exception.Message)"
         }
     }
     
@@ -2898,12 +3217,15 @@ $scanDiscoveredButton.Add_Click({
     Update-DiscoveredListUI
 
     if ($matchCount -gt 0) {
-        Update-Status "Found $matchCount Winget match(es). Filter, sort, or deploy them!"
+        Update-Status "Scanned: $($detectedApps.Count) | Filtered: $total | Matched apps: $matchedRawCount | Unique packages: $matchCount"
+        Write-Log "Discovery summary -> Scanned: $($detectedApps.Count), Filtered: $total, Matched apps: $matchedRawCount, Unique packages: $matchCount"
         $deployDiscoveredButton.Enabled = $true
+        $exportDiscoveredCsvButton.Enabled = $true
         $checkAllDiscoveredButton.Enabled = $true
         $uncheckAllDiscoveredButton.Enabled = $true
     } else {
         Update-Status "No Winget matches found (or all are already managed)."
+        $exportDiscoveredCsvButton.Enabled = $false
     }
 
   } catch {
@@ -2913,7 +3235,9 @@ $scanDiscoveredButton.Add_Click({
     $ProgressPreference = $oldProgress
     $InformationPreference = $oldInfo
     $scanDiscoveredButton.Enabled = $true
-    $progressBar.Visible = $false
+    $script:progressBar.Maximum = 100
+    $script:progressBar.Value = 0
+    $script:progressBar.Visible = $false
   }
 })
 
@@ -2939,10 +3263,10 @@ $deployDiscoveredButton.Add_Click({
         $checkAllDiscoveredButton.Enabled = $false
         $uncheckAllDiscoveredButton.Enabled = $false
         
-        $progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-        $progressBar.Maximum = $checkedItems.Count
-        $progressBar.Value = 0
-        $progressBar.Visible = $true
+        $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+        $script:progressBar.Maximum = $checkedItems.Count
+        $script:progressBar.Value = 0
+        $script:progressBar.Visible = $true
 
         $successCount = 0
         $failedCount = 0
@@ -2950,7 +3274,7 @@ $deployDiscoveredButton.Add_Click({
 
         foreach ($item in $checkedItems) {
             $i++
-            $progressBar.Value = $i
+            $script:progressBar.Value = $i
             $wingetApp = $item.WingetApp
             
             Update-Status "Packaging & Deploying ($i/$($checkedItems.Count)): $($wingetApp.Name)..."
@@ -3002,7 +3326,46 @@ $deployDiscoveredButton.Add_Click({
         $scanDiscoveredButton.Enabled = $true
         $checkAllDiscoveredButton.Enabled = $true
         $uncheckAllDiscoveredButton.Enabled = $true
-        $progressBar.Visible = $false
+        $script:progressBar.Maximum = 100
+        $script:progressBar.Value = 0
+        $script:progressBar.Visible = $false
+    }
+})
+
+$exportDiscoveredCsvButton.Add_Click({
+    if (-not $script:discoveredRaw -or $script:discoveredRaw.Count -eq 0) {
+        Update-Status "No discovered Winget matches to export."
+        return
+    }
+
+    $sfd = New-Object System.Windows.Forms.SaveFileDialog
+    $sfd.Title = "Export Discovered Winget IDs"
+    $sfd.Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*"
+    $sfd.FileName = ("Discovered_WingetIDs_{0}.csv" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
+
+    if ($sfd.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
+        Update-Status "CSV export canceled."
+        return
+    }
+
+    try {
+        $rows = @($script:discoveredRaw | Sort-Object DisplayName | ForEach-Object {
+            [pscustomobject]@{
+                DisplayName   = $_.DisplayName
+                Publisher     = $_.Publisher
+                DeviceCount   = $_.DeviceCount
+                WingetName    = $_.WingetApp.Name
+                WingetId      = $_.WingetApp.PackageID
+                WingetVersion = $_.WingetApp.Version
+            }
+        })
+
+        $rows | Export-Csv -Path $sfd.FileName -NoTypeInformation -Encoding utf8
+        Write-Log "Exported discovered Winget IDs: $($rows.Count) row(s) -> $($sfd.FileName)"
+        Update-Status "Export completed: $($rows.Count) row(s) saved to $($sfd.FileName)"
+    } catch {
+        Write-Log "Export discovered Winget IDs failed: $($_.Exception.Message)"
+        Update-Status "CSV export failed: $($_.Exception.Message)"
     }
 })
 # Apply initial theme (Dark by default)
@@ -3036,8 +3399,8 @@ $form.Add_FormClosing({
     if ($script:isConnected) {
         try {
             $form.Enabled = $false
-            if ($statusLabel) { 
-                $statusLabel.Text = "Closing... signing out from tenant" 
+            if ($script:statusLabel) { 
+                Update-Status "Closing... signing out from tenant"
                 # Zwingt die UI, sich noch einmal schnell zu aktualisieren, bevor sie blockiert wird
                 [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
             }
@@ -3091,65 +3454,7 @@ $form.Add_Shown({
     Test-AppUpdateAvailable
   } -OnComplete {
     param($updateResult)
-    if ($updateResult -and -not $updateResult.Error -and -not $updateResult.ErrorMessage) {
-      if ($updateResult.UpdateAvailable) {
-        try {
-          $msg  = "A new version of WinTuner GUI is available!`n`n"
-          $msg += "Current version: v$($script:appVersion)`n"
-          $msg += "Latest version:  v$($updateResult.LatestVersion)`n`n"
-
-          if ($updateResult.DownloadUrl) {
-            $msg += "Do you want to download and install the update now?`n`n"
-            $msg += "(A backup of your current version will be created)"
-
-            $answer = [System.Windows.Forms.MessageBox]::Show(
-              $msg,
-              "Update Available",
-              [System.Windows.Forms.MessageBoxButtons]::YesNo,
-              [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-
-            if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
-              Update-Status "Downloading update..."
-              [System.Windows.Forms.Application]::DoEvents()
-
-              $success = Invoke-AppSelfUpdate -DownloadUrl $updateResult.DownloadUrl -HashUrl $updateResult.HashUrl
-
-              if ($success) {
-                $restartMsg  = "Update installed successfully!`n`n"
-                $restartMsg += "WinTuner GUI needs to restart to apply the update.`n"
-                $restartMsg += "Click OK to close. Please start the script again manually."
-
-                [System.Windows.Forms.MessageBox]::Show(
-                  $restartMsg,
-                  "Update Complete",
-                  [System.Windows.Forms.MessageBoxButtons]::OK,
-                  [System.Windows.Forms.MessageBoxIcon]::Information
-                )
-
-                $form.Close()
-              }
-            } else {
-              Update-Status "Update available: v$($updateResult.LatestVersion) - Go to Settings to update later."
-            }
-          } else {
-            $msg += "No direct download available for this release.`n"
-            $msg += "Please download manually from:`n$($updateResult.ReleaseUrl)"
-
-            [System.Windows.Forms.MessageBox]::Show(
-              $msg,
-              "Update Available",
-              [System.Windows.Forms.MessageBoxButtons]::OK,
-              [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-          }
-        } catch {
-          try { Write-Log "Startup update dialog error: $($_.Exception.Message)" } catch {}
-        }
-      } else {
-        Update-Status "WinTuner GUI v$($script:appVersion) – up to date"
-      }
-    }
+    Invoke-UpdateCheckFeedback -UpdateResult $updateResult -Context 'Startup'
   }
 })
 
@@ -3172,6 +3477,31 @@ if ($scanDiscoveredButton)  { $toolTip.SetToolTip($scanDiscoveredButton,  "Scan 
 if ($logoutButton)          { $toolTip.SetToolTip($logoutButton,          "Disconnect from the current Microsoft 365 tenant") }
 if ($themeToggleButton)     { $toolTip.SetToolTip($themeToggleButton,     "Switch between Dark Mode and Light Mode") }
 if ($clearHistoryButton)    { $toolTip.SetToolTip($clearHistoryButton,    "Clears the list of saved M365 login names") }
+
+# Header / Login area
+if ($loginButton)           { $toolTip.SetToolTip($loginButton,           "Sign in to your Microsoft 365 tenant") }
+if ($rememberCheckBox)      { $toolTip.SetToolTip($rememberCheckBox,      "Save your username so it is pre-filled on the next launch") }
+
+# tabUpdate
+if ($checkAllButton)        { $toolTip.SetToolTip($checkAllButton,        "Check all apps in the update list") }
+if ($uncheckAllButton)      { $toolTip.SetToolTip($uncheckAllButton,      "Uncheck all apps in the update list") }
+if ($supersededSearchButton){ $toolTip.SetToolTip($supersededSearchButton,"Search for outdated (superseded) app versions in Intune") }
+if ($deleteSelectedAppButton){ $toolTip.SetToolTip($deleteSelectedAppButton, "Delete the app currently selected in the dropdown from Intune") }
+if ($removeOldAppsButton)   { $toolTip.SetToolTip($removeOldAppsButton,   "Delete all superseded app versions from Intune at once") }
+
+# tabDiscovered
+if ($deployDiscoveredButton){ $toolTip.SetToolTip($deployDiscoveredButton,"Deploy the checked discovered apps to Microsoft Intune") }
+if ($exportDiscoveredCsvButton){ $toolTip.SetToolTip($exportDiscoveredCsvButton,"Export discovered apps with Winget IDs to a CSV file") }
+if ($checkAllDiscoveredButton)  { $toolTip.SetToolTip($checkAllDiscoveredButton,   "Check all apps in the discovered apps list") }
+if ($uncheckAllDiscoveredButton){ $toolTip.SetToolTip($uncheckAllDiscoveredButton, "Uncheck all apps in the discovered apps list") }
+
+# tabSettings
+if ($browsePathButton)         { $toolTip.SetToolTip($browsePathButton,         "Open a folder browser to choose the default package folder") }
+if ($autoCheckUpdatesCheckbox) { $toolTip.SetToolTip($autoCheckUpdatesCheckbox, "Automatically scan for app updates each time you log in") }
+if ($rememberMeCheckbox)       { $toolTip.SetToolTip($rememberMeCheckbox,       "Save your username so it is pre-filled on the next launch") }
+if ($saveSettingsButton)       { $toolTip.SetToolTip($saveSettingsButton,       "Save all settings to disk") }
+if ($clearCacheButton)         { $toolTip.SetToolTip($clearCacheButton,         "Clear the locally cached WinGet version list") }
+if ($checkUpdateButton)        { $toolTip.SetToolTip($checkUpdateButton,        "Check GitHub for a newer version of WinTuner GUI") }
 
 # Run the form mit finalem Sicherheitsnetz
 try {
