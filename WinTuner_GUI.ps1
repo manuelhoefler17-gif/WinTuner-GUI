@@ -420,10 +420,11 @@ function Invoke-UpdateCheckFeedback {
     return
   }
 
-  $latestVer = if ($UpdateResult -and $UpdateResult.LatestVersion) { $UpdateResult.LatestVersion } else { $script:appVersion }
-  if ($UpdateResult -and $UpdateResult.ErrorMessage -and -not $UpdateResult.LatestVersion) {
-    Write-Log "Update check could not resolve GitHub version: $($UpdateResult.ErrorMessage)"
-    Update-Status "Update check failed (GitHub unreachable). Local: v$($script:appVersion)"
+  $latestVer = if ($UpdateResult -and $UpdateResult.LatestVersion) { $UpdateResult.LatestVersion } else { $null }
+  if (-not $latestVer) {
+    $errText = if ($UpdateResult -and $UpdateResult.ErrorMessage) { $UpdateResult.ErrorMessage } else { 'No version information returned by GitHub.' }
+    Write-Log "Update check could not resolve GitHub version: $errText"
+    Update-Status "Update check failed (GitHub version unavailable). Local: v$($script:appVersion)"
   } else {
     $statusMsg = "Up to date – Local: v$($script:appVersion) | GitHub: v$latestVer"
     Update-Status $statusMsg
@@ -431,7 +432,7 @@ function Invoke-UpdateCheckFeedback {
 
   if ($isManual) {
     [System.Windows.Forms.MessageBox]::Show(
-      "WinTuner GUI is up to date.`n`nLocal version:  v$($script:appVersion)`nGitHub version: v$latestVer",
+      "WinTuner GUI is up to date.`n`nLocal version:  v$($script:appVersion)`nGitHub version: v$(if ($latestVer) { $latestVer } else { 'unavailable' })",
       "No Update Available",
       [System.Windows.Forms.MessageBoxButtons]::OK,
       [System.Windows.Forms.MessageBoxIcon]::Information
