@@ -126,12 +126,12 @@ function Test-AppUpdateAvailable {
       'User-Agent' = 'WinTuner-GUI-UpdateCheck'
     }
 
-    $savedDefaults = $PSDefaultParameterValues.Clone()
+    $savedDefaults = $PSDefaultParameterValues
     try {
       $PSDefaultParameterValues = @{}
       $response = Invoke-RestMethod -Uri $script:githubApiUrl -Headers $headers -TimeoutSec 10 -ErrorAction Stop
     } finally {
-      $PSDefaultParameterValues = $savedDefaults
+      $PSDefaultParameterValues = if ($null -ne $savedDefaults) { $savedDefaults } else { @{} }
     }
 
     # Extract version from tag_name (strip leading "v" and any suffix like "-Beta")
@@ -169,12 +169,12 @@ function Test-AppUpdateAvailable {
 
     # Fallback: use newest tag when latest release endpoint is unavailable/rate-limited
     try {
-      $savedDefaults = $PSDefaultParameterValues.Clone()
+      $savedDefaults = $PSDefaultParameterValues
       try {
         $PSDefaultParameterValues = @{}
         $tagResponse = Invoke-RestMethod -Uri $script:githubTagsApiUrl -Headers $headers -TimeoutSec 10 -ErrorAction Stop
       } finally {
-        $PSDefaultParameterValues = $savedDefaults
+        $PSDefaultParameterValues = if ($null -ne $savedDefaults) { $savedDefaults } else { @{} }
       }
 
       $latestTag = $null
@@ -420,9 +420,14 @@ function Invoke-UpdateCheckFeedback {
     return
   }
 
-  $latestVer = if ($UpdateResult -and $UpdateResult.LatestVersion) { $UpdateResult.LatestVersion } else { "unknown" }
-  $statusMsg = "Up to date – Local: v$($script:appVersion) | GitHub: v$latestVer"
-  Update-Status $statusMsg
+  $latestVer = if ($UpdateResult -and $UpdateResult.LatestVersion) { $UpdateResult.LatestVersion } else { $script:appVersion }
+  if ($UpdateResult -and $UpdateResult.ErrorMessage -and -not $UpdateResult.LatestVersion) {
+    Write-Log "Update check could not resolve GitHub version: $($UpdateResult.ErrorMessage)"
+    Update-Status "Update check failed (GitHub unreachable). Local: v$($script:appVersion)"
+  } else {
+    $statusMsg = "Up to date – Local: v$($script:appVersion) | GitHub: v$latestVer"
+    Update-Status $statusMsg
+  }
 
   if ($isManual) {
     [System.Windows.Forms.MessageBox]::Show(
