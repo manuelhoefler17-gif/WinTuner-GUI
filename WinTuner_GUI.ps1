@@ -59,6 +59,7 @@ $script:appVersion  = "0.10.11"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
 $script:githubTagsApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/tags?per_page=1"
+$script:githubReleasesApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases?per_page=1"
 $script:skipLowValueWingetCandidates = $false  # keep all apps by default; set $true for faster scans with possible omissions
 
 # --- Runtime state (set during execution) ---
@@ -138,6 +139,9 @@ function Test-AppUpdateAvailable {
     $remoteTag = $response.tag_name
     $remoteVersionStr = $remoteTag -replace '^v', ''
     $cleanVersion = $remoteVersionStr -replace '-.*$', ''  # Remove "-Beta", "-RC1" etc.
+    if ([string]::IsNullOrWhiteSpace($cleanVersion)) {
+      throw "GitHub response did not contain a usable tag_name."
+    }
 
     $result.LatestVersion = $cleanVersion
     $result.ReleaseUrl    = $response.html_url
@@ -167,8 +171,39 @@ function Test-AppUpdateAvailable {
     $primaryError = $_.Exception.Message
     Write-Log "Update check failed (releases/latest): $primaryError"
 
-    # Fallback: use newest tag when latest release endpoint is unavailable/rate-limited
+    # Fallback 1: use first entry from releases list endpoint
     try {
+      $savedDefaults = $PSDefaultParameterValues
+      try {
+        $PSDefaultParameterValues = @{}
+        $releasesResponse = Invoke-RestMethod -Uri $script:githubReleasesApiUrl -Headers $headers -TimeoutSec 10 -ErrorAction Stop
+      } finally {
+        $PSDefaultParameterValues = if ($null -ne $savedDefaults) { $savedDefaults } else { @{} }
+      }
+
+      $latestRelease = if ($releasesResponse -is [System.Array]) { $releasesResponse | Select-Object -First 1 } else { $releasesResponse }
+      if ($latestRelease -and $latestRelease.tag_name) {
+        $remoteVersionStr = ([string]$latestRelease.tag_name) -replace '^v', ''
+        $cleanVersion = $remoteVersionStr -replace '-.*$', ''
+        if (-not [string]::IsNullOrWhiteSpace($cleanVersion)) {
+          $result.LatestVersion = $cleanVersion
+          $result.ReleaseUrl = if ($latestRelease.html_url) { $latestRelease.html_url } else { "https://github.com/$($script:githubRepo)/releases" }
+          $result.ErrorMessage = $null
+          if (Test-IsNewerVersion -Latest $cleanVersion -Current $script:appVersion) {
+            $result.UpdateAvailable = $true
+            Write-Log "Update available via releases-list fallback: $($script:appVersion) -> $cleanVersion"
+          } else {
+            Write-Log "App is up to date via releases-list fallback (v$($script:appVersion), latest: v$cleanVersion)"
+          }
+        }
+      }
+    } catch {
+      Write-Log "Update check fallback (releases list) failed: $($_.Exception.Message)"
+    }
+
+    # Fallback 2: use newest tag when release endpoints are unavailable/rate-limited
+    if (-not $result.LatestVersion) {
+      try {
       $savedDefaults = $PSDefaultParameterValues
       try {
         $PSDefaultParameterValues = @{}
@@ -203,6 +238,7 @@ function Test-AppUpdateAvailable {
     } catch {
       $result.ErrorMessage = $primaryError
       Write-Log "Update check fallback failed: $($_.Exception.Message)"
+    }
     }
 
     if (-not $result.LatestVersion) {
