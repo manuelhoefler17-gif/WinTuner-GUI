@@ -135,12 +135,24 @@ function Test-AppUpdateAvailable {
       $PSDefaultParameterValues = if ($null -ne $savedDefaults) { $savedDefaults } else { @{} }
     }
 
-    # Extract version from tag_name (strip leading "v" and any suffix like "-Beta")
-    $remoteTag = $response.tag_name
-    $remoteVersionStr = $remoteTag -replace '^v', ''
-    $cleanVersion = $remoteVersionStr -replace '-.*$', ''  # Remove "-Beta", "-RC1" etc.
+    # Extract version from GitHub response (prefer release.tag_name; tolerate alternate shapes)
+    $remoteTag = $null
+    if ($response -and $response.PSObject.Properties['tag_name']) {
+      $remoteTag = [string]$response.tag_name
+    }
+    if ([string]::IsNullOrWhiteSpace($remoteTag) -and $response -and $response.PSObject.Properties['name']) {
+      $remoteTag = [string]$response.name
+      Write-Log "Update check: using fallback field 'name' because 'tag_name' is empty."
+    }
+
+    $remoteVersionStr = if ($remoteTag) { $remoteTag -replace '^v', '' } else { $null }
+    $cleanVersion = if ($remoteVersionStr) { $remoteVersionStr -replace '-.*$', '' } else { $null }  # Remove "-Beta", "-RC1" etc.
+
     if ([string]::IsNullOrWhiteSpace($cleanVersion)) {
-      throw "GitHub response did not contain a usable tag_name."
+      $props = if ($response) { ($response.PSObject.Properties.Name -join ', ') } else { '<null response>' }
+      $result.ErrorMessage = "GitHub response did not include tag_name/name. Properties: $props"
+      Write-Log "Update check: no usable version field in response. Properties: $props"
+      return $result
     }
 
     $result.LatestVersion = $cleanVersion
