@@ -133,10 +133,25 @@ function Test-AppUpdateAvailable {
       $PSDefaultParameterValues = $savedDefaults
     }
 
-    # Extract version from tag_name (strip leading "v" and any suffix like "-Beta")
-    $remoteTag = $response.tag_name
-    $remoteVersionStr = $remoteTag -replace '^v', ''
-    $cleanVersion = $remoteVersionStr -replace '-.*$', ''  # Remove "-Beta", "-RC1" etc.
+    # Extract version from GitHub response (prefer release.tag_name; tolerate alternate shapes)
+    $remoteTag = $null
+    if ($response -and $response.PSObject.Properties['tag_name']) {
+      $remoteTag = [string]$response.tag_name
+    }
+    if ([string]::IsNullOrWhiteSpace($remoteTag) -and $response -and $response.PSObject.Properties['name']) {
+      $remoteTag = [string]$response.name
+      Write-Log "Update check: using fallback field 'name' because 'tag_name' is empty."
+    }
+
+    $remoteVersionStr = if ($remoteTag) { $remoteTag -replace '^v', '' } else { $null }
+    $cleanVersion = if ($remoteVersionStr) { $remoteVersionStr -replace '-.*$', '' } else { $null }  # Remove "-Beta", "-RC1" etc.
+
+    if ([string]::IsNullOrWhiteSpace($cleanVersion)) {
+      $props = if ($response) { ($response.PSObject.Properties.Name -join ', ') } else { '<null response>' }
+      $result.ErrorMessage = "GitHub response did not include tag_name/name. Properties: $props"
+      Write-Log "Update check: no usable version field in response. Properties: $props"
+      return $result
+    }
 
     $result.LatestVersion = $cleanVersion
     $result.ReleaseUrl    = $response.html_url
@@ -377,13 +392,19 @@ function Invoke-UpdateCheckFeedback {
     return
   }
 
-  $latestVer = if ($UpdateResult -and $UpdateResult.LatestVersion) { $UpdateResult.LatestVersion } else { "unknown" }
-  $statusMsg = "Up to date – Local: v$($script:appVersion) | GitHub: v$latestVer"
-  Update-Status $statusMsg
+  $latestVer = if ($UpdateResult -and $UpdateResult.LatestVersion) { $UpdateResult.LatestVersion } else { $null }
+  if (-not $latestVer) {
+    $errText = if ($UpdateResult -and $UpdateResult.ErrorMessage) { $UpdateResult.ErrorMessage } else { 'No version information returned by GitHub.' }
+    Write-Log "Update check could not resolve GitHub version: $errText"
+    Update-Status "Update check failed (GitHub version unavailable). Local: v$($script:appVersion)"
+  } else {
+    $statusMsg = "Up to date – Local: v$($script:appVersion) | GitHub: v$latestVer"
+    Update-Status $statusMsg
+  }
 
   if ($isManual) {
     [System.Windows.Forms.MessageBox]::Show(
-      "WinTuner GUI is up to date.`n`nLocal version:  v$($script:appVersion)`nGitHub version: v$latestVer",
+      "WinTuner GUI is up to date.`n`nLocal version:  v$($script:appVersion)`nGitHub version: v$(if ($latestVer) { $latestVer } else { 'unavailable' })",
       "No Update Available",
       [System.Windows.Forms.MessageBoxButtons]::OK,
       [System.Windows.Forms.MessageBoxIcon]::Information
