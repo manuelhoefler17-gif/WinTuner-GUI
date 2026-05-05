@@ -58,6 +58,7 @@ $PSDefaultParameterValues = @{
 $script:appVersion  = "0.10.11"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
+$script:githubTagsApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/tags?per_page=1"
 $script:skipLowValueWingetCandidates = $false  # keep all apps by default; set $true for faster scans with possible omissions
 
 # --- Runtime state (set during execution) ---
@@ -125,12 +126,12 @@ function Test-AppUpdateAvailable {
       'User-Agent' = 'WinTuner-GUI-UpdateCheck'
     }
 
-    $savedDefaults = $PSDefaultParameterValues.Clone()
+    $savedDefaults = $PSDefaultParameterValues
     try {
       $PSDefaultParameterValues = @{}
       $response = Invoke-RestMethod -Uri $script:githubApiUrl -Headers $headers -TimeoutSec 10 -ErrorAction Stop
     } finally {
-      $PSDefaultParameterValues = $savedDefaults
+      $PSDefaultParameterValues = if ($null -ne $savedDefaults) { $savedDefaults } else { @{} }
     }
 
     # Extract version from tag_name (strip leading "v" and any suffix like "-Beta")
@@ -163,8 +164,50 @@ function Test-AppUpdateAvailable {
     }
 
   } catch {
-    $result.ErrorMessage = $_.Exception.Message
-    Write-Log "Update check failed: $($_.Exception.Message)"
+    $primaryError = $_.Exception.Message
+    Write-Log "Update check failed (releases/latest): $primaryError"
+
+    # Fallback: use newest tag when latest release endpoint is unavailable/rate-limited
+    try {
+      $savedDefaults = $PSDefaultParameterValues
+      try {
+        $PSDefaultParameterValues = @{}
+        $tagResponse = Invoke-RestMethod -Uri $script:githubTagsApiUrl -Headers $headers -TimeoutSec 10 -ErrorAction Stop
+      } finally {
+        $PSDefaultParameterValues = if ($null -ne $savedDefaults) { $savedDefaults } else { @{} }
+      }
+
+      $latestTag = $null
+      if ($tagResponse -is [System.Array]) {
+        $latestTag = $tagResponse | Select-Object -First 1
+      } else {
+        $latestTag = $tagResponse
+      }
+
+      if ($latestTag -and $latestTag.name) {
+        $remoteVersionStr = ([string]$latestTag.name) -replace '^v', ''
+        $cleanVersion = $remoteVersionStr -replace '-.*$', ''
+        if (-not [string]::IsNullOrWhiteSpace($cleanVersion)) {
+          $result.LatestVersion = $cleanVersion
+          $result.ReleaseUrl = "https://github.com/$($script:githubRepo)/tags"
+          $result.ErrorMessage = $null
+
+          if (Test-IsNewerVersion -Latest $cleanVersion -Current $script:appVersion) {
+            $result.UpdateAvailable = $true
+            Write-Log "Update available via tags fallback: $($script:appVersion) -> $cleanVersion"
+          } else {
+            Write-Log "App is up to date via tags fallback (v$($script:appVersion), latest tag: v$cleanVersion)"
+          }
+        }
+      }
+    } catch {
+      $result.ErrorMessage = $primaryError
+      Write-Log "Update check fallback failed: $($_.Exception.Message)"
+    }
+
+    if (-not $result.LatestVersion) {
+      $result.ErrorMessage = $primaryError
+    }
   }
 
   return $result
@@ -377,9 +420,14 @@ function Invoke-UpdateCheckFeedback {
     return
   }
 
-  $latestVer = if ($UpdateResult -and $UpdateResult.LatestVersion) { $UpdateResult.LatestVersion } else { "unknown" }
-  $statusMsg = "Up to date – Local: v$($script:appVersion) | GitHub: v$latestVer"
-  Update-Status $statusMsg
+  $latestVer = if ($UpdateResult -and $UpdateResult.LatestVersion) { $UpdateResult.LatestVersion } else { $script:appVersion }
+  if ($UpdateResult -and $UpdateResult.ErrorMessage -and -not $UpdateResult.LatestVersion) {
+    Write-Log "Update check could not resolve GitHub version: $($UpdateResult.ErrorMessage)"
+    Update-Status "Update check failed (GitHub unreachable). Local: v$($script:appVersion)"
+  } else {
+    $statusMsg = "Up to date – Local: v$($script:appVersion) | GitHub: v$latestVer"
+    Update-Status $statusMsg
+  }
 
   if ($isManual) {
     [System.Windows.Forms.MessageBox]::Show(
