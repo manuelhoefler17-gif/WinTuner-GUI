@@ -364,6 +364,25 @@ function Invoke-UpdateCheckFeedback {
 
   $latestVer = if ($UpdateResult -and $UpdateResult.LatestVersion) { $UpdateResult.LatestVersion } else { $null }
   if (-not $latestVer) {
+    # Retry once synchronously when async callback returned incomplete/empty payload
+    if (-not ($UpdateResult -and $UpdateResult.ErrorMessage)) {
+      Write-Log "Update check returned no version and no error. Retrying once synchronously..."
+      try {
+        $retryResult = Test-AppUpdateAvailable
+        if ($retryResult -and $retryResult.LatestVersion) {
+          $UpdateResult = $retryResult
+          $latestVer = $retryResult.LatestVersion
+          Write-Log "Synchronous retry succeeded. GitHub version: v$latestVer"
+        } elseif ($retryResult -and $retryResult.ErrorMessage) {
+          $UpdateResult = $retryResult
+        }
+      } catch {
+        Write-Log "Synchronous retry failed: $($_.Exception.Message)"
+      }
+    }
+  }
+
+  if (-not $latestVer) {
     $errText = if ($UpdateResult -and $UpdateResult.ErrorMessage) { $UpdateResult.ErrorMessage } else { 'No version information returned by GitHub.' }
     Write-Log "Update check could not resolve GitHub version: $errText"
     Update-Status "Update check failed (GitHub version unavailable). Local: v$($script:appVersion)"
