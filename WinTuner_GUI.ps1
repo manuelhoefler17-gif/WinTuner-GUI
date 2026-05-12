@@ -1105,7 +1105,16 @@ function Invoke-AsyncOperation {
   }
   
   # Update UI - show progress in marquee style (indefinite)
-  Update-Status $StatusText
+  try {
+    $statusCmd = Get-Command -Name 'Update-Status' -CommandType Function -ErrorAction SilentlyContinue
+    if ($statusCmd) {
+      & $statusCmd $StatusText
+    } elseif (-not [string]::IsNullOrWhiteSpace($StatusText)) {
+      Write-LogSafe "Status fallback (Update-Status unavailable): $StatusText"
+    }
+  } catch {
+    Write-LogSafe "Async start status update warning: $($_.Exception.Message)"
+  }
   if ($progressControl) {
     try {
       $progressControl.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
