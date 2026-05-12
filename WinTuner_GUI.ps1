@@ -56,10 +56,10 @@ $PSDefaultParameterValues = @{
 
 # --- Application metadata ---
 $script:appVersion  = "0.10.11"
-$script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
-$script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
-$script:githubTagsApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/tags?per_page=1"
-$script:githubReleasesApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases?per_page=1"
+$script:repoOwner = "manuelhoefler17-gif"
+$script:repoName = "WinTuner-GUI"
+$script:githubRepo  = "$($script:repoOwner)/$($script:repoName)"
+$script:githubApiUrl = "https://api.github.com/repos/$($script:repoOwner)/$($script:repoName)/releases/latest"
 $script:skipLowValueWingetCandidates = $false  # keep all apps by default; set $true for faster scans with possible omissions
 
 # --- Runtime state (set during execution) ---
@@ -103,12 +103,6 @@ function Test-IsNewerVersion {
 
 
 function Test-AppUpdateAvailable {
-  <#
-  .SYNOPSIS
-    Checks GitHub for a newer release of WinTuner GUI
-  .OUTPUTS
-    PSCustomObject with properties: UpdateAvailable, LatestVersion, DownloadUrl, ReleaseUrl, ReleaseNotes, ErrorMessage
-  #>
   $result = [pscustomobject]@{
     UpdateAvailable = $false
     LatestVersion   = $null
@@ -120,17 +114,12 @@ function Test-AppUpdateAvailable {
   }
 
   try {
-    Write-Log "Checking for app updates from GitHub..."
-
-    $headers = @{
-      'Accept'     = 'application/vnd.github.v3+json'
-      'User-Agent' = 'WinTuner-GUI-UpdateCheck'
-    }
+    Write-Log "[Update] Prüfe auf neue Version..."
 
     $savedDefaults = $PSDefaultParameterValues
     try {
       $PSDefaultParameterValues = @{}
-      $response = Invoke-RestMethod -Uri $script:githubApiUrl -Headers $headers -TimeoutSec 10 -ErrorAction Stop
+      $releaseInfo = Invoke-RestMethod -Uri $script:githubApiUrl -Method Get -ErrorAction Stop
     } finally {
       $PSDefaultParameterValues = if ($null -ne $savedDefaults) { $savedDefaults } else { @{} }
     }
@@ -145,117 +134,38 @@ function Test-AppUpdateAvailable {
       Write-Log "Update check: using fallback field 'name' because 'tag_name' is empty."
     }
 
-    $remoteVersionStr = if ($remoteTag) { $remoteTag -replace '^v', '' } else { $null }
-    $cleanVersion = if ($remoteVersionStr) { $remoteVersionStr -replace '-.*$', '' } else { $null }  # Remove "-Beta", "-RC1" etc.
-
-    if ([string]::IsNullOrWhiteSpace($cleanVersion)) {
-      $props = if ($response) { ($response.PSObject.Properties.Name -join ', ') } else { '<null response>' }
-      $result.ErrorMessage = "GitHub response did not include tag_name/name. Properties: $props"
-      Write-Log "Update check: no usable version field in response. Properties: $props"
-      return $result
+    $latestVersionTag = [string]$releaseInfo.tag_name
+    $latestVersionTag = $latestVersionTag -replace '[^0-9.]', ''
+    if ([string]::IsNullOrWhiteSpace($latestVersionTag)) {
+      throw "Release enthält keine gültige Versionsnummer (tag_name)."
     }
 
-    $result.LatestVersion = $cleanVersion
-    $result.ReleaseUrl    = $response.html_url
-    $result.ReleaseNotes  = $response.body
+    $latestVersion = [version]$latestVersionTag
+    $currentVersion = [version]$script:appVersion
 
-    # Find the .ps1 download asset
-    $ps1Asset = $response.assets | Where-Object { $_.name -like '*.ps1' } | Select-Object -First 1
-    if ($ps1Asset) {
-      $result.DownloadUrl = $ps1Asset.browser_download_url
+    $result.LatestVersion = $latestVersion.ToString()
+    $result.ReleaseUrl    = $releaseInfo.html_url
+    $result.ReleaseNotes  = $releaseInfo.body
+
+    $scriptFileName = if ($PSCommandPath) { [System.IO.Path]::GetFileName($PSCommandPath) } else { 'WinTuner_GUI.ps1' }
+    $asset = $releaseInfo.assets | Where-Object { $_.name -like "*$scriptFileName*" } | Select-Object -First 1
+    if (-not $asset) {
+      $asset = $releaseInfo.assets | Where-Object { $_.name -like '*.ps1' } | Select-Object -First 1
     }
+    if ($asset) { $result.DownloadUrl = $asset.browser_download_url }
 
-    # Find optional SHA256 checksum asset
-    $shaAsset = $response.assets | Where-Object { $_.name -like '*.sha256' } | Select-Object -First 1
-    if ($shaAsset) {
-      $result.HashUrl = $shaAsset.browser_download_url
-    }
+    $shaAsset = $releaseInfo.assets | Where-Object { $_.name -like '*.sha256' } | Select-Object -First 1
+    if ($shaAsset) { $result.HashUrl = $shaAsset.browser_download_url }
 
-    # Compare versions using existing function
-    if (Test-IsNewerVersion -Latest $cleanVersion -Current $script:appVersion) {
+    if ($latestVersion -gt $currentVersion) {
       $result.UpdateAvailable = $true
-      Write-Log "Update available: $($script:appVersion) -> $cleanVersion"
+      Write-Log "[*] Neue Version verfügbar: $latestVersion"
     } else {
-      Write-Log "App is up to date (v$($script:appVersion), latest: v$cleanVersion)"
+      Write-Log "[√] Skript ist aktuell."
     }
-
   } catch {
-    $primaryError = $_.Exception.Message
-    Write-Log "Update check failed (releases/latest): $primaryError"
-
-    # Fallback 1: use first entry from releases list endpoint
-    try {
-      $savedDefaults = $PSDefaultParameterValues
-      try {
-        $PSDefaultParameterValues = @{}
-        $releasesResponse = Invoke-RestMethod -Uri $script:githubReleasesApiUrl -Headers $headers -TimeoutSec 10 -ErrorAction Stop
-      } finally {
-        $PSDefaultParameterValues = if ($null -ne $savedDefaults) { $savedDefaults } else { @{} }
-      }
-
-      $latestRelease = if ($releasesResponse -is [System.Array]) { $releasesResponse | Select-Object -First 1 } else { $releasesResponse }
-      if ($latestRelease -and $latestRelease.tag_name) {
-        $remoteVersionStr = ([string]$latestRelease.tag_name) -replace '^v', ''
-        $cleanVersion = $remoteVersionStr -replace '-.*$', ''
-        if (-not [string]::IsNullOrWhiteSpace($cleanVersion)) {
-          $result.LatestVersion = $cleanVersion
-          $result.ReleaseUrl = if ($latestRelease.html_url) { $latestRelease.html_url } else { "https://github.com/$($script:githubRepo)/releases" }
-          $result.ErrorMessage = $null
-          if (Test-IsNewerVersion -Latest $cleanVersion -Current $script:appVersion) {
-            $result.UpdateAvailable = $true
-            Write-Log "Update available via releases-list fallback: $($script:appVersion) -> $cleanVersion"
-          } else {
-            Write-Log "App is up to date via releases-list fallback (v$($script:appVersion), latest: v$cleanVersion)"
-          }
-        }
-      }
-    } catch {
-      Write-Log "Update check fallback (releases list) failed: $($_.Exception.Message)"
-    }
-
-    # Fallback 2: use newest tag when release endpoints are unavailable/rate-limited
-    if (-not $result.LatestVersion) {
-      try {
-      $savedDefaults = $PSDefaultParameterValues
-      try {
-        $PSDefaultParameterValues = @{}
-        $tagResponse = Invoke-RestMethod -Uri $script:githubTagsApiUrl -Headers $headers -TimeoutSec 10 -ErrorAction Stop
-      } finally {
-        $PSDefaultParameterValues = if ($null -ne $savedDefaults) { $savedDefaults } else { @{} }
-      }
-
-      $latestTag = $null
-      if ($tagResponse -is [System.Array]) {
-        $latestTag = $tagResponse | Select-Object -First 1
-      } else {
-        $latestTag = $tagResponse
-      }
-
-      if ($latestTag -and $latestTag.name) {
-        $remoteVersionStr = ([string]$latestTag.name) -replace '^v', ''
-        $cleanVersion = $remoteVersionStr -replace '-.*$', ''
-        if (-not [string]::IsNullOrWhiteSpace($cleanVersion)) {
-          $result.LatestVersion = $cleanVersion
-          $result.ReleaseUrl = "https://github.com/$($script:githubRepo)/tags"
-          $result.ErrorMessage = $null
-
-          if (Test-IsNewerVersion -Latest $cleanVersion -Current $script:appVersion) {
-            $result.UpdateAvailable = $true
-            Write-Log "Update available via tags fallback: $($script:appVersion) -> $cleanVersion"
-          } else {
-            Write-Log "App is up to date via tags fallback (v$($script:appVersion), latest tag: v$cleanVersion)"
-          }
-        }
-      }
-    } catch {
-      $result.ErrorMessage = $primaryError
-      Write-Log "Update check fallback failed: $($_.Exception.Message)"
-    }
-    }
-
-    if (-not $result.LatestVersion) {
-      $result.ErrorMessage = $primaryError
-    }
+    $result.ErrorMessage = $_.Exception.Message
+    Write-Log "Update-Check konnte nicht durchgeführt werden: $($_.Exception.Message)"
   }
 
   return $result
