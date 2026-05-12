@@ -277,6 +277,20 @@ function Invoke-UpdateCheckFeedback {
     [string]$Context = 'Manual'
   )
 
+  $setStatus = {
+    param([string]$Text)
+    try {
+      $statusCmd = Get-Command -Name 'Update-Status' -CommandType Function -ErrorAction SilentlyContinue
+      if ($statusCmd) {
+        & $statusCmd $Text
+      } elseif (-not [string]::IsNullOrWhiteSpace($Text)) {
+        Write-Log "Status fallback (Update-Status unavailable): $Text"
+      }
+    } catch {
+      Write-Log "Status update failed: $($_.Exception.Message)"
+    }
+  }.GetNewClosure()
+
   $isManual = ($Context -eq 'Manual')
   $errorDetail = if ($UpdateResult -and $UpdateResult.Error) { $UpdateResult.Error } `
                  elseif ($UpdateResult -and $UpdateResult.ErrorMessage) { $UpdateResult.ErrorMessage } `
@@ -291,12 +305,12 @@ function Invoke-UpdateCheckFeedback {
         [System.Windows.Forms.MessageBoxIcon]::Warning
       )
     }
-    Update-Status "Update check failed (v$($script:appVersion)) – check internet connection"
+    & $setStatus "Update check failed (v$($script:appVersion)) – check internet connection"
     return
   }
 
   if ($UpdateResult -and $UpdateResult.UpdateAvailable) {
-    Update-Status "Update available: v$($UpdateResult.LatestVersion)"
+    & $setStatus "Update available: v$($UpdateResult.LatestVersion)"
     try {
       $msg  = "A new version of WinTuner GUI is available!`n`n"
       $msg += "Current version: v$($script:appVersion)`n"
@@ -314,13 +328,13 @@ function Invoke-UpdateCheckFeedback {
         )
 
         if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
-          Update-Status "Downloading update..."
+          & $setStatus "Downloading update..."
           [System.Windows.Forms.Application]::DoEvents()
 
           $success = Invoke-AppSelfUpdate -DownloadUrl $UpdateResult.DownloadUrl -HashUrl $UpdateResult.HashUrl
 
           if ($success) {
-            Update-Status "Update installed successfully. Please restart WinTuner GUI."
+            & $setStatus "Update installed successfully. Please restart WinTuner GUI."
             $restartMsg  = "Update installed successfully!`n`n"
             $restartMsg += "WinTuner GUI needs to restart to apply the update.`n"
             $restartMsg += "Click OK to close. Please start the script again manually."
@@ -334,17 +348,17 @@ function Invoke-UpdateCheckFeedback {
 
             $form.Close()
           } else {
-            Update-Status "Update download/install failed. See log for details."
+            & $setStatus "Update download/install failed. See log for details."
           }
         } else {
           if ($isManual) {
-            Update-Status "Update postponed by user"
+            & $setStatus "Update postponed by user"
           } else {
-            Update-Status "Update available: v$($UpdateResult.LatestVersion) - Go to Settings to update later."
+            & $setStatus "Update available: v$($UpdateResult.LatestVersion) - Go to Settings to update later."
           }
         }
       } else {
-        Update-Status "Update available: v$($UpdateResult.LatestVersion) (manual download required)"
+        & $setStatus "Update available: v$($UpdateResult.LatestVersion) (manual download required)"
         $msg += "No direct download available for this release.`n"
         $msg += "Please download manually from:`n$($UpdateResult.ReleaseUrl)"
 
@@ -357,7 +371,7 @@ function Invoke-UpdateCheckFeedback {
       }
     } catch {
       Write-Log "$Context update dialog error: $($_.Exception.Message)"
-      Update-Status "Update check completed (dialog error). See log for details."
+      & $setStatus "Update check completed (dialog error). See log for details."
     }
     return
   }
@@ -394,12 +408,12 @@ function Invoke-UpdateCheckFeedback {
   if (-not $latestVer) {
     $errText = if ($UpdateResult -and $UpdateResult.ErrorMessage) { $UpdateResult.ErrorMessage } else { 'No version information returned by GitHub.' }
     Write-Log "Update check could not resolve GitHub version: $errText"
-    Update-Status "Update check failed (GitHub version unavailable). Local: v$($script:appVersion)"
+    & $setStatus "Update check failed (GitHub version unavailable). Local: v$($script:appVersion)"
   } elseif ($resolvedUpdateAvailable) {
-    Update-Status "Update available: v$latestVer"
+    & $setStatus "Update available: v$latestVer"
   } else {
     $statusMsg = "Up to date – Local: v$($script:appVersion) | GitHub: v$latestVer"
-    Update-Status $statusMsg
+    & $setStatus $statusMsg
   }
 
   if ($isManual) {
