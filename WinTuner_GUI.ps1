@@ -56,8 +56,10 @@ $PSDefaultParameterValues = @{
 
 # --- Application metadata ---
 $script:appVersion  = "0.10.11"
-$script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
-$script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
+$script:repoOwner = "manuelhoefler17-gif"
+$script:repoName = "WinTuner-GUI"
+$script:githubRepo  = "$($script:repoOwner)/$($script:repoName)"
+$script:githubApiUrl = "https://api.github.com/repos/$($script:repoOwner)/$($script:repoName)/releases/latest"
 $script:skipLowValueWingetCandidates = $false  # keep all apps by default; set $true for faster scans with possible omissions
 
 # --- Runtime state (set during execution) ---
@@ -101,12 +103,6 @@ function Test-IsNewerVersion {
 
 
 function Test-AppUpdateAvailable {
-  <#
-  .SYNOPSIS
-    Checks GitHub for a newer release of WinTuner GUI
-  .OUTPUTS
-    PSCustomObject with properties: UpdateAvailable, LatestVersion, DownloadUrl, ReleaseUrl, ReleaseNotes, ErrorMessage
-  #>
   $result = [pscustomobject]@{
     UpdateAvailable = $false
     LatestVersion   = $null
@@ -118,53 +114,42 @@ function Test-AppUpdateAvailable {
   }
 
   try {
-    Write-Log "Checking for app updates from GitHub..."
+    Write-Log "[Update] Prüfe auf neue Version..."
 
-    $headers = @{
-      'Accept'     = 'application/vnd.github.v3+json'
-      'User-Agent' = 'WinTuner-GUI-UpdateCheck'
+    $releaseInfo = Invoke-RestMethod -Uri $script:githubApiUrl -Method Get -ErrorAction Stop
+
+    $latestVersionTag = [string]$releaseInfo.tag_name
+    $latestVersionTag = $latestVersionTag -replace '[^0-9.]', ''
+    if ([string]::IsNullOrWhiteSpace($latestVersionTag)) {
+      throw "Release enthält keine gültige Versionsnummer (tag_name)."
     }
 
-    $savedDefaults = $PSDefaultParameterValues.Clone()
-    try {
-      $PSDefaultParameterValues = @{}
-      $response = Invoke-RestMethod -Uri $script:githubApiUrl -Headers $headers -TimeoutSec 10 -ErrorAction Stop
-    } finally {
-      $PSDefaultParameterValues = $savedDefaults
+    $latestVersion = [version]$latestVersionTag
+    $currentVersion = [version]$script:appVersion
+
+    $result.LatestVersion = $latestVersion.ToString()
+    $result.ReleaseUrl    = $releaseInfo.html_url
+    $result.ReleaseNotes  = $releaseInfo.body
+
+    $scriptFileName = if ($PSCommandPath) { [System.IO.Path]::GetFileName($PSCommandPath) } else { 'WinTuner_GUI.ps1' }
+    $asset = $releaseInfo.assets | Where-Object { $_.name -like "*$scriptFileName*" } | Select-Object -First 1
+    if (-not $asset) {
+      $asset = $releaseInfo.assets | Where-Object { $_.name -like '*.ps1' } | Select-Object -First 1
     }
+    if ($asset) { $result.DownloadUrl = $asset.browser_download_url }
 
-    # Extract version from tag_name (strip leading "v" and any suffix like "-Beta")
-    $remoteTag = $response.tag_name
-    $remoteVersionStr = $remoteTag -replace '^v', ''
-    $cleanVersion = $remoteVersionStr -replace '-.*$', ''  # Remove "-Beta", "-RC1" etc.
+    $shaAsset = $releaseInfo.assets | Where-Object { $_.name -like '*.sha256' } | Select-Object -First 1
+    if ($shaAsset) { $result.HashUrl = $shaAsset.browser_download_url }
 
-    $result.LatestVersion = $cleanVersion
-    $result.ReleaseUrl    = $response.html_url
-    $result.ReleaseNotes  = $response.body
-
-    # Find the .ps1 download asset
-    $ps1Asset = $response.assets | Where-Object { $_.name -like '*.ps1' } | Select-Object -First 1
-    if ($ps1Asset) {
-      $result.DownloadUrl = $ps1Asset.browser_download_url
-    }
-
-    # Find optional SHA256 checksum asset
-    $shaAsset = $response.assets | Where-Object { $_.name -like '*.sha256' } | Select-Object -First 1
-    if ($shaAsset) {
-      $result.HashUrl = $shaAsset.browser_download_url
-    }
-
-    # Compare versions using existing function
-    if (Test-IsNewerVersion -Latest $cleanVersion -Current $script:appVersion) {
+    if ($latestVersion -gt $currentVersion) {
       $result.UpdateAvailable = $true
-      Write-Log "Update available: $($script:appVersion) -> $cleanVersion"
+      Write-Log "[*] Neue Version verfügbar: $latestVersion"
     } else {
-      Write-Log "App is up to date (v$($script:appVersion), latest: v$cleanVersion)"
+      Write-Log "[√] Skript ist aktuell."
     }
-
   } catch {
     $result.ErrorMessage = $_.Exception.Message
-    Write-Log "Update check failed: $($_.Exception.Message)"
+    Write-Log "Update-Check konnte nicht durchgeführt werden: $($_.Exception.Message)"
   }
 
   return $result
@@ -377,13 +362,19 @@ function Invoke-UpdateCheckFeedback {
     return
   }
 
-  $latestVer = if ($UpdateResult -and $UpdateResult.LatestVersion) { $UpdateResult.LatestVersion } else { "unknown" }
-  $statusMsg = "Up to date – Local: v$($script:appVersion) | GitHub: v$latestVer"
-  Update-Status $statusMsg
+  $latestVer = if ($UpdateResult -and $UpdateResult.LatestVersion) { $UpdateResult.LatestVersion } else { $null }
+  if (-not $latestVer) {
+    $errText = if ($UpdateResult -and $UpdateResult.ErrorMessage) { $UpdateResult.ErrorMessage } else { 'No version information returned by GitHub.' }
+    Write-Log "Update check could not resolve GitHub version: $errText"
+    Update-Status "Update check failed (GitHub version unavailable). Local: v$($script:appVersion)"
+  } else {
+    $statusMsg = "Up to date – Local: v$($script:appVersion) | GitHub: v$latestVer"
+    Update-Status $statusMsg
+  }
 
   if ($isManual) {
     [System.Windows.Forms.MessageBox]::Show(
-      "WinTuner GUI is up to date.`n`nLocal version:  v$($script:appVersion)`nGitHub version: v$latestVer",
+      "WinTuner GUI is up to date.`n`nLocal version:  v$($script:appVersion)`nGitHub version: v$(if ($latestVer) { $latestVer } else { 'unavailable' })",
       "No Update Available",
       [System.Windows.Forms.MessageBoxButtons]::OK,
       [System.Windows.Forms.MessageBoxIcon]::Information
