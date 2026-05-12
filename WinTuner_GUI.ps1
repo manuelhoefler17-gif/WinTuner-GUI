@@ -270,6 +270,76 @@ function Invoke-AppSelfUpdate {
   }
 }
 
+
+function Show-AppUpdateDialog {
+  param(
+    [Parameter(Mandatory=$true)]
+    [object]$UpdateResult,
+    [string]$Context = 'Manual',
+    [switch]$IsManual
+  )
+
+  $isManual = $IsManual.IsPresent -or ($Context -eq 'Manual')
+
+  $msg  = "A new version of WinTuner GUI is available!`n`n"
+  $msg += "Current version: v$($script:appVersion)`n"
+  $msg += "Latest version:  v$($UpdateResult.LatestVersion)`n`n"
+
+  if ($UpdateResult.DownloadUrl) {
+    $msg += "Do you want to download and install the update now?`n`n"
+    $msg += "(A backup of your current version will be created)"
+
+    $answer = [System.Windows.Forms.MessageBox]::Show(
+      $msg,
+      "Update Available",
+      [System.Windows.Forms.MessageBoxButtons]::YesNo,
+      [System.Windows.Forms.MessageBoxIcon]::Information
+    )
+
+    if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
+      Update-Status "Downloading update..."
+      [System.Windows.Forms.Application]::DoEvents()
+
+      $success = Invoke-AppSelfUpdate -DownloadUrl $UpdateResult.DownloadUrl -HashUrl $UpdateResult.HashUrl
+
+      if ($success) {
+        Update-Status "Update installed successfully. Please restart WinTuner GUI."
+        $restartMsg  = "Update installed successfully!`n`n"
+        $restartMsg += "WinTuner GUI needs to restart to apply the update.`n"
+        $restartMsg += "Click OK to close. Please start the script again manually."
+
+        [System.Windows.Forms.MessageBox]::Show(
+          $restartMsg,
+          "Update Complete",
+          [System.Windows.Forms.MessageBoxButtons]::OK,
+          [System.Windows.Forms.MessageBoxIcon]::Information
+        )
+
+        if ($form) { $form.Close() }
+      } else {
+        Update-Status "Update download/install failed. See log for details."
+      }
+    } else {
+      if ($isManual) {
+        Update-Status "Update postponed by user"
+      } else {
+        Update-Status "Update available: v$($UpdateResult.LatestVersion) - Go to Settings to update later."
+      }
+    }
+  } else {
+    Update-Status "Update available: v$($UpdateResult.LatestVersion) (manual download required)"
+    $msg += "No direct download available for this release.`n"
+    $msg += "Please download manually from:`n$($UpdateResult.ReleaseUrl)"
+
+    [System.Windows.Forms.MessageBox]::Show(
+      $msg,
+      "Update Available",
+      [System.Windows.Forms.MessageBoxButtons]::OK,
+      [System.Windows.Forms.MessageBoxIcon]::Information
+    )
+  }
+}
+
 function Invoke-UpdateCheckFeedback {
   param(
     [object]$UpdateResult,
@@ -312,63 +382,7 @@ function Invoke-UpdateCheckFeedback {
   if ($UpdateResult -and $UpdateResult.UpdateAvailable) {
     & $setStatus "Update available: v$($UpdateResult.LatestVersion)"
     try {
-      $msg  = "A new version of WinTuner GUI is available!`n`n"
-      $msg += "Current version: v$($script:appVersion)`n"
-      $msg += "Latest version:  v$($UpdateResult.LatestVersion)`n`n"
-
-      if ($UpdateResult.DownloadUrl) {
-        $msg += "Do you want to download and install the update now?`n`n"
-        $msg += "(A backup of your current version will be created)"
-
-        $answer = [System.Windows.Forms.MessageBox]::Show(
-          $msg,
-          "Update Available",
-          [System.Windows.Forms.MessageBoxButtons]::YesNo,
-          [System.Windows.Forms.MessageBoxIcon]::Information
-        )
-
-        if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
-          & $setStatus "Downloading update..."
-          [System.Windows.Forms.Application]::DoEvents()
-
-          $success = Invoke-AppSelfUpdate -DownloadUrl $UpdateResult.DownloadUrl -HashUrl $UpdateResult.HashUrl
-
-          if ($success) {
-            & $setStatus "Update installed successfully. Please restart WinTuner GUI."
-            $restartMsg  = "Update installed successfully!`n`n"
-            $restartMsg += "WinTuner GUI needs to restart to apply the update.`n"
-            $restartMsg += "Click OK to close. Please start the script again manually."
-
-            [System.Windows.Forms.MessageBox]::Show(
-              $restartMsg,
-              "Update Complete",
-              [System.Windows.Forms.MessageBoxButtons]::OK,
-              [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-
-            $form.Close()
-          } else {
-            & $setStatus "Update download/install failed. See log for details."
-          }
-        } else {
-          if ($isManual) {
-            & $setStatus "Update postponed by user"
-          } else {
-            & $setStatus "Update available: v$($UpdateResult.LatestVersion) - Go to Settings to update later."
-          }
-        }
-      } else {
-        & $setStatus "Update available: v$($UpdateResult.LatestVersion) (manual download required)"
-        $msg += "No direct download available for this release.`n"
-        $msg += "Please download manually from:`n$($UpdateResult.ReleaseUrl)"
-
-        [System.Windows.Forms.MessageBox]::Show(
-          $msg,
-          "Update Available",
-          [System.Windows.Forms.MessageBoxButtons]::OK,
-          [System.Windows.Forms.MessageBoxIcon]::Information
-        )
-      }
+      Show-AppUpdateDialog -UpdateResult $UpdateResult -Context $Context -IsManual:$isManual
     } catch {
       Write-Log "$Context update dialog error: $($_.Exception.Message)"
       & $setStatus "Update check completed (dialog error). See log for details."
