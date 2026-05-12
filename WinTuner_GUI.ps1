@@ -382,22 +382,37 @@ function Invoke-UpdateCheckFeedback {
     }
   }
 
+  $resolvedUpdateAvailable = $false
+  if ($latestVer) {
+    $resolvedUpdateAvailable = Test-IsNewerVersion -Latest $latestVer -Current $script:appVersion
+    if ($resolvedUpdateAvailable -and -not ($UpdateResult -and $UpdateResult.UpdateAvailable)) {
+      Write-Log "UpdateResult.UpdateAvailable was false, but version comparison detected newer GitHub release."
+      if ($UpdateResult) { $UpdateResult.UpdateAvailable = $true }
+    }
+  }
+
   if (-not $latestVer) {
     $errText = if ($UpdateResult -and $UpdateResult.ErrorMessage) { $UpdateResult.ErrorMessage } else { 'No version information returned by GitHub.' }
     Write-Log "Update check could not resolve GitHub version: $errText"
     Update-Status "Update check failed (GitHub version unavailable). Local: v$($script:appVersion)"
+  } elseif ($resolvedUpdateAvailable) {
+    Update-Status "Update available: v$latestVer"
   } else {
     $statusMsg = "Up to date – Local: v$($script:appVersion) | GitHub: v$latestVer"
     Update-Status $statusMsg
   }
 
   if ($isManual) {
-    [System.Windows.Forms.MessageBox]::Show(
-      "WinTuner GUI is up to date.`n`nLocal version:  v$($script:appVersion)`nGitHub version: v$(if ($latestVer) { $latestVer } else { 'unavailable' })",
-      "No Update Available",
-      [System.Windows.Forms.MessageBoxButtons]::OK,
-      [System.Windows.Forms.MessageBoxIcon]::Information
-    )
+    if ($resolvedUpdateAvailable) {
+      Show-AppUpdateDialog -UpdateResult $UpdateResult -Context "Manual" -IsManual
+    } else {
+      [System.Windows.Forms.MessageBox]::Show(
+        "WinTuner GUI is up to date.`n`nLocal version:  v$($script:appVersion)`nGitHub version: v$(if ($latestVer) { $latestVer } else { 'unavailable' })",
+        "No Update Available",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Information
+      )
+    }
   }
 }
 
