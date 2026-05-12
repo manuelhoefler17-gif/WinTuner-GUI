@@ -354,10 +354,10 @@ function Invoke-UpdateCheckFeedback {
       if ($statusCmd) {
         & $statusCmd $Text
       } elseif (-not [string]::IsNullOrWhiteSpace($Text)) {
-        Write-Log "Status fallback (Update-Status unavailable): $Text"
+        Write-LogSafe "Status fallback (Update-Status unavailable): $Text"
       }
     } catch {
-      Write-Log "Status update failed: $($_.Exception.Message)"
+      Write-LogSafe "Status update failed: $($_.Exception.Message)"
     }
   }.GetNewClosure()
 
@@ -384,7 +384,7 @@ function Invoke-UpdateCheckFeedback {
     try {
       Show-AppUpdateDialog -UpdateResult $UpdateResult -Context $Context -IsManual:$isManual
     } catch {
-      Write-Log "$Context update dialog error: $($_.Exception.Message)"
+      Write-LogSafe "$Context update dialog error: $($_.Exception.Message)"
       & $setStatus "Update check completed (dialog error). See log for details."
     }
     return
@@ -394,18 +394,18 @@ function Invoke-UpdateCheckFeedback {
   if (-not $latestVer) {
     # Retry once synchronously when async callback returned incomplete/empty payload
     if (-not ($UpdateResult -and $UpdateResult.ErrorMessage)) {
-      Write-Log "Update check returned no version and no error. Retrying once synchronously..."
+      Write-LogSafe "Update check returned no version and no error. Retrying once synchronously..."
       try {
         $retryResult = Test-AppUpdateAvailable
         if ($retryResult -and $retryResult.LatestVersion) {
           $UpdateResult = $retryResult
           $latestVer = $retryResult.LatestVersion
-          Write-Log "Synchronous retry succeeded. GitHub version: v$latestVer"
+          Write-LogSafe "Synchronous retry succeeded. GitHub version: v$latestVer"
         } elseif ($retryResult -and $retryResult.ErrorMessage) {
           $UpdateResult = $retryResult
         }
       } catch {
-        Write-Log "Synchronous retry failed: $($_.Exception.Message)"
+        Write-LogSafe "Synchronous retry failed: $($_.Exception.Message)"
       }
     }
   }
@@ -414,14 +414,14 @@ function Invoke-UpdateCheckFeedback {
   if ($latestVer) {
     $resolvedUpdateAvailable = Test-IsNewerVersion -Latest $latestVer -Current $script:appVersion
     if ($resolvedUpdateAvailable -and -not ($UpdateResult -and $UpdateResult.UpdateAvailable)) {
-      Write-Log "UpdateResult.UpdateAvailable was false, but version comparison detected newer GitHub release."
+      Write-LogSafe "UpdateResult.UpdateAvailable was false, but version comparison detected newer GitHub release."
       if ($UpdateResult) { $UpdateResult.UpdateAvailable = $true }
     }
   }
 
   if (-not $latestVer) {
     $errText = if ($UpdateResult -and $UpdateResult.ErrorMessage) { $UpdateResult.ErrorMessage } else { 'No version information returned by GitHub.' }
-    Write-Log "Update check could not resolve GitHub version: $errText"
+    Write-LogSafe "Update check could not resolve GitHub version: $errText"
     & $setStatus "Update check failed (GitHub version unavailable). Local: v$($script:appVersion)"
   } elseif ($resolvedUpdateAvailable) {
     & $setStatus "Update available: v$latestVer"
