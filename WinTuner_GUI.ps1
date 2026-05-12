@@ -116,23 +116,7 @@ function Test-AppUpdateAvailable {
   try {
     Write-Log "[Update] Prüfe auf neue Version..."
 
-    $savedDefaults = $PSDefaultParameterValues
-    try {
-      $PSDefaultParameterValues = @{}
-      $releaseInfo = Invoke-RestMethod -Uri $script:githubApiUrl -Method Get -ErrorAction Stop
-    } finally {
-      $PSDefaultParameterValues = if ($null -ne $savedDefaults) { $savedDefaults } else { @{} }
-    }
-
-    # Extract version from GitHub response (prefer release.tag_name; tolerate alternate shapes)
-    $remoteTag = $null
-    if ($response -and $response.PSObject.Properties['tag_name']) {
-      $remoteTag = [string]$response.tag_name
-    }
-    if ([string]::IsNullOrWhiteSpace($remoteTag) -and $response -and $response.PSObject.Properties['name']) {
-      $remoteTag = [string]$response.name
-      Write-Log "Update check: using fallback field 'name' because 'tag_name' is empty."
-    }
+    $releaseInfo = Invoke-RestMethod -Uri $script:githubApiUrl -Method Get -ErrorAction Stop
 
     $latestVersionTag = [string]$releaseInfo.tag_name
     $latestVersionTag = $latestVersionTag -replace '[^0-9.]', ''
