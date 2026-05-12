@@ -1192,7 +1192,7 @@ function Invoke-AsyncOperation {
           & $_OnComplete $e.Result
         } catch {
           & $_SafeLog "Async completion callback error: $($_.Exception.Message)"
-          Update-Status "Operation completed with errors"
+          & $_SafeLog "Operation completed with errors"
         }
       }
 
