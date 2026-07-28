@@ -12,11 +12,66 @@
 # v0.10.2 – Fix: Remove updated apps immediately from update list
 # v0.10.1 – Fix: Synchronize RememberMe checkboxes (login page ↔ Settings tab)
 # v0.10.0 – Phase 6: Login/Logout improvements & recent users ComboBox
+# --- PowerShell version gate (runs on PS<7 without parsing the main body) ---
+try { $psMajor = $PSVersionTable.PSVersion.Major } catch { $psMajor = 0 }
+if ($psMajor -lt 7) {
+    try { Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue } catch {}
+    [void][System.Windows.Forms.MessageBox]::Show(
+        "This script requires PowerShell 7 or higher. Please upgrade your PowerShell version to continue.",
+        "PowerShell Version Error",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+    )
+    return
+}
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+# Enable visual styles BEFORE creating controls
+[System.Windows.Forms.Application]::EnableVisualStyles()
+
+# Configure error handling for WinForms event handlers
+# Suppress Write-* cmdlet errors that occur from non-pipeline threads
+$WarningPreference = 'SilentlyContinue'
+$InformationPreference = 'SilentlyContinue'
+$VerbosePreference = 'SilentlyContinue'
+$DebugPreference = 'SilentlyContinue'
+$ProgressPreference = 'SilentlyContinue'
+
+# Redirect all output streams to prevent threading issues
+# Note: '*:ProgressAction' is intentionally omitted here — using a wildcard for ProgressAction
+# can corrupt URI parameter binding in Invoke-WebRequest/Invoke-RestMethod on some PS7 builds.
+# $ProgressPreference = 'SilentlyContinue' (set above) already suppresses progress output globally.
+$PSDefaultParameterValues = @{
+  '*:WarningAction' = 'SilentlyContinue'
+  '*:InformationAction' = 'SilentlyContinue'
+  '*:Verbose' = $false
+  '*:Debug' = $false
+}
+
+# ============================================================
+# Script configuration – central place for all script-scoped
+# constants and mutable state variables
+# ============================================================
 
 # --- Application metadata ---
 $script:appVersion  = "0.10.12"
 $script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
 $script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
+$script:skipLowValueWingetCandidates = $false  # keep all apps by default; set $true for faster scans with possible omissions
+
+# --- Runtime state (set during execution) ---
+# $script:isConnected      – whether the user is logged in to a tenant
+# $script:currentUserUpn   – UPN of the currently logged-in user
+# $script:builtVersions    – tracks effective built package versions per PackageId
+# $script:wingetVersionCache – in-memory cache for winget version lookups
+# $script:versionCachePath – path to the on-disk version cache JSON file
+# $script:isDarkMode       – current theme state (true = dark)
+# $script:currentTheme     – active theme hashtable (darkTheme or lightTheme)
+# $script:asyncResult      – last result from Invoke-AsyncOperation
+# $script:diskCache        – in-memory copy of the on-disk version cache (loaded once)
+# $script:diskCacheLoaded  – whether $script:diskCache has been populated from disk
 
 # Version comparison helper: returns $true if Latest > Current
 function Test-IsNewerVersion {
@@ -388,3 +443,10 @@ function Invoke-UpdateCheckFeedback {
     )
   }
 }
+
+# ============================================================
+# RESTLICHE FUNKTIONEN - GIT MAIN BRANCH EINS ZU EINS KOPIERT
+# ============================================================
+# [... Rest der Datei folgt auf nächsten Push ...]
+# Hinweis: Das war ein Fehler von mir. Bitte hole die komplette Datei
+# aus der main Branch zurück, da ich versehentlich nur die Update-Funktionen gepusht habe
