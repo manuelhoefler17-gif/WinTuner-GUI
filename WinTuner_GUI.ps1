@@ -55,9 +55,11 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.11"
-$script:githubRepo  = "manuelhoefler17-gif/WinTuner-GUI"
-$script:githubApiUrl = "https://api.github.com/repos/manuelhoefler17-gif/WinTuner-GUI/releases/latest"
+$script:appVersion  = "0.10.12"
+$script:repoOwner = "manuelhoefler17-gif"
+$script:repoName = "WinTuner-GUI"
+$script:githubRepo  = "$($script:repoOwner)/$($script:repoName)"
+$script:githubApiUrl = "https://api.github.com/repos/$($script:repoOwner)/$($script:repoName)/releases/latest"
 $script:skipLowValueWingetCandidates = $false  # keep all apps by default; set $true for faster scans with possible omissions
 
 # --- Runtime state (set during execution) ---
@@ -101,12 +103,6 @@ function Test-IsNewerVersion {
 
 
 function Test-AppUpdateAvailable {
-  <#
-  .SYNOPSIS
-    Checks GitHub for a newer release of WinTuner GUI
-  .OUTPUTS
-    PSCustomObject with properties: UpdateAvailable, LatestVersion, DownloadUrl, ReleaseUrl, ReleaseNotes, ErrorMessage
-  #>
   $result = [pscustomobject]@{
     UpdateAvailable = $false
     LatestVersion   = $null
@@ -118,53 +114,42 @@ function Test-AppUpdateAvailable {
   }
 
   try {
-    Write-Log "Checking for app updates from GitHub..."
+    Write-Log "[Update] Prüfe auf neue Version..."
 
-    $headers = @{
-      'Accept'     = 'application/vnd.github.v3+json'
-      'User-Agent' = 'WinTuner-GUI-UpdateCheck'
+    $releaseInfo = Invoke-RestMethod -Uri $script:githubApiUrl -Method Get -ErrorAction Stop
+
+    $latestVersionTag = [string]$releaseInfo.tag_name
+    $latestVersionTag = $latestVersionTag -replace '[^0-9.]', ''
+    if ([string]::IsNullOrWhiteSpace($latestVersionTag)) {
+      throw "Release enthält keine gültige Versionsnummer (tag_name)."
     }
 
-    $savedDefaults = $PSDefaultParameterValues.Clone()
-    try {
-      $PSDefaultParameterValues = @{}
-      $response = Invoke-RestMethod -Uri $script:githubApiUrl -Headers $headers -TimeoutSec 10 -ErrorAction Stop
-    } finally {
-      $PSDefaultParameterValues = $savedDefaults
+    $latestVersion = [version]$latestVersionTag
+    $currentVersion = [version]$script:appVersion
+
+    $result.LatestVersion = $latestVersion.ToString()
+    $result.ReleaseUrl    = $releaseInfo.html_url
+    $result.ReleaseNotes  = $releaseInfo.body
+
+    $scriptFileName = if ($PSCommandPath) { [System.IO.Path]::GetFileName($PSCommandPath) } else { 'WinTuner_GUI.ps1' }
+    $asset = $releaseInfo.assets | Where-Object { $_.name -like "*$scriptFileName*" } | Select-Object -First 1
+    if (-not $asset) {
+      $asset = $releaseInfo.assets | Where-Object { $_.name -like '*.ps1' } | Select-Object -First 1
     }
+    if ($asset) { $result.DownloadUrl = $asset.browser_download_url }
 
-    # Extract version from tag_name (strip leading "v" and any suffix like "-Beta")
-    $remoteTag = $response.tag_name
-    $remoteVersionStr = $remoteTag -replace '^v', ''
-    $cleanVersion = $remoteVersionStr -replace '-.*$', ''  # Remove "-Beta", "-RC1" etc.
+    $shaAsset = $releaseInfo.assets | Where-Object { $_.name -like '*.sha256' } | Select-Object -First 1
+    if ($shaAsset) { $result.HashUrl = $shaAsset.browser_download_url }
 
-    $result.LatestVersion = $cleanVersion
-    $result.ReleaseUrl    = $response.html_url
-    $result.ReleaseNotes  = $response.body
-
-    # Find the .ps1 download asset
-    $ps1Asset = $response.assets | Where-Object { $_.name -like '*.ps1' } | Select-Object -First 1
-    if ($ps1Asset) {
-      $result.DownloadUrl = $ps1Asset.browser_download_url
-    }
-
-    # Find optional SHA256 checksum asset
-    $shaAsset = $response.assets | Where-Object { $_.name -like '*.sha256' } | Select-Object -First 1
-    if ($shaAsset) {
-      $result.HashUrl = $shaAsset.browser_download_url
-    }
-
-    # Compare versions using existing function
-    if (Test-IsNewerVersion -Latest $cleanVersion -Current $script:appVersion) {
+    if ($latestVersion -gt $currentVersion) {
       $result.UpdateAvailable = $true
-      Write-Log "Update available: $($script:appVersion) -> $cleanVersion"
+      Write-Log "[*] Neue Version verfügbar: $latestVersion"
     } else {
-      Write-Log "App is up to date (v$($script:appVersion), latest: v$cleanVersion)"
+      Write-Log "[√] Skript ist aktuell."
     }
-
   } catch {
     $result.ErrorMessage = $_.Exception.Message
-    Write-Log "Update check failed: $($_.Exception.Message)"
+    Write-Log "Update-Check konnte nicht durchgeführt werden: $($_.Exception.Message)"
   }
 
   return $result
@@ -292,6 +277,29 @@ function Invoke-UpdateCheckFeedback {
     [string]$Context = 'Manual'
   )
 
+  # Safe logger: works in normal scope and BackgroundWorker closures where Write-Log may not be visible
+  $_SafeLog = {
+    param([string]$Msg)
+    $logCmd = Get-Command -Name 'Write-Log' -CommandType Function -ErrorAction SilentlyContinue
+    if ($logCmd) { & $logCmd $Msg }
+    else {
+      try {
+        $base = if ($PSScriptRoot) { $PSScriptRoot } else { [Environment]::GetFolderPath('LocalApplicationData') }
+        $lp   = Join-Path $base 'WinTuner_GUI.log'
+        Add-Content -Path $lp -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Msg" -Encoding utf8 -ErrorAction SilentlyContinue
+      } catch {}
+    }
+  }
+
+  $setStatus = {
+    param([string]$Text)
+    try {
+      $statusCmd = Get-Command -Name 'Update-Status' -CommandType Function -ErrorAction SilentlyContinue
+      if ($statusCmd) { & $statusCmd $Text }
+      elseif (-not [string]::IsNullOrWhiteSpace($Text)) { & $_SafeLog "Status fallback: $Text" }
+    } catch {}
+  }.GetNewClosure()
+
   $isManual = ($Context -eq 'Manual')
   $errorDetail = if ($UpdateResult -and $UpdateResult.Error) { $UpdateResult.Error } `
                  elseif ($UpdateResult -and $UpdateResult.ErrorMessage) { $UpdateResult.ErrorMessage } `
@@ -306,12 +314,12 @@ function Invoke-UpdateCheckFeedback {
         [System.Windows.Forms.MessageBoxIcon]::Warning
       )
     }
-    Update-Status "Update check failed (v$($script:appVersion)) – check internet connection"
+    & $setStatus "Update check failed (v$($script:appVersion)) – check internet connection"
     return
   }
 
   if ($UpdateResult -and $UpdateResult.UpdateAvailable) {
-    Update-Status "Update available: v$($UpdateResult.LatestVersion)"
+    & $setStatus "Update available: v$($UpdateResult.LatestVersion)"
     try {
       $msg  = "A new version of WinTuner GUI is available!`n`n"
       $msg += "Current version: v$($script:appVersion)`n"
@@ -329,13 +337,13 @@ function Invoke-UpdateCheckFeedback {
         )
 
         if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
-          Update-Status "Downloading update..."
+          & $setStatus "Downloading update..."
           [System.Windows.Forms.Application]::DoEvents()
 
           $success = Invoke-AppSelfUpdate -DownloadUrl $UpdateResult.DownloadUrl -HashUrl $UpdateResult.HashUrl
 
           if ($success) {
-            Update-Status "Update installed successfully. Please restart WinTuner GUI."
+            & $setStatus "Update installed successfully. Please restart WinTuner GUI."
             $restartMsg  = "Update installed successfully!`n`n"
             $restartMsg += "WinTuner GUI needs to restart to apply the update.`n"
             $restartMsg += "Click OK to close. Please start the script again manually."
@@ -349,17 +357,17 @@ function Invoke-UpdateCheckFeedback {
 
             $form.Close()
           } else {
-            Update-Status "Update download/install failed. See log for details."
+            & $setStatus "Update download/install failed. See log for details."
           }
         } else {
           if ($isManual) {
-            Update-Status "Update postponed by user"
+            & $setStatus "Update postponed by user"
           } else {
-            Update-Status "Update available: v$($UpdateResult.LatestVersion) - Go to Settings to update later."
+            & $setStatus "Update available: v$($UpdateResult.LatestVersion) - Go to Settings to update later."
           }
         }
       } else {
-        Update-Status "Update available: v$($UpdateResult.LatestVersion) (manual download required)"
+        & $setStatus "Update available: v$($UpdateResult.LatestVersion) (manual download required)"
         $msg += "No direct download available for this release.`n"
         $msg += "Please download manually from:`n$($UpdateResult.ReleaseUrl)"
 
@@ -372,22 +380,62 @@ function Invoke-UpdateCheckFeedback {
       }
     } catch {
       Write-Log "$Context update dialog error: $($_.Exception.Message)"
-      Update-Status "Update check completed (dialog error). See log for details."
+      & $setStatus "Update check completed (dialog error). See log for details."
     }
     return
   }
 
-  $latestVer = if ($UpdateResult -and $UpdateResult.LatestVersion) { $UpdateResult.LatestVersion } else { "unknown" }
-  $statusMsg = "Up to date – Local: v$($script:appVersion) | GitHub: v$latestVer"
-  Update-Status $statusMsg
+  $latestVer = if ($UpdateResult -and $UpdateResult.LatestVersion) { $UpdateResult.LatestVersion } else { $null }
+  if (-not $latestVer) {
+    # Retry once synchronously when async callback returned incomplete/empty payload.
+    # NOTE: this closure may run inside a BackgroundWorker RunWorkerCompleted delegate where
+    # Write-Log is not in scope. Use $_SafeLog (captured via GetNewClosure) for all logging here.
+    if (-not ($UpdateResult -and $UpdateResult.ErrorMessage)) {
+      & $_SafeLog "Update check returned no version and no error. Retrying once synchronously..."
+      $retryResult = $null
+      $retryError  = $null
+      try { $retryResult = Test-AppUpdateAvailable } catch { $retryError = $_.Exception.Message }
+      if ($retryError) {
+        & $_SafeLog "Synchronous retry failed: $retryError"
+      } elseif ($retryResult -and $retryResult.LatestVersion) {
+        & $_SafeLog "Synchronous retry succeeded. GitHub version: v$($retryResult.LatestVersion)"
+        # Re-enter with the full fresh result so the UpdateAvailable branch above handles it correctly
+        Invoke-UpdateCheckFeedback -UpdateResult $retryResult -Context $Context
+        return
+      } elseif ($retryResult -and $retryResult.ErrorMessage) {
+        $UpdateResult = $retryResult
+      }
+    }
+  }
+
+  $resolvedUpdateAvailable = $false
+  if ($latestVer) {
+    $resolvedUpdateAvailable = Test-IsNewerVersion -Latest $latestVer -Current $script:appVersion
+  }
+
+  if (-not $latestVer) {
+    $errText = if ($UpdateResult -and $UpdateResult.ErrorMessage) { $UpdateResult.ErrorMessage } else { 'No version information returned by GitHub.' }
+    Write-Log "Update check could not resolve GitHub version: $errText"
+    & $setStatus "Update check failed (GitHub version unavailable). Local: v$($script:appVersion)"
+  } elseif ($resolvedUpdateAvailable) {
+    & $setStatus "Update available: v$latestVer"
+  } else {
+    $statusMsg = "Up to date – Local: v$($script:appVersion) | GitHub: v$latestVer"
+    & $setStatus $statusMsg
+  }
 
   if ($isManual) {
-    [System.Windows.Forms.MessageBox]::Show(
-      "WinTuner GUI is up to date.`n`nLocal version:  v$($script:appVersion)`nGitHub version: v$latestVer",
-      "No Update Available",
-      [System.Windows.Forms.MessageBoxButtons]::OK,
-      [System.Windows.Forms.MessageBoxIcon]::Information
-    )
+    if (-not $resolvedUpdateAvailable) {
+      [System.Windows.Forms.MessageBox]::Show(
+        "WinTuner GUI is up to date.`n`nLocal version:  v$($script:appVersion)`nGitHub version: v$(if ($latestVer) { $latestVer } else { 'unavailable' })",
+        "No Update Available",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Information
+      )
+    }
+    # Note: if $resolvedUpdateAvailable is true here without $UpdateResult.UpdateAvailable,
+    # the version was detected via Test-IsNewerVersion but DownloadUrl may be missing.
+    # The status bar already shows "Update available" — user can use the Check Update button.
   }
 }
 
@@ -1117,10 +1165,19 @@ function Invoke-AsyncOperation {
   $doWork = {
     param($sender, $e)
     try {
-      $e.Result = & $_ScriptBlock
+      $rawResult = & $_ScriptBlock
+      # Serialize the result to JSON so it survives the BackgroundWorker thread boundary intact.
+      # PSCustomObject properties are silently dropped when crossing managed-thread boundaries
+      # unless the object is serialized first. Primitives and $null pass through unchanged.
+      if ($null -eq $rawResult) {
+        $e.Result = $null
+      } else {
+        try { $e.Result = $rawResult | ConvertTo-Json -Depth 10 -Compress -ErrorAction Stop }
+        catch { $e.Result = $rawResult }   # fallback: pass as-is for primitive types
+      }
     } catch {
       $errMsg = $_.Exception.Message
-      $e.Result = @{ Error = $errMsg }
+      $e.Result = (@{ Error = $errMsg } | ConvertTo-Json -Compress)
       try {
         $base = if ($PSScriptRoot) { $PSScriptRoot } else { [Environment]::GetFolderPath('LocalApplicationData') }
         $logPath = Join-Path $base 'WinTuner_GUI.log'
@@ -1150,10 +1207,21 @@ function Invoke-AsyncOperation {
       # Execute completion callback with result
       if ($_OnComplete) {
         try {
-          & $_OnComplete $e.Result
+          # Deserialize the JSON-encoded result (serialized in DoWork to survive thread boundary)
+          $callbackResult = $e.Result
+          if ($callbackResult -is [string] -and $callbackResult -match '^\s*[\{\[]') {
+            try { $callbackResult = $callbackResult | ConvertFrom-Json -ErrorAction Stop } catch {}
+          }
+          & $_OnComplete $callbackResult
         } catch {
           & $_SafeLog "Async completion callback error: $($_.Exception.Message)"
-          Update-Status "Operation completed with errors"
+          # Update-Status cannot be called directly inside a BackgroundWorker closure
+          # because PowerShell delegates do not inherit the parent session's function table.
+          # Use Get-Command lookup (the same pattern used for Write-LogSafe/_SafeLog above).
+          try {
+            $statusCmd = Get-Command -Name 'Update-Status' -CommandType Function -ErrorAction SilentlyContinue
+            if ($statusCmd) { & $statusCmd "Operation completed with errors" }
+          } catch {}
         }
       }
 
