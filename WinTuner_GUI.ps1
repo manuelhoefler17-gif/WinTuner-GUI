@@ -60,6 +60,9 @@ $script:appVersion  = "0.10.12"
 # Load WinTuner core helpers
 $coreModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Core.psm1'
 Import-Module $coreModulePath -Force
+# Load WinTuner WinGet helpers
+$wingetModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Winget.psm1'
+Import-Module $wingetModulePath -Force
 $script:repoOwner = "manuelhoefler17-gif"
 $script:repoName = "WinTuner-GUI"
 $script:githubRepo  = "$($script:repoOwner)/$($script:repoName)"
@@ -455,115 +458,13 @@ function Resolve-WingetIdForApp {
   return $null
 }
 
-function Get-VersionDiskCache {
-  if (-not $script:versionCachePath) { return @{} }
-  try {
-    if (Test-Path $script:versionCachePath) {
-      $raw = Get-Content $script:versionCachePath -Raw -Encoding utf8 -ErrorAction Stop
-      $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
-      $ht = @{}
-      foreach ($prop in $parsed.PSObject.Properties) {
-        $ht[$prop.Name] = @{
-          versions  = @($prop.Value.versions)
-          timestamp = [datetime]::Parse($prop.Value.timestamp, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind)
-        }
-      }
-      return $ht
-    }
-  } catch {
-    Write-Log "Warning: Could not read version cache: $($_.Exception.Message)"
-  }
-  return @{}
-}
 
-function Save-VersionDiskCache {
-  param([hashtable]$Cache)
-  if (-not $script:versionCachePath) { return }
-  try {
-    $obj = @{}
-    foreach ($key in $Cache.Keys) {
-      $obj[$key] = @{
-        versions  = $Cache[$key].versions
-        timestamp = $Cache[$key].timestamp.ToString('o')
-      }
-    }
-    $obj | ConvertTo-Json -Depth 4 | Set-Content -Path $script:versionCachePath -Encoding utf8 -ErrorAction SilentlyContinue
-  } catch {
-    Write-Log "Warning: Could not save version cache: $($_.Exception.Message)"
-  }
-}
 
-function Get-WingetVersions {
-  param([string]$PackageId)
 
-  # 1) RAM cache
-  if ($script:wingetVersionCache.ContainsKey($PackageId)) {
-    return $script:wingetVersionCache[$PackageId]
-  }
 
-  # 2) Disk cache (TTL 6h) – loaded once per session
-  if (-not $script:diskCacheLoaded) {
-    $script:diskCache = Get-VersionDiskCache
-    $script:diskCacheLoaded = $true
-  }
-  if ($script:diskCache.ContainsKey($PackageId)) {
-    $entry = $script:diskCache[$PackageId]
-    $ageHours = ([datetime]::UtcNow - $entry.timestamp.ToUniversalTime()).TotalHours
-    if ($ageHours -lt 6 -and $entry.versions -and $entry.versions.Count -gt 0) {
-      $script:wingetVersionCache[$PackageId] = $entry.versions
-      Write-Log "Version cache hit (disk) for $PackageId (age: $([math]::Round($ageHours,1))h)"
-      return $entry.versions
-    }
-  }
 
-  # 3) Query winget
-  try { $output = & winget show --id $PackageId --versions 2>$null } catch { return @() }
-  if (-not $output) { return @() }
 
-  $cand = @()
-  foreach ($line in @($output)) {
-    $t = ($line -replace '^[\s\-•]+','').Trim()
-    if (-not $t) { continue }
-    if ($t -match '^(\d+)(\.[0-9A-Za-z]+)*([\-+._][0-9A-Za-z]+)*$') { $cand += $t }
-  }
 
-  $unique = @($cand | Select-Object -Unique)
-  $parsed = foreach ($v in $unique) {
-    $ok = $false; $vo = $null
-    try { $vo = [version]$v; $ok = $true } catch {}
-    [pscustomobject]@{ Text = $v; Parsed = $vo; Numeric = $ok }
-  }
-
-  $result = @()
-  if ($parsed | Where-Object Numeric) {
-    $result = @($parsed | Where-Object Numeric | Sort-Object Parsed -Descending | Select-Object -ExpandProperty Text)
-  } else {
-    $result = @($parsed | Sort-Object Text -Descending | Select-Object -ExpandProperty Text)
-  }
-
-  # 4) Store in RAM cache
-  $script:wingetVersionCache[$PackageId] = $result
-
-  # 5) Store in disk cache (update script-level cache variable and persist to disk)
-  $script:diskCache[$PackageId] = @{
-    versions  = $result
-    timestamp = [datetime]::UtcNow
-  }
-  Save-VersionDiskCache -Cache $script:diskCache
-
-  return $result
-}
-
-function Get-PreviousWingetVersion {
-  param([string]$PackageId, [string]$LatestVersion)
-
-  $allVersions = @(Get-WingetVersions -PackageId $PackageId)
-  if (-not $allVersions -or $allVersions.Count -eq 0) { return $null }
-
-  $candidates = @($allVersions | Where-Object { $_ -ne $LatestVersion })
-  if ($candidates.Count -gt 0) { return $candidates[0] }
-  return $null
-}
 
 function Get-StringSimilarity {
   param($str1, $str2)
@@ -1349,12 +1250,7 @@ $script:currentUserUpn = ""
 # Track effective built versions per PackageId
 $script:builtVersions = @{}
 # Cache for winget version lookups (speeds up repeated searches)
-$script:wingetVersionCache = @{}
-$script:versionCachePath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'WinTuner_VersionCache.json'
 # Disk cache loaded once at first use (Fix 1)
-$script:diskCache = @{}
-$script:diskCacheLoaded = $false
-
 # Create form
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "WinTuner GUI"
@@ -1908,10 +1804,7 @@ $saveSettingsButton.Add_Click({
 
 # Clear Version Cache Button Handler
 $clearCacheButton.Add_Click({
-  $script:wingetVersionCache = @{}
-  $script:diskCache = @{}
-  $script:diskCacheLoaded = $false
-  Remove-Item $script:versionCachePath -Force -ErrorAction SilentlyContinue
+  Clear-WingetVersionCache
   Write-Log "Version cache cleared."
   Update-Status "Version cache cleared."
 })
