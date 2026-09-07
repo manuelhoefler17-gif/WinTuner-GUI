@@ -56,6 +56,10 @@ $PSDefaultParameterValues = @{
 
 # --- Application metadata ---
 $script:appVersion  = "0.10.12"
+
+# Load WinTuner core helpers
+$coreModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Core.psm1'
+Import-Module $coreModulePath -Force
 $script:repoOwner = "manuelhoefler17-gif"
 $script:repoName = "WinTuner-GUI"
 $script:githubRepo  = "$($script:repoOwner)/$($script:repoName)"
@@ -75,31 +79,7 @@ $script:skipLowValueWingetCandidates = $false  # keep all apps by default; set $
 # $script:diskCacheLoaded  – whether $script:diskCache has been populated from disk
 
 # Version comparison helper: returns $true if Latest > Current
-function Test-IsNewerVersion {
-    param([string]$Latest, [string]$Current)
-    if (-not $Latest -or -not $Current) { return $false }
-    try {
-        return ([version]$Latest -gt [version]$Current)
-    } catch {
-        $mL = [regex]::Match($Latest, '^\s*(\d+(?:\.\d+){0,3})')
-        $mC = [regex]::Match($Current, '^\s*(\d+(?:\.\d+){0,3})')
-        if (-not $mL.Success -or -not $mC.Success) { return $false }
-        $vL = $mL.Groups[1].Value
-        $vC = $mC.Groups[1].Value
-        try { return ([version]$vL -gt [version]$vC) } catch {
-            $numsL = $vL.Split('.') | ForEach-Object {[int]$_}
-            $numsC = $vC.Split('.') | ForEach-Object {[int]$_}
-            $len = [Math]::Max($numsL.Count, $numsC.Count)
-            for ($i=0; $i -lt $len; $i++) {
-                $a = if ($i -lt $numsL.Count) { $numsL[$i] } else { 0 }
-                $b = if ($i -lt $numsC.Count) { $numsC[$i] } else { 0 }
-                if     ($a -gt $b) { return $true }
-                elseif ($a -lt $b) { return $false }
-            }
-            return $false
-        }
-    }
-}
+
 
 
 function Test-AppUpdateAvailable {
