@@ -67,6 +67,13 @@ Import-Module $wingetModulePath -Force
 # Load WinTuner settings helpers
 $settingsModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Settings.psm1'
 Import-Module $settingsModulePath -Force
+
+# Load WinTuner logging helpers
+$loggingModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Logging.psm1'
+Import-Module $loggingModulePath -Force
+
+# Initialize file logging. The GUI output box is attached after it is created.
+Initialize-WinTunerLogging -BasePath $PSScriptRoot
 $script:repoOwner = "manuelhoefler17-gif"
 $script:repoName = "WinTuner-GUI"
 $script:githubRepo  = "$($script:repoOwner)/$($script:repoName)"
@@ -856,81 +863,10 @@ function Switch-GuiTheme {
 }
 
 # Logging function (thread-safe for WinForms event handlers)
-function Write-Log {
-  param([string]$message)
-  if ([string]::IsNullOrWhiteSpace($message)) { return }
-  
-  try {
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $logLine = "$timestamp - $message"
-    
-    # Write to file
-    try {
-      $base = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation -and $MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
-      if ([string]::IsNullOrWhiteSpace($base)) { $base = [Environment]::GetFolderPath('LocalApplicationData') }
-      if (-not (Test-Path $base)) { 
-          try { New-Item -ItemType Directory -Path $base -Force | Out-Null } catch { return }
-      }
-      $logPath = Join-Path $base 'WinTuner_GUI.log'
-      
-      # --- Log rotation: limit log file size ---
-      $maxLogSize = 2MB # Maximum log file size before rotation
-      if (Test-Path $logPath) {
-          $logFile = Get-Item $logPath
-          if ($logFile.Length -gt $maxLogSize) {
-              $oldLogPath = Join-Path $base 'WinTuner_GUI_old.log'
-              # Move current log to backup (overwrites existing backup)
-              Move-Item -Path $logPath -Destination $oldLogPath -Force -ErrorAction SilentlyContinue
-          }
-      }
-      # --- End log rotation ---
 
-      Add-Content -Path $logPath -Value $logLine -Encoding utf8 -ErrorAction SilentlyContinue
-    } catch {
-      # Silently ignore file write errors
-    }
-    
-    # Update UI - always try to append (suppress any errors)
-    if ($script:outputBox) {
-      try {
-        if ($script:outputBox.InvokeRequired) {
-          # Cross-thread call - use Invoke
-          $script:outputBox.Invoke([Action]{
-            $script:outputBox.AppendText("$logLine`r`n")
-          })
-        } else {
-          # Same thread - direct call
-          $script:outputBox.AppendText("$logLine`r`n")
-        }
-      } catch {
-        # Silently ignore UI update errors (threading issues)
-      }
-    }
-  } catch {
-    # Completely suppress all logging errors to prevent crashes
-  }
-}
 
 # Logging helper that never throws if Write-Log is unavailable in delegate scopes
-function Write-LogSafe {
-  param([string]$Message)
-  if ([string]::IsNullOrWhiteSpace($Message)) { return }
-  try {
-    if (Get-Command -Name Write-Log -CommandType Function -ErrorAction SilentlyContinue) {
-      & (Get-Command -Name Write-Log -CommandType Function) $Message
-      return
-    }
-  } catch {}
-  try {
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $logLine = "$timestamp - $Message"
-    $base = if ($PSScriptRoot) { $PSScriptRoot } else { [Environment]::GetFolderPath('LocalApplicationData') }
-    if ([string]::IsNullOrWhiteSpace($base)) { $base = [Environment]::GetFolderPath('LocalApplicationData') }
-    if (-not (Test-Path $base)) { New-Item -ItemType Directory -Path $base -Force | Out-Null }
-    $logPath = Join-Path $base 'WinTuner_GUI.log'
-    Add-Content -Path $logPath -Value $logLine -Encoding utf8 -ErrorAction SilentlyContinue
-  } catch {}
-}
+
 
 # Runs an action on the UI thread if required
 function Invoke-UiAction {
@@ -1362,6 +1298,9 @@ $script:outputBox.Multiline = $true
 $script:outputBox.ScrollBars = "Vertical"
 $script:outputBox.ReadOnly = $true
 $form.Controls.Add($script:outputBox)
+
+# Attach GUI log output to the logging module
+Initialize-WinTunerLogging -BasePath $PSScriptRoot -OutputBox $script:outputBox
 
 # Progress bar (appears between tabs and log when active)
 $script:progressBar = New-Object System.Windows.Forms.ProgressBar
