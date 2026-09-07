@@ -63,6 +63,10 @@ Import-Module $coreModulePath -Force
 # Load WinTuner WinGet helpers
 $wingetModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Winget.psm1'
 Import-Module $wingetModulePath -Force
+
+# Load WinTuner settings helpers
+$settingsModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Settings.psm1'
+Import-Module $settingsModulePath -Force
 $script:repoOwner = "manuelhoefler17-gif"
 $script:repoName = "WinTuner-GUI"
 $script:githubRepo  = "$($script:repoOwner)/$($script:repoName)"
@@ -1166,14 +1170,14 @@ function Add-RecentUser {
   while ($list.Count -gt $max) { $list.RemoveAt($list.Count - 1) }
   $script:settings.RecentUsers = $list.ToArray()
   $script:settings.LastUser = $Upn
-  Save-Settings
+  [void](Export-WinTunerSettings -Settings $script:settings -Path $script:settingsPath)
 }
 
 # Clears the recent users list and resets LastUser
 function Clear-RecentUsers {
   $script:settings.RecentUsers = @()
   $script:settings.LastUser = ""
-  Save-Settings
+  [void](Export-WinTunerSettings -Settings $script:settings -Path $script:settingsPath)
 }
 
 # Helper: check if WinTuner is connected (simple smoke test)
@@ -1780,7 +1784,7 @@ $saveSettingsButton.Add_Click({
       $pathBox.Text = $script:settings.DefaultPackagePath
     }
     
-    Save-Settings
+    [void](Export-WinTunerSettings -Settings $script:settings -Path $script:settingsPath)
     Update-Status "Settings saved successfully!"
     
     [System.Windows.Forms.MessageBox]::Show(
@@ -1930,73 +1934,7 @@ $rememberCheckBox.Checked = $false
 $headerPanel.Controls.Add($rememberCheckBox)
 
 $script:settingsPath = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'WinTunerGUI\settings.json'
-$script:settings = @{ 
-  RememberMe = $false
-  LastUser = ""
-  RecentUsers = @()
-  MaxRecentUsers = 3
-  WingetOverrides = @{}
-  DefaultPackagePath = "C:\Temp"
-  AutoCheckUpdates = $false
-}
-
-function Load-Settings {
-  try {
-    if (Test-Path $script:settingsPath) {
-      $o = Get-Content -Path $script:settingsPath -Raw -ErrorAction Stop | ConvertFrom-Json
-      if ($o) {
-        $script:settings.RememberMe = [bool]$o.RememberMe
-        $script:settings.LastUser = [string]$o.LastUser
-        
-        if ($o.PSObject.Properties['RecentUsers']) {
-            $script:settings.RecentUsers = @([string[]]$o.RecentUsers)
-        } else {
-            $script:settings.RecentUsers = @()
-        }
-        if ($o.PSObject.Properties['MaxRecentUsers'] -and $o.MaxRecentUsers -gt 0) {
-            $script:settings.MaxRecentUsers = [int]$o.MaxRecentUsers
-        } else {
-            $script:settings.MaxRecentUsers = 3
-        }
-        
-        # New settings with defaults
-        if ($o.PSObject.Properties['DefaultPackagePath']) {
-          $script:settings.DefaultPackagePath = [string]$o.DefaultPackagePath
-        } else {
-          $script:settings.DefaultPackagePath = "C:\Temp"
-        }
-        
-        if ($o.PSObject.Properties['AutoCheckUpdates']) {
-          $script:settings.AutoCheckUpdates = [bool]$o.AutoCheckUpdates
-        } else {
-          $script:settings.AutoCheckUpdates = $false
-        }
-        
-        if ($o.PSObject.Properties['WingetOverrides']) {
-          # Convert PSCustomObject to hashtable
-          $ht = @{}
-          foreach ($p in $o.WingetOverrides.PSObject.Properties) { $ht[$p.Name] = [string]$p.Value }
-          $script:settings.WingetOverrides = $ht
-        } else { $script:settings.WingetOverrides = @{} }
-      }
-    }
-  } catch {
-    Write-Log "Warning: Failed to load settings from $($script:settingsPath): $($_.Exception.Message)"
-    # Continue with default settings
-  }
-}
-
-function Save-Settings {
-  try {
-    $dir = Split-Path -Parent $script:settingsPath
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    ($script:settings | ConvertTo-Json -Compress) | Set-Content -Path $script:settingsPath -Encoding utf8
-  } catch {
-    Write-Log "Error: Failed to save settings to $($script:settingsPath): $($_.Exception.Message)"
-  }
-}
-
-Load-Settings
+$script:settings = Import-WinTunerSettings -Path $script:settingsPath
 $rememberCheckBox.Checked = [bool]$script:settings.RememberMe
 $rememberMeCheckbox.Checked = [bool]$script:settings.RememberMe
 if ($script:settings.RememberMe -and $script:settings.LastUser) { $usernameBox.Text = $script:settings.LastUser } else { $usernameBox.Text = "" }
@@ -2027,7 +1965,7 @@ $rememberCheckBox.Add_CheckedChanged({
       $script:settings.RecentUsers = @()
       $usernameBox.Items.Clear()
     }
-    Save-Settings
+    [void](Export-WinTunerSettings -Settings $script:settings -Path $script:settingsPath)
   } catch {
     Write-Log "Error in RememberMe checkbox handler: $($_.Exception.Message)"
   }
@@ -2063,7 +2001,7 @@ $loginButton.Add_Click({
     foreach ($u in @($script:settings.RecentUsers)) {
       if ($u) { [void]$usernameBox.Items.Add($u) }
     }
-    Save-Settings
+    [void](Export-WinTunerSettings -Settings $script:settings -Path $script:settingsPath)
     Set-ConnectedUIState -Connected $true
     
     # Auto-check for updates if enabled
@@ -3328,7 +3266,7 @@ $form.Add_FormClosing({
         if ($script:settings) { 
             if ($script:settings.RememberMe) { $script:settings.LastUser = $usernameBox.Text } 
             else { $script:settings.LastUser = "" }
-            Save-Settings 
+            [void](Export-WinTunerSettings -Settings $script:settings -Path $script:settingsPath)
         } 
     } catch {}
 
