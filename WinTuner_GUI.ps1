@@ -55,7 +55,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.12"
+$script:appVersion  = "0.10.13"
 
 # Load WinTuner core helpers
 $coreModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Core.psm1'

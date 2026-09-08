@@ -8,6 +8,27 @@ All notable changes to WinTuner GUI are documented here.
 - Development work is performed on the `Test` branch before promotion to `main`.
 - Repository documentation and metadata cleanup started.
 
+## [0.10.13] – 2026-09-08
+
+### Added
+- Added modular Intune integration with detected-app caching and throttling handling.
+- Added persistent WinGet discovery caching and isolated batch workers for large discovery scans.
+- Added cancellation support for active WinGet discovery scans.
+- Added version comparison tests and further module separation for core, settings, logging, Intune, and WinGet functionality.
+
+### Improved
+- Significantly improved Discovered Apps performance and memory usage.
+- Reduced repeated WinGet lookups by using persistent positive and zero-result cache entries.
+- Improved Graph API reliability with pagination, retry handling, and detected-app caching.
+- Improved duplicate handling for discovery search terms.
+- Improved first-login reliability by retrying transient connection verification failures.
+
+### Fixed
+- Fixed first-login attempts occasionally failing even though authentication succeeded.
+- Fixed asynchronous startup update checks failing because BackgroundWorker threads had no PowerShell runspace.
+- Fixed manual update checks using the same broken asynchronous path.
+- Fixed false "Update available" prompts when the local and GitHub versions were identical.
+
 ## [0.10.12] – 2026-09-01
 
 ### Changed
