@@ -55,12 +55,34 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.12"
+$script:appVersion  = "0.10.13"
+
+# Load WinTuner core helpers
+$coreModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Core.psm1'
+Import-Module $coreModulePath -Force
+# Load WinTuner WinGet helpers
+$wingetModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Winget.psm1'
+Import-Module $wingetModulePath -Force
+
+# Load WinTuner settings helpers
+$settingsModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Settings.psm1'
+Import-Module $settingsModulePath -Force
+
+# Load WinTuner logging helpers
+$loggingModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Logging.psm1'
+Import-Module $loggingModulePath -Force
+
+# Load WinTuner Intune / Graph helpers
+$intuneModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Intune.psm1'
+Import-Module $intuneModulePath -Force
+
+# Initialize file logging. The GUI output box is attached after it is created.
+Initialize-WinTunerLogging -BasePath $PSScriptRoot
 $script:repoOwner = "manuelhoefler17-gif"
 $script:repoName = "WinTuner-GUI"
 $script:githubRepo  = "$($script:repoOwner)/$($script:repoName)"
 $script:githubApiUrl = "https://api.github.com/repos/$($script:repoOwner)/$($script:repoName)/releases/latest"
-$script:skipLowValueWingetCandidates = $false  # keep all apps by default; set $true for faster scans with possible omissions
+$script:skipLowValueWingetCandidates = $false  # keep all discovered apps; persistent caches handle repeated scans
 
 # --- Runtime state (set during execution) ---
 # $script:isConnected      – whether the user is logged in to a tenant
@@ -75,31 +97,7 @@ $script:skipLowValueWingetCandidates = $false  # keep all apps by default; set $
 # $script:diskCacheLoaded  – whether $script:diskCache has been populated from disk
 
 # Version comparison helper: returns $true if Latest > Current
-function Test-IsNewerVersion {
-    param([string]$Latest, [string]$Current)
-    if (-not $Latest -or -not $Current) { return $false }
-    try {
-        return ([version]$Latest -gt [version]$Current)
-    } catch {
-        $mL = [regex]::Match($Latest, '^\s*(\d+(?:\.\d+){0,3})')
-        $mC = [regex]::Match($Current, '^\s*(\d+(?:\.\d+){0,3})')
-        if (-not $mL.Success -or -not $mC.Success) { return $false }
-        $vL = $mL.Groups[1].Value
-        $vC = $mC.Groups[1].Value
-        try { return ([version]$vL -gt [version]$vC) } catch {
-            $numsL = $vL.Split('.') | ForEach-Object {[int]$_}
-            $numsC = $vC.Split('.') | ForEach-Object {[int]$_}
-            $len = [Math]::Max($numsL.Count, $numsC.Count)
-            for ($i=0; $i -lt $len; $i++) {
-                $a = if ($i -lt $numsL.Count) { $numsL[$i] } else { 0 }
-                $b = if ($i -lt $numsC.Count) { $numsC[$i] } else { 0 }
-                if     ($a -gt $b) { return $true }
-                elseif ($a -lt $b) { return $false }
-            }
-            return $false
-        }
-    }
-}
+
 
 
 function Test-AppUpdateAvailable {
@@ -155,6 +153,159 @@ function Test-AppUpdateAvailable {
   return $result
 }
 
+function Invoke-AsyncUpdateCheck {
+  param(
+    [Parameter(Mandatory=$true)]
+    [scriptblock]$OnComplete,
+
+    [string]$StatusText = "Checking for updates..."
+  )
+
+  Update-Status $StatusText
+  Write-Log "[Update] Prüfe asynchron auf neue Version..."
+
+  $progressControl = $null
+  if ($script:progressBar -is [System.Windows.Forms.ProgressBar] -and -not $script:progressBar.IsDisposed) {
+    $progressControl = $script:progressBar
+    try {
+      $progressControl.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+      $progressControl.MarqueeAnimationSpeed = 30
+      $progressControl.Visible = $true
+    } catch {
+      Write-LogSafe "Async update progress warning: $($_.Exception.Message)"
+    }
+  }
+
+  $httpClient = [System.Net.Http.HttpClient]::new()
+  $httpClient.Timeout = [TimeSpan]::FromSeconds(15)
+  $httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("WinTuner-GUI/$($script:appVersion)")
+
+  $requestTask = $httpClient.GetStringAsync($script:githubApiUrl)
+
+  # Capture primitive values before GetNewClosure creates its own script scope.
+  $currentAppVersion = [string]$script:appVersion
+
+  $timer = New-Object System.Windows.Forms.Timer
+  $timer.Interval = 100
+
+  $tickHandler = {
+    param($sender, $e)
+
+    if (-not $requestTask.IsCompleted) {
+      return
+    }
+
+    $sender.Stop()
+
+    $result = [pscustomobject]@{
+      UpdateAvailable = $false
+      LatestVersion   = $null
+      DownloadUrl     = $null
+      HashUrl         = $null
+      ReleaseUrl      = $null
+      ReleaseNotes    = $null
+      ErrorMessage    = $null
+    }
+
+    try {
+      if ($requestTask.IsCanceled) {
+        throw "GitHub update request was canceled."
+      }
+
+      if ($requestTask.IsFaulted) {
+        $exception = $requestTask.Exception
+
+        if ($exception.InnerException) {
+          throw $exception.InnerException
+        }
+
+        throw $exception
+      }
+
+      $json = $requestTask.GetAwaiter().GetResult()
+      $releaseInfo = $json | ConvertFrom-Json -ErrorAction Stop
+
+      $latestVersionTag = [string]$releaseInfo.tag_name
+      $latestVersionTag = $latestVersionTag -replace '[^0-9.]', ''
+
+      if ([string]::IsNullOrWhiteSpace($latestVersionTag)) {
+        throw "Release enthält keine gültige Versionsnummer (tag_name)."
+      }
+
+      $latestVersion = [version]$latestVersionTag
+      $currentVersion = [version]$currentAppVersion
+
+      $result.LatestVersion = $latestVersion.ToString()
+      $result.ReleaseUrl    = $releaseInfo.html_url
+      $result.ReleaseNotes  = $releaseInfo.body
+
+      $scriptFileName = if ($PSCommandPath) {
+        [System.IO.Path]::GetFileName($PSCommandPath)
+      } else {
+        'WinTuner_GUI.ps1'
+      }
+
+      $asset = $releaseInfo.assets |
+        Where-Object { $_.name -like "*$scriptFileName*" } |
+        Select-Object -First 1
+
+      if (-not $asset) {
+        $asset = $releaseInfo.assets |
+          Where-Object { $_.name -like '*.ps1' } |
+          Select-Object -First 1
+      }
+
+      if ($asset) {
+        $result.DownloadUrl = $asset.browser_download_url
+      }
+
+      $shaAsset = $releaseInfo.assets |
+        Where-Object { $_.name -like '*.sha256' } |
+        Select-Object -First 1
+
+      if ($shaAsset) {
+        $result.HashUrl = $shaAsset.browser_download_url
+      }
+
+      if ($latestVersion -gt $currentVersion) {
+        $result.UpdateAvailable = $true
+        Write-Log "[*] Neue Version verfügbar: $latestVersion"
+      } else {
+        Write-Log "[√] Skript ist aktuell."
+      }
+    } catch {
+      $result.ErrorMessage = $_.Exception.Message
+      Write-Log "Async update check failed: $($_.Exception.Message)"
+    } finally {
+      try {
+        $httpClient.Dispose()
+      } catch {}
+
+      try {
+        if ($progressControl -and -not $progressControl.IsDisposed) {
+          $progressControl.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+          $progressControl.Value = 0
+          $progressControl.Visible = $false
+        }
+      } catch {
+        Write-LogSafe "Async update progress cleanup warning: $($_.Exception.Message)"
+      }
+
+      try {
+        & $OnComplete $result
+      } catch {
+        Write-LogSafe "Async update completion callback error: $($_.Exception.Message)"
+      }
+
+      try {
+        $sender.Dispose()
+      } catch {}
+    }
+  }.GetNewClosure()
+
+  $timer.Add_Tick($tickHandler)
+  $timer.Start()
+}
 function Invoke-AppSelfUpdate {
   param(
     [Parameter(Mandatory=$true)]
@@ -318,7 +469,7 @@ function Invoke-UpdateCheckFeedback {
     return
   }
 
-  if ($UpdateResult -and $UpdateResult.UpdateAvailable) {
+  if ($UpdateResult -and $UpdateResult.LatestVersion -and (Test-IsNewerVersion -Latest $UpdateResult.LatestVersion -Current $script:appVersion)) {
     & $setStatus "Update available: v$($UpdateResult.LatestVersion)"
     try {
       $msg  = "A new version of WinTuner GUI is available!`n`n"
@@ -475,115 +626,13 @@ function Resolve-WingetIdForApp {
   return $null
 }
 
-function Get-VersionDiskCache {
-  if (-not $script:versionCachePath) { return @{} }
-  try {
-    if (Test-Path $script:versionCachePath) {
-      $raw = Get-Content $script:versionCachePath -Raw -Encoding utf8 -ErrorAction Stop
-      $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
-      $ht = @{}
-      foreach ($prop in $parsed.PSObject.Properties) {
-        $ht[$prop.Name] = @{
-          versions  = @($prop.Value.versions)
-          timestamp = [datetime]::Parse($prop.Value.timestamp, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind)
-        }
-      }
-      return $ht
-    }
-  } catch {
-    Write-Log "Warning: Could not read version cache: $($_.Exception.Message)"
-  }
-  return @{}
-}
 
-function Save-VersionDiskCache {
-  param([hashtable]$Cache)
-  if (-not $script:versionCachePath) { return }
-  try {
-    $obj = @{}
-    foreach ($key in $Cache.Keys) {
-      $obj[$key] = @{
-        versions  = $Cache[$key].versions
-        timestamp = $Cache[$key].timestamp.ToString('o')
-      }
-    }
-    $obj | ConvertTo-Json -Depth 4 | Set-Content -Path $script:versionCachePath -Encoding utf8 -ErrorAction SilentlyContinue
-  } catch {
-    Write-Log "Warning: Could not save version cache: $($_.Exception.Message)"
-  }
-}
 
-function Get-WingetVersions {
-  param([string]$PackageId)
 
-  # 1) RAM cache
-  if ($script:wingetVersionCache.ContainsKey($PackageId)) {
-    return $script:wingetVersionCache[$PackageId]
-  }
 
-  # 2) Disk cache (TTL 6h) – loaded once per session
-  if (-not $script:diskCacheLoaded) {
-    $script:diskCache = Get-VersionDiskCache
-    $script:diskCacheLoaded = $true
-  }
-  if ($script:diskCache.ContainsKey($PackageId)) {
-    $entry = $script:diskCache[$PackageId]
-    $ageHours = ([datetime]::UtcNow - $entry.timestamp.ToUniversalTime()).TotalHours
-    if ($ageHours -lt 6 -and $entry.versions -and $entry.versions.Count -gt 0) {
-      $script:wingetVersionCache[$PackageId] = $entry.versions
-      Write-Log "Version cache hit (disk) for $PackageId (age: $([math]::Round($ageHours,1))h)"
-      return $entry.versions
-    }
-  }
 
-  # 3) Query winget
-  try { $output = & winget show --id $PackageId --versions 2>$null } catch { return @() }
-  if (-not $output) { return @() }
 
-  $cand = @()
-  foreach ($line in @($output)) {
-    $t = ($line -replace '^[\s\-•]+','').Trim()
-    if (-not $t) { continue }
-    if ($t -match '^(\d+)(\.[0-9A-Za-z]+)*([\-+._][0-9A-Za-z]+)*$') { $cand += $t }
-  }
 
-  $unique = @($cand | Select-Object -Unique)
-  $parsed = foreach ($v in $unique) {
-    $ok = $false; $vo = $null
-    try { $vo = [version]$v; $ok = $true } catch {}
-    [pscustomobject]@{ Text = $v; Parsed = $vo; Numeric = $ok }
-  }
-
-  $result = @()
-  if ($parsed | Where-Object Numeric) {
-    $result = @($parsed | Where-Object Numeric | Sort-Object Parsed -Descending | Select-Object -ExpandProperty Text)
-  } else {
-    $result = @($parsed | Sort-Object Text -Descending | Select-Object -ExpandProperty Text)
-  }
-
-  # 4) Store in RAM cache
-  $script:wingetVersionCache[$PackageId] = $result
-
-  # 5) Store in disk cache (update script-level cache variable and persist to disk)
-  $script:diskCache[$PackageId] = @{
-    versions  = $result
-    timestamp = [datetime]::UtcNow
-  }
-  Save-VersionDiskCache -Cache $script:diskCache
-
-  return $result
-}
-
-function Get-PreviousWingetVersion {
-  param([string]$PackageId, [string]$LatestVersion)
-
-  $allVersions = @(Get-WingetVersions -PackageId $PackageId)
-  if (-not $allVersions -or $allVersions.Count -eq 0) { return $null }
-
-  $candidates = @($allVersions | Where-Object { $_ -ne $LatestVersion })
-  if ($candidates.Count -gt 0) { return $candidates[0] }
-  return $null
-}
 
 function Get-StringSimilarity {
   param($str1, $str2)
@@ -971,81 +1020,10 @@ function Switch-GuiTheme {
 }
 
 # Logging function (thread-safe for WinForms event handlers)
-function Write-Log {
-  param([string]$message)
-  if ([string]::IsNullOrWhiteSpace($message)) { return }
-  
-  try {
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $logLine = "$timestamp - $message"
-    
-    # Write to file
-    try {
-      $base = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation -and $MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
-      if ([string]::IsNullOrWhiteSpace($base)) { $base = [Environment]::GetFolderPath('LocalApplicationData') }
-      if (-not (Test-Path $base)) { 
-          try { New-Item -ItemType Directory -Path $base -Force | Out-Null } catch { return }
-      }
-      $logPath = Join-Path $base 'WinTuner_GUI.log'
-      
-      # --- Log rotation: limit log file size ---
-      $maxLogSize = 2MB # Maximum log file size before rotation
-      if (Test-Path $logPath) {
-          $logFile = Get-Item $logPath
-          if ($logFile.Length -gt $maxLogSize) {
-              $oldLogPath = Join-Path $base 'WinTuner_GUI_old.log'
-              # Move current log to backup (overwrites existing backup)
-              Move-Item -Path $logPath -Destination $oldLogPath -Force -ErrorAction SilentlyContinue
-          }
-      }
-      # --- End log rotation ---
 
-      Add-Content -Path $logPath -Value $logLine -Encoding utf8 -ErrorAction SilentlyContinue
-    } catch {
-      # Silently ignore file write errors
-    }
-    
-    # Update UI - always try to append (suppress any errors)
-    if ($script:outputBox) {
-      try {
-        if ($script:outputBox.InvokeRequired) {
-          # Cross-thread call - use Invoke
-          $script:outputBox.Invoke([Action]{
-            $script:outputBox.AppendText("$logLine`r`n")
-          })
-        } else {
-          # Same thread - direct call
-          $script:outputBox.AppendText("$logLine`r`n")
-        }
-      } catch {
-        # Silently ignore UI update errors (threading issues)
-      }
-    }
-  } catch {
-    # Completely suppress all logging errors to prevent crashes
-  }
-}
 
 # Logging helper that never throws if Write-Log is unavailable in delegate scopes
-function Write-LogSafe {
-  param([string]$Message)
-  if ([string]::IsNullOrWhiteSpace($Message)) { return }
-  try {
-    if (Get-Command -Name Write-Log -CommandType Function -ErrorAction SilentlyContinue) {
-      & (Get-Command -Name Write-Log -CommandType Function) $Message
-      return
-    }
-  } catch {}
-  try {
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $logLine = "$timestamp - $Message"
-    $base = if ($PSScriptRoot) { $PSScriptRoot } else { [Environment]::GetFolderPath('LocalApplicationData') }
-    if ([string]::IsNullOrWhiteSpace($base)) { $base = [Environment]::GetFolderPath('LocalApplicationData') }
-    if (-not (Test-Path $base)) { New-Item -ItemType Directory -Path $base -Force | Out-Null }
-    $logPath = Join-Path $base 'WinTuner_GUI.log'
-    Add-Content -Path $logPath -Value $logLine -Encoding utf8 -ErrorAction SilentlyContinue
-  } catch {}
-}
+
 
 # Runs an action on the UI thread if required
 function Invoke-UiAction {
@@ -1285,26 +1263,46 @@ function Add-RecentUser {
   while ($list.Count -gt $max) { $list.RemoveAt($list.Count - 1) }
   $script:settings.RecentUsers = $list.ToArray()
   $script:settings.LastUser = $Upn
-  Save-Settings
+  [void](Export-WinTunerSettings -Settings $script:settings -Path $script:settingsPath)
 }
 
 # Clears the recent users list and resets LastUser
 function Clear-RecentUsers {
   $script:settings.RecentUsers = @()
   $script:settings.LastUser = ""
-  Save-Settings
+  [void](Export-WinTunerSettings -Settings $script:settings -Path $script:settingsPath)
 }
 
 # Helper: check if WinTuner is connected (simple smoke test)
 function Test-WtConnected {
-  try {
-    # Avoid Select-Object -First 1 to prevent WinForms pipeline crash during login
-    $apps = Get-WtWin32Apps -Update:$false -Superseded:$false -ErrorAction Stop
-    foreach ($app in $apps) {
+  param(
+    [int]$MaxAttempts = 4,
+    [int]$RetryDelayMs = 500
+  )
+
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    try {
+      # Avoid Select-Object -First 1 to prevent WinForms pipeline crash during login
+      $apps = Get-WtWin32Apps -Update:$false -Superseded:$false -ErrorAction Stop
+
+      foreach ($app in $apps) {
         return $true # Exit safely on first found element
+      }
+
+      return $true # No apps found but no error either
+    } catch {
+      if ($attempt -ge $MaxAttempts) {
+        Write-Log "Connection verification failed after $MaxAttempts attempts: $($_.Exception.Message)"
+        return $false
+      }
+
+      Write-Log "Connection verification attempt $attempt failed; retrying in ${RetryDelayMs}ms..."
+      Start-Sleep -Milliseconds $RetryDelayMs
+      [System.Windows.Forms.Application]::DoEvents()
     }
-    return $true # No apps found but no error either
-  } catch { return $false }
+  }
+
+  return $false
 }
 
 # Heuristic filter to avoid very slow/low-value WinGet queries (mainly mobile/system artifacts)
@@ -1369,12 +1367,7 @@ $script:currentUserUpn = ""
 # Track effective built versions per PackageId
 $script:builtVersions = @{}
 # Cache for winget version lookups (speeds up repeated searches)
-$script:wingetVersionCache = @{}
-$script:versionCachePath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'WinTuner_VersionCache.json'
 # Disk cache loaded once at first use (Fix 1)
-$script:diskCache = @{}
-$script:diskCacheLoaded = $false
-
 # Create form
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "WinTuner GUI"
@@ -1482,6 +1475,9 @@ $script:outputBox.Multiline = $true
 $script:outputBox.ScrollBars = "Vertical"
 $script:outputBox.ReadOnly = $true
 $form.Controls.Add($script:outputBox)
+
+# Attach GUI log output to the logging module
+Initialize-WinTunerLogging -BasePath $PSScriptRoot -OutputBox $script:outputBox
 
 # Progress bar (appears between tabs and log when active)
 $script:progressBar = New-Object System.Windows.Forms.ProgressBar
@@ -1869,7 +1865,7 @@ $tabSettings.Controls.Add($saveSettingsButton)
 
 # Clear Version Cache Button
 $clearCacheButton = New-Object System.Windows.Forms.Button
-$clearCacheButton.Text = "Clear Version Cache"
+$clearCacheButton.Text = "Clear All Caches"
 $clearCacheButton.Location = New-Object System.Drawing.Point(20,225)
 $clearCacheButton.Width = 180
 $clearCacheButton.Height = 35
@@ -1904,7 +1900,7 @@ $saveSettingsButton.Add_Click({
       $pathBox.Text = $script:settings.DefaultPackagePath
     }
     
-    Save-Settings
+    [void](Export-WinTunerSettings -Settings $script:settings -Path $script:settingsPath)
     Update-Status "Settings saved successfully!"
     
     [System.Windows.Forms.MessageBox]::Show(
@@ -1928,12 +1924,17 @@ $saveSettingsButton.Add_Click({
 
 # Clear Version Cache Button Handler
 $clearCacheButton.Add_Click({
-  $script:wingetVersionCache = @{}
-  $script:diskCache = @{}
-  $script:diskCacheLoaded = $false
-  Remove-Item $script:versionCachePath -Force -ErrorAction SilentlyContinue
-  Write-Log "Version cache cleared."
-  Update-Status "Version cache cleared."
+  try {
+    Clear-WingetVersionCache
+    Clear-WinTunerDiscoveryCache
+    Clear-WinTunerDetectedAppsCache
+
+    Write-Log "All local caches cleared: WinGet versions, Discovery WinGet searches, Graph detected apps."
+    Update-Status "All local caches cleared."
+  } catch {
+    Write-Log "Cache cleanup failed: $($_.Exception.Message)"
+    Update-Status "Cache cleanup failed: $($_.Exception.Message)"
+  }
 })
 
 # --- Self-Update Section in Settings Tab ---
@@ -1958,10 +1959,9 @@ $checkUpdateButton.Height = 35
 $tabSettings.Controls.Add($checkUpdateButton)
 
 $checkUpdateButton.Add_Click({
+
   $checkUpdateButton.Enabled = $false
-  Invoke-AsyncOperation -StatusText "Checking for updates..." -ScriptBlock {
-    Test-AppUpdateAvailable
-  } -OnComplete {
+  Invoke-AsyncUpdateCheck -StatusText "Checking for updates..." -OnComplete {
     param($updateResult)
     $checkUpdateButton.Enabled = $true
     Invoke-UpdateCheckFeedback -UpdateResult $updateResult -Context 'Manual'
@@ -2057,73 +2057,7 @@ $rememberCheckBox.Checked = $false
 $headerPanel.Controls.Add($rememberCheckBox)
 
 $script:settingsPath = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'WinTunerGUI\settings.json'
-$script:settings = @{ 
-  RememberMe = $false
-  LastUser = ""
-  RecentUsers = @()
-  MaxRecentUsers = 3
-  WingetOverrides = @{}
-  DefaultPackagePath = "C:\Temp"
-  AutoCheckUpdates = $false
-}
-
-function Load-Settings {
-  try {
-    if (Test-Path $script:settingsPath) {
-      $o = Get-Content -Path $script:settingsPath -Raw -ErrorAction Stop | ConvertFrom-Json
-      if ($o) {
-        $script:settings.RememberMe = [bool]$o.RememberMe
-        $script:settings.LastUser = [string]$o.LastUser
-        
-        if ($o.PSObject.Properties['RecentUsers']) {
-            $script:settings.RecentUsers = @([string[]]$o.RecentUsers)
-        } else {
-            $script:settings.RecentUsers = @()
-        }
-        if ($o.PSObject.Properties['MaxRecentUsers'] -and $o.MaxRecentUsers -gt 0) {
-            $script:settings.MaxRecentUsers = [int]$o.MaxRecentUsers
-        } else {
-            $script:settings.MaxRecentUsers = 3
-        }
-        
-        # New settings with defaults
-        if ($o.PSObject.Properties['DefaultPackagePath']) {
-          $script:settings.DefaultPackagePath = [string]$o.DefaultPackagePath
-        } else {
-          $script:settings.DefaultPackagePath = "C:\Temp"
-        }
-        
-        if ($o.PSObject.Properties['AutoCheckUpdates']) {
-          $script:settings.AutoCheckUpdates = [bool]$o.AutoCheckUpdates
-        } else {
-          $script:settings.AutoCheckUpdates = $false
-        }
-        
-        if ($o.PSObject.Properties['WingetOverrides']) {
-          # Convert PSCustomObject to hashtable
-          $ht = @{}
-          foreach ($p in $o.WingetOverrides.PSObject.Properties) { $ht[$p.Name] = [string]$p.Value }
-          $script:settings.WingetOverrides = $ht
-        } else { $script:settings.WingetOverrides = @{} }
-      }
-    }
-  } catch {
-    Write-Log "Warning: Failed to load settings from $($script:settingsPath): $($_.Exception.Message)"
-    # Continue with default settings
-  }
-}
-
-function Save-Settings {
-  try {
-    $dir = Split-Path -Parent $script:settingsPath
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    ($script:settings | ConvertTo-Json -Compress) | Set-Content -Path $script:settingsPath -Encoding utf8
-  } catch {
-    Write-Log "Error: Failed to save settings to $($script:settingsPath): $($_.Exception.Message)"
-  }
-}
-
-Load-Settings
+$script:settings = Import-WinTunerSettings -Path $script:settingsPath
 $rememberCheckBox.Checked = [bool]$script:settings.RememberMe
 $rememberMeCheckbox.Checked = [bool]$script:settings.RememberMe
 if ($script:settings.RememberMe -and $script:settings.LastUser) { $usernameBox.Text = $script:settings.LastUser } else { $usernameBox.Text = "" }
@@ -2154,7 +2088,7 @@ $rememberCheckBox.Add_CheckedChanged({
       $script:settings.RecentUsers = @()
       $usernameBox.Items.Clear()
     }
-    Save-Settings
+    [void](Export-WinTunerSettings -Settings $script:settings -Path $script:settingsPath)
   } catch {
     Write-Log "Error in RememberMe checkbox handler: $($_.Exception.Message)"
   }
@@ -2190,7 +2124,7 @@ $loginButton.Add_Click({
     foreach ($u in @($script:settings.RecentUsers)) {
       if ($u) { [void]$usernameBox.Items.Add($u) }
     }
-    Save-Settings
+    [void](Export-WinTunerSettings -Settings $script:settings -Path $script:settingsPath)
     Set-ConnectedUIState -Connected $true
     
     # Auto-check for updates if enabled
@@ -2921,7 +2855,7 @@ $logoutButton.Add_Click({
   } catch {
     Write-Log "Logout warning: $($_.Exception.Message)"
   }
-  try { Disconnect-MgGraph -ErrorAction SilentlyContinue } catch {}
+  Disconnect-WinTunerGraph
   $script:isConnected = $false
   $script:currentUserUpn = ""
   if ($loginInfoLabel) { $loginInfoLabel.Text = "" }
@@ -3031,7 +2965,22 @@ $uncheckAllDiscoveredButton.Add_Click({
     Update-Status "All discovered apps unchecked"
 })
 
+$script:discoveryScanRunning = $false
+$script:cancelDiscoveryScan = $false
+
 $scanDiscoveredButton.Add_Click({
+  if ($script:discoveryScanRunning) {
+    $script:cancelDiscoveryScan = $true
+    $scanDiscoveredButton.Text = "Cancelling..."
+    $scanDiscoveredButton.Enabled = $false
+    Update-Status "Cancel requested - finishing current WinGet query..."
+    Write-Log "Discovery scan cancellation requested by user."
+    return
+  }
+
+  $script:discoveryScanRunning = $true
+  $script:cancelDiscoveryScan = $false
+  $scanDiscoveredButton.Text = "Cancel Scan"
   if (-not $script:isConnected) { Update-Status "Please login first."; return }
 
   # Speichere die originalen Streams und schalte sie stumm, um Threading-Crashes zu vermeiden
@@ -3041,7 +2990,7 @@ $scanDiscoveredButton.Add_Click({
   $InformationPreference = 'SilentlyContinue'
 
   try {
-    $scanDiscoveredButton.Enabled = $false
+    $scanDiscoveredButton.Enabled = $true
     $deployDiscoveredButton.Enabled = $false
     $exportDiscoveredCsvButton.Enabled = $false
     $discoveredListBox.Items.Clear()
@@ -3052,56 +3001,11 @@ $scanDiscoveredButton.Add_Click({
     [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
 
 # --- GRAPH-AUTH BLOCK (FIXED) ---
-    if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
-        Update-Status "Microsoft.Graph module not found..."
-        [System.Windows.Forms.MessageBox]::Show(
-            "Microsoft.Graph module not found.`n`nPlease install it first:`nInstall-Module Microsoft.Graph -Scope CurrentUser",
-            "Module Not Found",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
-        )
-        return
-    }
+    # Ensure Microsoft Graph session has the required account and scopes
+    Update-Status "Checking Microsoft Graph session..."
+    [System.Windows.Forms.Application]::DoEvents()
 
-    # Liste ALLER benötigten Scopes für Discovered Apps
-    $requiredScopes = @(
-        "DeviceManagementApps.ReadWrite.All", 
-        "DeviceManagementManagedDevices.Read.All", 
-        "Directory.Read.All"
-    )
-
-    $mgContext = Get-MgContext -ErrorAction SilentlyContinue
-    $needsAuth = $false
-
-    if (-not $mgContext) {
-        $needsAuth = $true
-    } else {
-        # Prüfen, ob ALLE erforderlichen Scopes im aktuellen Token vorhanden sind
-        foreach ($s in $requiredScopes) {
-            if ($mgContext.Scopes -notcontains $s) {
-                $needsAuth = $true
-                break
-            }
-        }
-
-        $userMatch = ($mgContext.Account -eq $script:currentUserUpn)
-        if (-not $userMatch) { $needsAuth = $true }
-
-        if ($needsAuth) {
-            Update-Status "Clearing old Graph session (Scope missing or wrong Tenant)..."
-            [System.Windows.Forms.Application]::DoEvents()
-            try { Disconnect-MgGraph -ErrorAction SilentlyContinue } catch {}
-        }
-    }
-
-    if ($needsAuth) {
-        Update-Status "Authenticating with MS Graph for $($script:currentUserUpn)..."
-        [System.Windows.Forms.Application]::DoEvents()
-        $tenantDomain = $script:currentUserUpn.Split('@')[1]
-        
-        # Jetzt mit dem vollständigen Array an Scopes anmelden
-        $null = Connect-MgGraph -TenantId $tenantDomain -Scopes $requiredScopes -NoWelcome -ErrorAction Stop *>&1
-    }
+    $null = Connect-WinTunerGraph -UserPrincipalName $script:currentUserUpn
 
     # 1. Vorhandene Apps checken (EXTREM SCHNELL DURCH "Resolve" STATT "Try-Resolve")
     Update-Status "Loading existing managed apps to filter them out..."
@@ -3118,21 +3022,18 @@ $scanDiscoveredButton.Add_Click({
     Update-Status "Fetching ALL detected apps from Intune API (this might take a moment)..."
     [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
     
-    $uri = "https://graph.microsoft.com/beta/deviceManagement/detectedApps?`$top=500&`$orderby=deviceCount desc"
-    $detectedApps = [System.Collections.Generic.List[object]]::new()
-    $maxPages = 100
-    $pageCount = 0
+    $detectedResult = Get-WinTunerDetectedApps -PageSize 500 -MaxPages 1000
 
-    do {
-        $response = Invoke-MgRestMethod -Uri $uri -Method GET -ErrorAction Stop 2>$null 3>$null 4>$null 5>$null 6>$null
-        if ($response.value) { $detectedApps.AddRange([object[]]$response.value) }
-        $uri = $response.'@odata.nextLink'
-        $pageCount++
-        if ($pageCount -ge $maxPages) {
-            Write-Log "Warning: Graph API pagination limit ($maxPages pages) reached. Some apps may not be shown."
-            break
-        }
-    } while ($uri)
+    if ($detectedResult.FromCache) {
+        Write-Log "Detected apps loaded from Graph cache: $(@($detectedResult.Apps).Count) apps."
+    } else {
+        Write-Log "Detected apps loaded from Microsoft Graph: $(@($detectedResult.Apps).Count) apps across $($detectedResult.PageCount) pages."
+    }
+    $detectedApps = $detectedResult.Apps
+
+    if ($detectedResult.LimitReached) {
+        Write-Log "Warning: Graph API pagination limit (100 pages) reached. Some apps may not be shown."
+    }
 
     if (-not $detectedApps -or $detectedApps.Count -eq 0) {
         Update-Status "No discovered apps found in Intune."
@@ -3175,30 +3076,82 @@ $scanDiscoveredButton.Add_Click({
     # Fast lookup for already created discovered entries by PackageID
     $discoveredByPackageId = @{}
 
-    $uniqueSearchNames = @($normalizedApps | Select-Object -ExpandProperty SearchName -Unique)
+    $uniqueSearchNameSet = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase
+    )
+    $uniqueSearchNames = @(
+        foreach ($normalizedApp in $normalizedApps) {
+            $candidateSearchName = [string]$normalizedApp.SearchName
+
+            if (
+                -not [string]::IsNullOrWhiteSpace($candidateSearchName) -and
+                $uniqueSearchNameSet.Add($candidateSearchName)
+            ) {
+                $candidateSearchName
+            }
+        }
+    )
     $queryTotal = $uniqueSearchNames.Count
     $queryCurrent = 0
     Update-Status "Prepared $($normalizedApps.Count) apps for matching ($queryTotal unique search terms, skipped: $skippedNonCandidateCount, skip-mode: $($script:skipLowValueWingetCandidates))."
     Write-Log "Discovery prep -> Filtered apps: $total, Normalized apps: $($normalizedApps.Count), Unique search terms: $queryTotal, Skipped non-candidates: $skippedNonCandidateCount, Skip-mode: $($script:skipLowValueWingetCandidates)"
 
-    # Phase 1: fetch/search all unique terms
-    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $script:progressBar.Maximum = if ($queryTotal -gt 0) { $queryTotal } else { 1 }
-    $script:progressBar.Value = 0
+    # Phase 1: fetch/search all unique terms using isolated worker processes
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+    $script:progressBar.MarqueeAnimationSpeed = 25
 
-    foreach ($searchName in $uniqueSearchNames) {
-        $queryCurrent++
-        $script:progressBar.Value = $queryCurrent
-        if (($queryCurrent -eq 1) -or ($queryCurrent % 25 -eq 0) -or ($queryCurrent -eq $queryTotal)) {
-            Update-Status "Querying WinGet unique terms ($queryCurrent/$queryTotal) from $($normalizedApps.Count) apps: $searchName"
-            [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
+    Update-Status "WinGet discovery: processing $queryTotal unique search terms in isolated workers..."
+    Write-Log "Discovery WinGet batch search starting -> Queries: $queryTotal, Batch size: 25, Cache TTL: 24h"
+    [System.Windows.Forms.Application]::DoEvents()
+
+    try {
+        $batchResult = Search-WinTunerDiscoveryPackagesBatchCached `
+            -SearchQueries $uniqueSearchNames `
+            -BatchSize 25 `
+            -QueryTimeoutSeconds 12 `
+            -CacheTtlHours 24 `
+            -OnWait {
+                [System.Windows.Forms.Application]::DoEvents()
+            } `
+            -ShouldCancel {
+                return [bool]$script:cancelDiscoveryScan
+            }
+
+        if ($batchResult.Canceled -or $script:cancelDiscoveryScan) {
+            Update-Status "Discovery scan canceled during WinGet search phase."
+            Write-Log "Discovery scan canceled during isolated WinGet worker phase."
+            return
         }
-        try {
-            $searchResultCache[$searchName] = @(Search-WtWinGetPackage -SearchQuery $searchName -ErrorAction SilentlyContinue 2>$null 3>$null 4>$null 5>$null 6>$null)
-        } catch {
-            $searchResultCache[$searchName] = @()
-            Write-Log "Search failed for '$searchName': $($_.Exception.Message)"
+
+        $queryCurrent = 0
+
+        foreach ($searchResult in @($batchResult.Results)) {
+            $queryCurrent++
+            $searchName = [string]$searchResult.Query
+
+            if ([string]::IsNullOrWhiteSpace($searchName)) {
+                continue
+            }
+
+            if ([bool]$searchResult.Success) {
+                $searchResultCache[$searchName] = @($searchResult.Results)
+            } else {
+                $searchResultCache[$searchName] = @()
+                Write-Log "Search failed for '$searchName': $($searchResult.Error)"
+            }
         }
+
+        Write-Log "Discovery WinGet batch search complete -> Queries: $($batchResult.TotalQueries), Cache hits: $($batchResult.CacheHits), Worker queries: $($batchResult.WorkerQueries), Workers: $($batchResult.WorkerCount)"
+        Update-Status "WinGet searches complete: $($batchResult.TotalQueries) queries, $($batchResult.CacheHits) cache hits, $($batchResult.WorkerCount) workers."
+    }
+    catch {
+        Write-Log "Discovery WinGet batch search failed: $($_.Exception.Message)"
+        Update-Status "Discovery WinGet search failed: $($_.Exception.Message)"
+        throw
+    }
+    finally {
+        $script:progressBar.MarqueeAnimationSpeed = 0
+        $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
     }
 
     # Phase 2: match normalized discovered apps against cached results
@@ -3208,7 +3161,14 @@ $scanDiscoveredButton.Add_Click({
     $script:progressBar.Value = 0
 
     foreach ($entry in $normalizedApps) {
-        [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
+        [System.Windows.Forms.Application]::DoEvents()
+
+        if ($script:cancelDiscoveryScan) {
+            Update-Status "Discovery scan canceled during matching."
+            Write-Log "Discovery scan canceled during matching phase."
+            return
+        }
+
         $processCurrent++
         $script:progressBar.Value = $processCurrent
         if (($processCurrent -eq 1) -or ($processCurrent % 25 -eq 0) -or ($processCurrent -eq $processTotal)) {
@@ -3300,8 +3260,17 @@ $scanDiscoveredButton.Add_Click({
     Update-Status "Error fetching discovered apps: $($_.Exception.Message)"
     Write-Log "Scan Discovered Error: $($_.Exception.Message)"
   } finally {
+    try {
+        Save-WinTunerDiscoveryCache
+    } catch {
+        Write-Log "Could not save Discovery WinGet cache: $($_.Exception.Message)"
+    }
+
     $ProgressPreference = $oldProgress
     $InformationPreference = $oldInfo
+    $script:discoveryScanRunning = $false
+    $script:cancelDiscoveryScan = $false
+    $scanDiscoveredButton.Text = "1. Scan Discovered Apps"
     $scanDiscoveredButton.Enabled = $true
     $script:progressBar.Maximum = 100
     $script:progressBar.Value = 0
@@ -3455,7 +3424,7 @@ $form.Add_FormClosing({
         if ($script:settings) { 
             if ($script:settings.RememberMe) { $script:settings.LastUser = $usernameBox.Text } 
             else { $script:settings.LastUser = "" }
-            Save-Settings 
+            [void](Export-WinTunerSettings -Settings $script:settings -Path $script:settingsPath)
         } 
     } catch {}
 
@@ -3518,9 +3487,7 @@ try {
 
 # Async update check on startup so it doesn't block the UI
 $form.Add_Shown({
-  Invoke-AsyncOperation -StatusText "Checking for updates..." -ScriptBlock {
-    Test-AppUpdateAvailable
-  } -OnComplete {
+  Invoke-AsyncUpdateCheck -StatusText "Checking for updates..." -OnComplete {
     param($updateResult)
     Invoke-UpdateCheckFeedback -UpdateResult $updateResult -Context 'Startup'
   }
@@ -3568,7 +3535,7 @@ if ($browsePathButton)         { $toolTip.SetToolTip($browsePathButton,         
 if ($autoCheckUpdatesCheckbox) { $toolTip.SetToolTip($autoCheckUpdatesCheckbox, "Automatically scan for app updates each time you log in") }
 if ($rememberMeCheckbox)       { $toolTip.SetToolTip($rememberMeCheckbox,       "Save your username so it is pre-filled on the next launch") }
 if ($saveSettingsButton)       { $toolTip.SetToolTip($saveSettingsButton,       "Save all settings to disk") }
-if ($clearCacheButton)         { $toolTip.SetToolTip($clearCacheButton,         "Clear the locally cached WinGet version list") }
+if ($clearCacheButton)         { $toolTip.SetToolTip($clearCacheButton,         "Clear WinGet version cache, Discovery search cache, and Graph detected-apps cache") }
 if ($checkUpdateButton)        { $toolTip.SetToolTip($checkUpdateButton,        "Check GitHub for a newer version of WinTuner GUI") }
 
 # Run the form mit finalem Sicherheitsnetz
