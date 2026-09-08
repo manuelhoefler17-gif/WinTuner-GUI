@@ -2626,7 +2626,48 @@ $uploadButton.Add_Click({
       )
       return
     }
-    if (-not (Test-Path $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
+    if (-not (Test-Path $folder)) {
+        Update-Status "Cannot upload: package root folder does not exist."
+        Write-Log "Upload blocked: package root folder does not exist: $folder"
+        $uploadButton.Enabled = $false
+        return
+    }
+
+    $builtPackagePath = Join-Path (Join-Path $folder $packageID) $version
+    $metadataPath = Join-Path $builtPackagePath 'win32LobApp.json'
+
+    if (-not (Test-Path $metadataPath)) {
+        Update-Status "Cannot upload: package metadata for $packageID (v$version) was not found."
+        Write-Log "Upload blocked: win32LobApp.json not found in $builtPackagePath"
+        $uploadButton.Enabled = $false
+        return
+    }
+
+    try {
+        $packageMetadata = Get-Content $metadataPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $expectedIntuneWinName = [string]$packageMetadata.fileName
+    } catch {
+        Update-Status "Cannot upload: package metadata could not be read."
+        Write-Log "Upload blocked: failed to read ${metadataPath}: $($_.Exception.Message)"
+        $uploadButton.Enabled = $false
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($expectedIntuneWinName)) {
+        Update-Status "Cannot upload: package metadata does not contain an IntuneWin filename."
+        Write-Log "Upload blocked: fileName missing in $metadataPath"
+        $uploadButton.Enabled = $false
+        return
+    }
+
+    $builtIntuneWinPath = Join-Path $builtPackagePath $expectedIntuneWinName
+
+    if (-not (Test-Path $builtIntuneWinPath)) {
+        Update-Status "Cannot upload: expected package file was not found."
+        Write-Log "Upload blocked: expected .intunewin missing: $builtIntuneWinPath"
+        $uploadButton.Enabled = $false
+        return
+    }
     
     try {
         $uploadButton.Enabled = $false
