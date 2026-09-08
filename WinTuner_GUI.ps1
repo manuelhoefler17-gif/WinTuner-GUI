@@ -72,13 +72,17 @@ Import-Module $settingsModulePath -Force
 $loggingModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Logging.psm1'
 Import-Module $loggingModulePath -Force
 
+# Load WinTuner Intune / Graph helpers
+$intuneModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Intune.psm1'
+Import-Module $intuneModulePath -Force
+
 # Initialize file logging. The GUI output box is attached after it is created.
 Initialize-WinTunerLogging -BasePath $PSScriptRoot
 $script:repoOwner = "manuelhoefler17-gif"
 $script:repoName = "WinTuner-GUI"
 $script:githubRepo  = "$($script:repoOwner)/$($script:repoName)"
 $script:githubApiUrl = "https://api.github.com/repos/$($script:repoOwner)/$($script:repoName)/releases/latest"
-$script:skipLowValueWingetCandidates = $false  # keep all apps by default; set $true for faster scans with possible omissions
+$script:skipLowValueWingetCandidates = $false  # keep all discovered apps; persistent caches handle repeated scans
 
 # --- Runtime state (set during execution) ---
 # $script:isConnected      – whether the user is logged in to a tenant
@@ -1688,7 +1692,7 @@ $tabSettings.Controls.Add($saveSettingsButton)
 
 # Clear Version Cache Button
 $clearCacheButton = New-Object System.Windows.Forms.Button
-$clearCacheButton.Text = "Clear Version Cache"
+$clearCacheButton.Text = "Clear All Caches"
 $clearCacheButton.Location = New-Object System.Drawing.Point(20,225)
 $clearCacheButton.Width = 180
 $clearCacheButton.Height = 35
@@ -1747,9 +1751,17 @@ $saveSettingsButton.Add_Click({
 
 # Clear Version Cache Button Handler
 $clearCacheButton.Add_Click({
-  Clear-WingetVersionCache
-  Write-Log "Version cache cleared."
-  Update-Status "Version cache cleared."
+  try {
+    Clear-WingetVersionCache
+    Clear-WinTunerDiscoveryCache
+    Clear-WinTunerDetectedAppsCache
+
+    Write-Log "All local caches cleared: WinGet versions, Discovery WinGet searches, Graph detected apps."
+    Update-Status "All local caches cleared."
+  } catch {
+    Write-Log "Cache cleanup failed: $($_.Exception.Message)"
+    Update-Status "Cache cleanup failed: $($_.Exception.Message)"
+  }
 })
 
 # --- Self-Update Section in Settings Tab ---
@@ -2671,7 +2683,7 @@ $logoutButton.Add_Click({
   } catch {
     Write-Log "Logout warning: $($_.Exception.Message)"
   }
-  try { Disconnect-MgGraph -ErrorAction SilentlyContinue } catch {}
+  Disconnect-WinTunerGraph
   $script:isConnected = $false
   $script:currentUserUpn = ""
   if ($loginInfoLabel) { $loginInfoLabel.Text = "" }
@@ -2781,7 +2793,22 @@ $uncheckAllDiscoveredButton.Add_Click({
     Update-Status "All discovered apps unchecked"
 })
 
+$script:discoveryScanRunning = $false
+$script:cancelDiscoveryScan = $false
+
 $scanDiscoveredButton.Add_Click({
+  if ($script:discoveryScanRunning) {
+    $script:cancelDiscoveryScan = $true
+    $scanDiscoveredButton.Text = "Cancelling..."
+    $scanDiscoveredButton.Enabled = $false
+    Update-Status "Cancel requested - finishing current WinGet query..."
+    Write-Log "Discovery scan cancellation requested by user."
+    return
+  }
+
+  $script:discoveryScanRunning = $true
+  $script:cancelDiscoveryScan = $false
+  $scanDiscoveredButton.Text = "Cancel Scan"
   if (-not $script:isConnected) { Update-Status "Please login first."; return }
 
   # Speichere die originalen Streams und schalte sie stumm, um Threading-Crashes zu vermeiden
@@ -2791,7 +2818,7 @@ $scanDiscoveredButton.Add_Click({
   $InformationPreference = 'SilentlyContinue'
 
   try {
-    $scanDiscoveredButton.Enabled = $false
+    $scanDiscoveredButton.Enabled = $true
     $deployDiscoveredButton.Enabled = $false
     $exportDiscoveredCsvButton.Enabled = $false
     $discoveredListBox.Items.Clear()
@@ -2802,56 +2829,11 @@ $scanDiscoveredButton.Add_Click({
     [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
 
 # --- GRAPH-AUTH BLOCK (FIXED) ---
-    if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
-        Update-Status "Microsoft.Graph module not found..."
-        [System.Windows.Forms.MessageBox]::Show(
-            "Microsoft.Graph module not found.`n`nPlease install it first:`nInstall-Module Microsoft.Graph -Scope CurrentUser",
-            "Module Not Found",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
-        )
-        return
-    }
+    # Ensure Microsoft Graph session has the required account and scopes
+    Update-Status "Checking Microsoft Graph session..."
+    [System.Windows.Forms.Application]::DoEvents()
 
-    # Liste ALLER benötigten Scopes für Discovered Apps
-    $requiredScopes = @(
-        "DeviceManagementApps.ReadWrite.All", 
-        "DeviceManagementManagedDevices.Read.All", 
-        "Directory.Read.All"
-    )
-
-    $mgContext = Get-MgContext -ErrorAction SilentlyContinue
-    $needsAuth = $false
-
-    if (-not $mgContext) {
-        $needsAuth = $true
-    } else {
-        # Prüfen, ob ALLE erforderlichen Scopes im aktuellen Token vorhanden sind
-        foreach ($s in $requiredScopes) {
-            if ($mgContext.Scopes -notcontains $s) {
-                $needsAuth = $true
-                break
-            }
-        }
-
-        $userMatch = ($mgContext.Account -eq $script:currentUserUpn)
-        if (-not $userMatch) { $needsAuth = $true }
-
-        if ($needsAuth) {
-            Update-Status "Clearing old Graph session (Scope missing or wrong Tenant)..."
-            [System.Windows.Forms.Application]::DoEvents()
-            try { Disconnect-MgGraph -ErrorAction SilentlyContinue } catch {}
-        }
-    }
-
-    if ($needsAuth) {
-        Update-Status "Authenticating with MS Graph for $($script:currentUserUpn)..."
-        [System.Windows.Forms.Application]::DoEvents()
-        $tenantDomain = $script:currentUserUpn.Split('@')[1]
-        
-        # Jetzt mit dem vollständigen Array an Scopes anmelden
-        $null = Connect-MgGraph -TenantId $tenantDomain -Scopes $requiredScopes -NoWelcome -ErrorAction Stop *>&1
-    }
+    $null = Connect-WinTunerGraph -UserPrincipalName $script:currentUserUpn
 
     # 1. Vorhandene Apps checken (EXTREM SCHNELL DURCH "Resolve" STATT "Try-Resolve")
     Update-Status "Loading existing managed apps to filter them out..."
@@ -2868,21 +2850,18 @@ $scanDiscoveredButton.Add_Click({
     Update-Status "Fetching ALL detected apps from Intune API (this might take a moment)..."
     [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
     
-    $uri = "https://graph.microsoft.com/beta/deviceManagement/detectedApps?`$top=500&`$orderby=deviceCount desc"
-    $detectedApps = [System.Collections.Generic.List[object]]::new()
-    $maxPages = 100
-    $pageCount = 0
+    $detectedResult = Get-WinTunerDetectedApps -PageSize 500 -MaxPages 1000
 
-    do {
-        $response = Invoke-MgRestMethod -Uri $uri -Method GET -ErrorAction Stop 2>$null 3>$null 4>$null 5>$null 6>$null
-        if ($response.value) { $detectedApps.AddRange([object[]]$response.value) }
-        $uri = $response.'@odata.nextLink'
-        $pageCount++
-        if ($pageCount -ge $maxPages) {
-            Write-Log "Warning: Graph API pagination limit ($maxPages pages) reached. Some apps may not be shown."
-            break
-        }
-    } while ($uri)
+    if ($detectedResult.FromCache) {
+        Write-Log "Detected apps loaded from Graph cache: $(@($detectedResult.Apps).Count) apps."
+    } else {
+        Write-Log "Detected apps loaded from Microsoft Graph: $(@($detectedResult.Apps).Count) apps across $($detectedResult.PageCount) pages."
+    }
+    $detectedApps = $detectedResult.Apps
+
+    if ($detectedResult.LimitReached) {
+        Write-Log "Warning: Graph API pagination limit (100 pages) reached. Some apps may not be shown."
+    }
 
     if (-not $detectedApps -or $detectedApps.Count -eq 0) {
         Update-Status "No discovered apps found in Intune."
@@ -2925,30 +2904,82 @@ $scanDiscoveredButton.Add_Click({
     # Fast lookup for already created discovered entries by PackageID
     $discoveredByPackageId = @{}
 
-    $uniqueSearchNames = @($normalizedApps | Select-Object -ExpandProperty SearchName -Unique)
+    $uniqueSearchNameSet = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase
+    )
+    $uniqueSearchNames = @(
+        foreach ($normalizedApp in $normalizedApps) {
+            $candidateSearchName = [string]$normalizedApp.SearchName
+
+            if (
+                -not [string]::IsNullOrWhiteSpace($candidateSearchName) -and
+                $uniqueSearchNameSet.Add($candidateSearchName)
+            ) {
+                $candidateSearchName
+            }
+        }
+    )
     $queryTotal = $uniqueSearchNames.Count
     $queryCurrent = 0
     Update-Status "Prepared $($normalizedApps.Count) apps for matching ($queryTotal unique search terms, skipped: $skippedNonCandidateCount, skip-mode: $($script:skipLowValueWingetCandidates))."
     Write-Log "Discovery prep -> Filtered apps: $total, Normalized apps: $($normalizedApps.Count), Unique search terms: $queryTotal, Skipped non-candidates: $skippedNonCandidateCount, Skip-mode: $($script:skipLowValueWingetCandidates)"
 
-    # Phase 1: fetch/search all unique terms
-    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $script:progressBar.Maximum = if ($queryTotal -gt 0) { $queryTotal } else { 1 }
-    $script:progressBar.Value = 0
+    # Phase 1: fetch/search all unique terms using isolated worker processes
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+    $script:progressBar.MarqueeAnimationSpeed = 25
 
-    foreach ($searchName in $uniqueSearchNames) {
-        $queryCurrent++
-        $script:progressBar.Value = $queryCurrent
-        if (($queryCurrent -eq 1) -or ($queryCurrent % 25 -eq 0) -or ($queryCurrent -eq $queryTotal)) {
-            Update-Status "Querying WinGet unique terms ($queryCurrent/$queryTotal) from $($normalizedApps.Count) apps: $searchName"
-            [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
+    Update-Status "WinGet discovery: processing $queryTotal unique search terms in isolated workers..."
+    Write-Log "Discovery WinGet batch search starting -> Queries: $queryTotal, Batch size: 25, Cache TTL: 24h"
+    [System.Windows.Forms.Application]::DoEvents()
+
+    try {
+        $batchResult = Search-WinTunerDiscoveryPackagesBatchCached `
+            -SearchQueries $uniqueSearchNames `
+            -BatchSize 25 `
+            -QueryTimeoutSeconds 12 `
+            -CacheTtlHours 24 `
+            -OnWait {
+                [System.Windows.Forms.Application]::DoEvents()
+            } `
+            -ShouldCancel {
+                return [bool]$script:cancelDiscoveryScan
+            }
+
+        if ($batchResult.Canceled -or $script:cancelDiscoveryScan) {
+            Update-Status "Discovery scan canceled during WinGet search phase."
+            Write-Log "Discovery scan canceled during isolated WinGet worker phase."
+            return
         }
-        try {
-            $searchResultCache[$searchName] = @(Search-WtWinGetPackage -SearchQuery $searchName -ErrorAction SilentlyContinue 2>$null 3>$null 4>$null 5>$null 6>$null)
-        } catch {
-            $searchResultCache[$searchName] = @()
-            Write-Log "Search failed for '$searchName': $($_.Exception.Message)"
+
+        $queryCurrent = 0
+
+        foreach ($searchResult in @($batchResult.Results)) {
+            $queryCurrent++
+            $searchName = [string]$searchResult.Query
+
+            if ([string]::IsNullOrWhiteSpace($searchName)) {
+                continue
+            }
+
+            if ([bool]$searchResult.Success) {
+                $searchResultCache[$searchName] = @($searchResult.Results)
+            } else {
+                $searchResultCache[$searchName] = @()
+                Write-Log "Search failed for '$searchName': $($searchResult.Error)"
+            }
         }
+
+        Write-Log "Discovery WinGet batch search complete -> Queries: $($batchResult.TotalQueries), Cache hits: $($batchResult.CacheHits), Worker queries: $($batchResult.WorkerQueries), Workers: $($batchResult.WorkerCount)"
+        Update-Status "WinGet searches complete: $($batchResult.TotalQueries) queries, $($batchResult.CacheHits) cache hits, $($batchResult.WorkerCount) workers."
+    }
+    catch {
+        Write-Log "Discovery WinGet batch search failed: $($_.Exception.Message)"
+        Update-Status "Discovery WinGet search failed: $($_.Exception.Message)"
+        throw
+    }
+    finally {
+        $script:progressBar.MarqueeAnimationSpeed = 0
+        $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
     }
 
     # Phase 2: match normalized discovered apps against cached results
@@ -2958,7 +2989,14 @@ $scanDiscoveredButton.Add_Click({
     $script:progressBar.Value = 0
 
     foreach ($entry in $normalizedApps) {
-        [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
+        [System.Windows.Forms.Application]::DoEvents()
+
+        if ($script:cancelDiscoveryScan) {
+            Update-Status "Discovery scan canceled during matching."
+            Write-Log "Discovery scan canceled during matching phase."
+            return
+        }
+
         $processCurrent++
         $script:progressBar.Value = $processCurrent
         if (($processCurrent -eq 1) -or ($processCurrent % 25 -eq 0) -or ($processCurrent -eq $processTotal)) {
@@ -3050,8 +3088,17 @@ $scanDiscoveredButton.Add_Click({
     Update-Status "Error fetching discovered apps: $($_.Exception.Message)"
     Write-Log "Scan Discovered Error: $($_.Exception.Message)"
   } finally {
+    try {
+        Save-WinTunerDiscoveryCache
+    } catch {
+        Write-Log "Could not save Discovery WinGet cache: $($_.Exception.Message)"
+    }
+
     $ProgressPreference = $oldProgress
     $InformationPreference = $oldInfo
+    $script:discoveryScanRunning = $false
+    $script:cancelDiscoveryScan = $false
+    $scanDiscoveredButton.Text = "1. Scan Discovered Apps"
     $scanDiscoveredButton.Enabled = $true
     $script:progressBar.Maximum = 100
     $script:progressBar.Value = 0
@@ -3318,7 +3365,7 @@ if ($browsePathButton)         { $toolTip.SetToolTip($browsePathButton,         
 if ($autoCheckUpdatesCheckbox) { $toolTip.SetToolTip($autoCheckUpdatesCheckbox, "Automatically scan for app updates each time you log in") }
 if ($rememberMeCheckbox)       { $toolTip.SetToolTip($rememberMeCheckbox,       "Save your username so it is pre-filled on the next launch") }
 if ($saveSettingsButton)       { $toolTip.SetToolTip($saveSettingsButton,       "Save all settings to disk") }
-if ($clearCacheButton)         { $toolTip.SetToolTip($clearCacheButton,         "Clear the locally cached WinGet version list") }
+if ($clearCacheButton)         { $toolTip.SetToolTip($clearCacheButton,         "Clear WinGet version cache, Discovery search cache, and Graph detected-apps cache") }
 if ($checkUpdateButton)        { $toolTip.SetToolTip($checkUpdateButton,        "Check GitHub for a newer version of WinTuner GUI") }
 
 # Run the form mit finalem Sicherheitsnetz
