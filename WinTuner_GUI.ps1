@@ -2856,12 +2856,14 @@ $updateSearchButton.Add_Click({
     $updateListBox.EndUpdate()
 
     if ($count -gt 0) {
-      Update-Status ("Search updates completed: {0} candidate(s) found. Check items to update." -f $count)
+      Update-Status "Update scan complete | Checked: $totalCount | Candidates: $count"
+      Write-Log "Update scan summary -> Checked: $totalCount, Candidates: $count"
       # Enable check/uncheck buttons
       $checkAllButton.Enabled = $true
       $uncheckAllButton.Enabled = $true
     } else {
-      Update-Status "No update candidates found."
+      Update-Status "Update scan complete | Checked: $totalCount | Candidates: 0"
+      Write-Log "Update scan summary -> Checked: $totalCount, Candidates: 0"
       $checkAllButton.Enabled = $false
       $uncheckAllButton.Enabled = $false
     }
