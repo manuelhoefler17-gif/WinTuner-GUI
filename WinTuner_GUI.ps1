@@ -1857,7 +1857,7 @@ $tabCreate.Controls.Add($uploadButton)
 
 # A package must be rebuilt whenever the selected app changes
 $dropdown.Add_SelectedIndexChanged({
-  $uploadButton.Enabled = $false
+  Update-PackageActionState
 })
 
 # Tab: Updates
@@ -2242,6 +2242,101 @@ $script:packageMap = @{}
 # Optional: user-chosen versions per PackageID
 $script:selectedPackageVersions = @{}
 
+function Update-PackageActionState {
+    $canUpload = $false
+
+    try {
+        if (-not $script:isConnected) {
+            $uploadButton.Enabled = $false
+            return
+        }
+
+        if (-not $dropdown.SelectedItem) {
+            $uploadButton.Enabled = $false
+            return
+        }
+
+        $appName = [string]$dropdown.SelectedItem
+        $package = $script:packageMap[$appName]
+
+        if (-not $package -or [string]::IsNullOrWhiteSpace([string]$package.PackageID)) {
+            $uploadButton.Enabled = $false
+            return
+        }
+
+        $packageID = [string]$package.PackageID
+
+        if (-not $script:builtVersions.ContainsKey($packageID)) {
+            $uploadButton.Enabled = $false
+            return
+        }
+
+        $builtVersion = [string]$script:builtVersions[$packageID]
+
+        if ([string]::IsNullOrWhiteSpace($builtVersion)) {
+            $uploadButton.Enabled = $false
+            return
+        }
+
+        $desiredVersion = if ($script:selectedPackageVersions.ContainsKey($packageID)) {
+            [string]$script:selectedPackageVersions[$packageID]
+        } else {
+            [string]$package.Version
+        }
+
+        if (
+            -not [string]::IsNullOrWhiteSpace($desiredVersion) -and
+            $desiredVersion -ne $builtVersion
+        ) {
+            $uploadButton.Enabled = $false
+            return
+        }
+
+        $folder = [System.IO.Path]::GetFullPath($pathBox.Text.Trim())
+
+        if (-not (Test-Path $folder)) {
+            $uploadButton.Enabled = $false
+            return
+        }
+
+        $builtPackagePath = Join-Path (Join-Path $folder $packageID) $builtVersion
+        $metadataPath = Join-Path $builtPackagePath 'win32LobApp.json'
+
+        if (-not (Test-Path $metadataPath)) {
+            $uploadButton.Enabled = $false
+            return
+        }
+
+        try {
+            $packageMetadata = Get-Content $metadataPath -Raw -ErrorAction Stop |
+                ConvertFrom-Json -ErrorAction Stop
+
+            $expectedIntuneWinName = [string]$packageMetadata.fileName
+        } catch {
+            $uploadButton.Enabled = $false
+            return
+        }
+
+        if ([string]::IsNullOrWhiteSpace($expectedIntuneWinName)) {
+            $uploadButton.Enabled = $false
+            return
+        }
+
+        $builtIntuneWinPath = Join-Path $builtPackagePath $expectedIntuneWinName
+
+        if (-not (Test-Path $builtIntuneWinPath)) {
+            $uploadButton.Enabled = $false
+            return
+        }
+
+        $canUpload = $true
+    } catch {
+        $canUpload = $false
+    }
+
+    $uploadButton.Enabled = $canUpload
+}
+
 # Cache for winget searches to speed up repeated searches
 # (initialized at script scope; see earlier declaration)
 
@@ -2383,6 +2478,7 @@ $loginButton.Add_Click({
     $script:isConnected = $true
     Update-Status "Login success."
     $script:currentUserUpn = $usernameBox.Text
+    Update-PackageActionState
     if ($loginInfoLabel) { $loginInfoLabel.Text = "Logged in as: $($script:currentUserUpn)" }
     if ($rememberCheckBox) { $script:settings.RememberMe = [bool]$rememberCheckBox.Checked }
     if ($script:settings.RememberMe) { $script:settings.LastUser = $usernameBox.Text } else { $script:settings.LastUser = "" }
@@ -2486,7 +2582,7 @@ $versionsButton.Add_Click({
   $chosen = Show-VersionPickerDialog -Title ("Select version for {0}" -f $packageID) -Versions $versions
   if ($chosen) {
     $script:selectedPackageVersions[$packageID] = $chosen
-    $uploadButton.Enabled = $false
+    Update-PackageActionState
     Update-Status ("Selected version for {0}: {1}" -f $packageID, $chosen)
   } else {
     Update-Status "Version selection canceled."
@@ -2538,7 +2634,7 @@ $createButton.Add_Click({
   ) {
     Update-Status ("Package already built (version {0}). Reusing existing package." -f $targetVersion)
     Write-Log "Reusing existing package for $packageID version $targetVersion"
-    $uploadButton.Enabled = [bool]$script:isConnected
+    Update-PackageActionState
     return
   }
   
@@ -2566,8 +2662,8 @@ $createButton.Add_Click({
       $effectiveVersion = $resPkg.EffectiveVersion
       if (-not $effectiveVersion) { $effectiveVersion = $package.Version }
       Update-Status ("Package created successfully (version {0})" -f $effectiveVersion)
-      $uploadButton.Enabled = [bool]$script:isConnected
       if ($effectiveVersion) { $script:builtVersions[$packageID] = $effectiveVersion }
+      Update-PackageActionState
     } else {
       Update-Status "Package creation failed"
     }
@@ -2695,7 +2791,7 @@ $uploadButton.Add_Click({
         $errorMsg = $_.Exception.Message
         Update-Status "Upload failed: See log for details"
         Write-Log "Upload error: $errorMsg"
-        $uploadButton.Enabled = $true
+        Update-PackageActionState
         
         # Show detailed error dialog
         $errorDetails = "Upload of $packageID (v$version) failed.`n`n"
@@ -3176,6 +3272,7 @@ $logoutButton.Add_Click({
   Disconnect-WinTunerGraph
   $script:isConnected = $false
   $script:currentUserUpn = ""
+  Update-PackageActionState
   if ($loginInfoLabel) { $loginInfoLabel.Text = "" }
   if (-not $script:settings.RememberMe) { $usernameBox.Text = "" }
   Update-Status "Logout success."
