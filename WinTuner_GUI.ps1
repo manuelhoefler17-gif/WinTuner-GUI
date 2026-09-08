@@ -2519,6 +2519,28 @@ $createButton.Add_Click({
   }
   if (-not (Test-Path $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
   $filePath  = Join-Path $folder "$packageID.wtpackage"
+
+  $desired = $null
+  if ($script:selectedPackageVersions.ContainsKey($packageID)) {
+    $desired = $script:selectedPackageVersions[$packageID]
+  }
+
+  $targetVersion = if ($desired) { $desired } else { $package.Version }
+  $builtPackagePath = Join-Path (Join-Path $folder $packageID) $targetVersion
+  $builtIntuneWin = Get-ChildItem -Path $builtPackagePath -Filter '*.intunewin' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+
+
+  if (
+    $targetVersion -and
+    $script:builtVersions.ContainsKey($packageID) -and
+    ([string]$script:builtVersions[$packageID] -eq [string]$targetVersion) -and
+    $null -ne $builtIntuneWin
+  ) {
+    Update-Status ("Package already built (version {0}). Reusing existing package." -f $targetVersion)
+    Write-Log "Reusing existing package for $packageID version $targetVersion"
+    $uploadButton.Enabled = [bool]$script:isConnected
+    return
+  }
   
   if (Test-Path $filePath) {
     $res = [System.Windows.Forms.MessageBox]::Show(("A package file already exists:\n{0}\nOverwrite it?" -f $filePath), "Confirm overwrite", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
@@ -2541,11 +2563,6 @@ $createButton.Add_Click({
     $script:progressBar.MarqueeAnimationSpeed = 30
     $script:progressBar.Visible = $true
     [System.Windows.Forms.Application]::DoEvents()  # Update UI - TODO: refactor to use Invoke-AsyncOperation
-    
-    $desired = $null
-    if ($script:selectedPackageVersions.ContainsKey($packageID)) { 
-      $desired = $script:selectedPackageVersions[$packageID] 
-    }
     
     $resPkg = New-WingetPackageWithFallback `
       -PackageId $packageID `
