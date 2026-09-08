@@ -2642,6 +2642,7 @@ $uploadButton.Add_Click({
         $errorMsg = $_.Exception.Message
         Update-Status "Upload failed: See log for details"
         Write-Log "Upload error: $errorMsg"
+        $uploadButton.Enabled = $true
         
         # Show detailed error dialog
         $errorDetails = "Upload of $packageID (v$version) failed.`n`n"
@@ -2663,7 +2664,6 @@ $uploadButton.Add_Click({
         $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
         $script:progressBar.Visible = $false
         $script:progressBar.Value = 0
-        $uploadButton.Enabled = $true
         $createButton.Enabled = $true
     }
 })
