@@ -1,6 +1,6 @@
 # WinTuner GUI
 
-> 🚀 A modern PowerShell-based graphical user interface for managing Microsoft Intune Win32 applications using WinGet packages.
+> 🚀 A PowerShell-based graphical interface for packaging, deploying, discovering and updating Microsoft Intune Win32 applications with WinGet and WinTuner.
 
 [![PowerShell Version](https://img.shields.io/badge/PowerShell-7.0%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -8,86 +8,265 @@
 
 ## 🎯 Overview
 
-**WinTuner GUI** is a graphical interface built on top of the WinTuner PowerShell module by Stephan van Rooij. It simplifies packaging, deploying and updating WinGet applications in Microsoft Intune.
+**WinTuner GUI** provides a graphical workflow around the WinTuner PowerShell module by Stephan van Rooij.
+
+It simplifies common Microsoft Intune Win32 application tasks:
+
+- Search WinGet packages
+- Select current or older package versions
+- Create WinTuner packages
+- Upload packages to Microsoft Intune
+- Scan existing applications for updates
+- Discover applications reported by Intune and match them to WinGet
+- Bulk-package and update multiple applications
+- Cache expensive WinGet and Microsoft Graph lookups
+- Keep long-running discovery operations responsive and cancellable
+
+WinTuner GUI requires **PowerShell 7**.
+
+---
 
 ## ✨ Key Features
 
-- 🔍 Search WinGet packages and deploy them to Intune
-- 🔄 Scan WinTuner-managed Intune Win32 apps for available updates
-- 📊 Discover Intune apps and match them to WinGet packages
-- 📦 Bulk package and update applications
-- 🧠 Fuzzy matching and app-name normalization
-- 💾 RAM and disk cache for WinGet version lookups
-- ⚙️ Persistent settings and recent-user history
-- 🌗 Dark/light GUI themes
-- 📝 Logging, log rotation and crash reporting
-- 🤖 Automatic update checks and self-update support with optional SHA256 validation
+### 📦 WinGet packaging and deployment
+
+- Search WinGet packages directly from the GUI
+- Select a specific package version when required
+- Package applications through WinTuner
+- Reuse the same successfully built package version during the current GUI session
+- Validate package metadata before upload
+- Validate the exact `.intunewin` referenced by `win32LobApp.json`
+- Prevent stale application or version selections from enabling Upload
+- Upload packages directly to the connected Intune tenant
+
+Package reuse is currently session-based. Existing package folders from an earlier GUI session are not automatically trusted as completed builds.
+
+### 🔄 Update management
+
+- Scan WinTuner-managed Intune Win32 applications
+- Compare deployed versions with available WinGet versions
+- Display the number of checked applications and update candidates
+- Select individual or multiple applications
+- Package and deploy updates in bulk
+
+### 🔍 Discovered Apps
+
+The **Discovered Apps** workflow reads application inventory from Microsoft Intune and attempts to match discovered applications with WinGet packages.
+
+The discovery pipeline includes:
+
+- Microsoft Graph pagination and retry handling
+- Cached Intune detected-app results
+- Persistent WinGet discovery cache
+- Application-name normalization and fuzzy matching
+- Duplicate search-term handling
+- Isolated PowerShell worker processes
+- Batched WinGet queries
+- Cancellation support
+- Cache hit statistics
+- Fresh/cached Graph status
+- Timestamp of the last successful discovery
+
+Repeated scans can therefore be significantly faster when cached data is still valid.
+
+### 💾 Caching
+
+WinTuner GUI uses multiple caches for different workloads:
+
+- In-memory WinGet version cache
+- Persistent WinGet version cache
+- Persistent WinGet discovery cache
+- Cached Microsoft Intune detected-app results
+
+The Settings tab provides **Clear All Caches** to clear the local caches used by WinTuner GUI.
+
+Cache lifetimes are workload-specific rather than controlled by one global TTL.
+
+### 🔐 Safer package state handling
+
+Upload availability is calculated from the current application state.
+
+It considers:
+
+- Tenant connection
+- Current package selection
+- Selected package version
+- Successfully built version
+- Package metadata
+- Expected `.intunewin` file
+
+Changing the application or package version invalidates the current Upload state until a matching package has been built or safely reused.
+
+### 🔄 Self-update
+
+WinTuner GUI can check GitHub for newer releases.
+
+The self-update process includes:
+
+- Automatic and manual update checks
+- Semantic version comparison
+- Optional SHA256 validation
+- Temporary download before replacement
+- Backup of the current script
+- Automatic restart after successful update
+- Rollback when replacement or restart fails
+- Bootstrap of required modular runtime files
+
+### ⚙️ Settings and usability
+
+- Persistent application settings
+- Remembered username support
+- Recent-user history
+- Configurable package output folder
+- Dark and light themes
+- Search and filtering
+- Status information for long-running operations
+- Log rotation
+- Crash and exception logging
+
+---
 
 ## 📋 Requirements
 
-- Windows 10/11 or Windows Server 2016+
-- PowerShell 7.0+
+- Windows 10/11 or Windows Server
+- PowerShell 7.0 or newer
 - Internet access
+- WinGet
+- Microsoft Graph access
 - Microsoft Intune permissions required to manage Win32 applications
-- WinTuner PowerShell module
+
+WinTuner GUI uses the **WinTuner** PowerShell module.
+
+If the module is not available, the application attempts to install it automatically for the current user.
+
+Manual installation:
 
 ```powershell
 Install-Module -Name WinTuner -Scope CurrentUser
 ```
 
+---
+
 ## 🚀 Installation
 
-### Direct download
+### GitHub release
+
+For normal usage, use the latest published GitHub release.
 
 Download `WinTuner_GUI.ps1` and run it with PowerShell 7:
 
 ```powershell
-.\WinTuner_GUI.ps1
+pwsh.exe -File .\WinTuner_GUI.ps1
 ```
 
-### Git
+Standalone releases bootstrap the additional runtime files required by the application when they are missing or belong to another release version.
+
+### Git checkout
+
+For development or testing:
 
 ```powershell
 git clone https://github.com/manuelhoefler17-gif/WinTuner-GUI.git
 cd WinTuner-GUI
-.\WinTuner_GUI.ps1
+pwsh.exe -File .\WinTuner_GUI.ps1
 ```
 
-## ✅ Recommended Pre-Flight Checks
+A Git checkout is treated as a development environment.
 
-```powershell
-$PSVersionTable.PSVersion
-Get-Module -ListAvailable WinTuner
-Test-NetConnection graph.microsoft.com -Port 443
+The GUI uses the local files from `Modules` and `Workers` and does not replace them with files downloaded from the currently published release.
+
+If required development files are missing, startup stops with a development error instead of silently mixing local and release files.
+
+---
+
+## 🗂️ Project Structure
+
+```text
+WinTuner-GUI/
+├── WinTuner_GUI.ps1
+├── Modules/
+│   ├── WinTuner.Core.psm1
+│   ├── WinTuner.Intune.psm1
+│   ├── WinTuner.Logging.psm1
+│   ├── WinTuner.Settings.psm1
+│   └── WinTuner.Winget.psm1
+├── Workers/
+│   └── WinTuner.DiscoveryWorker.ps1
+├── Tests/
+├── README.md
+├── CHANGELOG.md
+└── LICENSE
 ```
+
+### Main components
+
+**`WinTuner_GUI.ps1`**
+WinForms user interface, application orchestration, authentication workflow, packaging controls and update handling.
+
+**`WinTuner.Core.psm1`**
+Shared core functionality.
+
+**`WinTuner.Intune.psm1`**
+Microsoft Intune and detected-app integration.
+
+**`WinTuner.Logging.psm1`**
+Logging and log-management functionality.
+
+**`WinTuner.Settings.psm1`**
+Persistent settings handling.
+
+**`WinTuner.Winget.psm1`**
+WinGet lookup, version and discovery functionality.
+
+**`WinTuner.DiscoveryWorker.ps1`**
+Isolated worker used for scalable WinGet discovery queries.
+
+---
 
 ## 💻 Basic Workflow
 
-### Login
+### 1. Login
 
 1. Enter your Microsoft 365 UPN.
 2. Optionally enable remembering the username.
-3. Click **Login** and complete interactive authentication.
+3. Click **Login**.
+4. Complete interactive authentication.
 
-### Deploy a WinGet app
+WinTuner GUI verifies the tenant connection before enabling tenant-dependent actions.
+
+### 2. Create and deploy a WinGet application
 
 1. Open **WinGet Apps**.
 2. Search for an application.
-3. Select the package and optionally a specific version.
-4. Create the package.
-5. Deploy it to Intune.
+3. Select the package.
+4. Optionally choose a specific version.
+5. Select the package output folder.
+6. Click **Create package**.
+7. After a valid build, click **Upload**.
 
-### Update apps
+Changing the selected version invalidates the previous Upload state. The new version must first be built or safely reused.
+
+### 3. Scan for updates
 
 1. Open **Updates**.
 2. Click **Search Updates**.
-3. Filter or sort the results if needed.
-4. Select the apps to update.
-5. Start the update operation.
+3. Review checked applications and update candidates.
+4. Filter or sort the results if required.
+5. Select the applications to update.
+6. Start the update operation.
 
-### Discover apps
+### 4. Discover Intune applications
 
-The **Discovered Apps** tab scans Intune discovered applications and attempts to match them with WinGet packages. Results can be filtered by application or publisher and selected apps can be packaged and deployed.
+1. Open **Discovered Apps**.
+2. Start Discovery.
+3. Intune detected applications are collected.
+4. Search terms are generated and matched against WinGet.
+5. Review the matched packages.
+6. Select applications for packaging and deployment.
+
+The status indicates whether Graph data was fresh or cached and how many WinGet discovery queries came from cache.
+
+---
 
 ## ⚙️ Configuration
 
@@ -97,87 +276,212 @@ Settings are stored in:
 %LOCALAPPDATA%\WinTuner_Settings.json
 ```
 
-Example:
+Typical settings include the package path, automatic update checking, remembered users and WinGet overrides.
 
-```json
-{
-  "DefaultPackagePath": "C:\\Packages",
-  "AutoCheckUpdates": true,
-  "RememberMe": true,
-  "LastUser": "admin@contoso.com",
-  "RecentUsers": ["admin@contoso.com"],
-  "MaxRecentUsers": 3,
-  "WingetOverrides": {
-    "7zip.7zip": "24.07"
-  }
-}
-```
+Cache data is stored separately under the current user's local application data directory.
 
-The WinGet version cache is stored separately in `%LOCALAPPDATA%\WinTuner_VersionCache.json` and uses a six-hour TTL.
+Use **Clear All Caches** in Settings when a completely fresh lookup is required.
+
+---
 
 ## 📝 Logging
 
-Logs are written to:
+The primary GUI log is written to:
 
 ```text
 %LOCALAPPDATA%\WinTuner_GUI.log
 ```
 
-The application logs authentication events, package creation, deployments, update checks, warnings and errors. Log rotation prevents the active log from growing indefinitely.
+The application records information about:
+
+- Authentication
+- Package creation
+- Package reuse
+- Deployments
+- Update scans
+- Discovery summaries
+- Cache usage
+- Warnings and errors
+- Self-update activity
+
+Log rotation prevents the active log from growing indefinitely.
+
+---
+
+## ✅ Recommended Pre-Flight Checks
+
+Confirm PowerShell 7:
+
+```powershell
+$PSVersionTable.PSVersion
+```
+
+Check the WinTuner module:
+
+```powershell
+Get-Module -ListAvailable -Name WinTuner
+```
+
+Check Microsoft Graph connectivity:
+
+```powershell
+Test-NetConnection graph.microsoft.com -Port 443
+```
+
+Check WinGet:
+
+```powershell
+winget --version
+```
+
+---
 
 ## 📸 Screenshots
 
 ### WinGet Apps
+
 <img width="886" height="843" alt="WinGet Apps" src="https://github.com/user-attachments/assets/990f0de4-a5d3-4462-851d-686618faa02f" />
 
 ### Updates
+
 <img width="886" height="843" alt="Updates" src="https://github.com/user-attachments/assets/ef03ac45-d9ac-49eb-84b6-e1abc4265c96" />
 
 ### Discovered Apps
+
 <img width="886" height="843" alt="Discovered Apps" src="https://github.com/user-attachments/assets/c8bdb7ec-476b-465d-83ab-4fa369120a91" />
 
 ### Settings
+
 <img width="886" height="843" alt="Settings" src="https://github.com/user-attachments/assets/ad101628-3a72-4b5e-b550-0e531e0e983a" />
+
+---
 
 ## 🔧 Troubleshooting
 
-**PowerShell version error**  
-Run the application with `pwsh.exe` and PowerShell 7 or newer.
+### PowerShell version error
 
-**WinTuner module not found**  
-Install the module with `Install-Module -Name WinTuner -Scope CurrentUser`.
+Run WinTuner GUI with `pwsh.exe`, not Windows PowerShell 5.1:
 
-**Login fails or hangs**  
-Verify Intune permissions and connectivity to Microsoft Graph, then restart the application if necessary.
+```powershell
+pwsh.exe -File .\WinTuner_GUI.ps1
+```
 
-**Update check does not run automatically**  
-Verify that automatic update checking is enabled in Settings and review `WinTuner_GUI.log` for errors.
+### WinTuner module not found
+
+The application attempts installation automatically.
+
+Manual installation:
+
+```powershell
+Install-Module -Name WinTuner -Scope CurrentUser
+```
+
+### Login fails
+
+Verify Microsoft Intune permissions, Microsoft Graph connectivity and interactive authentication.
+
+Then review:
+
+```text
+%LOCALAPPDATA%\WinTuner_GUI.log
+```
+
+### Upload remains disabled
+
+Check that:
+
+- You are logged in
+- A package is selected
+- The selected version has been built
+- `win32LobApp.json` exists
+- The `.intunewin` referenced by the metadata exists
+
+If the selected application or version changed, create or reuse the matching package again.
+
+### Discovery is much faster on the second scan
+
+This is expected when Graph or WinGet results can be served from cache.
+
+Use **Clear All Caches** if a completely fresh scan is required.
+
+### Development checkout reports missing files
+
+A Git checkout intentionally does not download release dependencies over development files.
+
+Restore the missing repository files before starting the GUI again.
+
+---
+
+## 🧪 Development
+
+Active development is performed on the **`Test`** branch.
+
+The **`main`** branch is kept stable.
+
+```text
+Test
+  ↓
+Pull Request
+  ↓
+main
+```
+
+Changes should be tested on `Test` before being merged into `main`.
+
+A development checkout intentionally uses its local dependency files and is therefore not a substitute for testing the standalone release bootstrap.
+
+---
 
 ## 📝 Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for the detailed version history.
+See [CHANGELOG.md](CHANGELOG.md) for the complete version history.
 
-Current application version: **0.10.14**.
+Current development version: **0.10.14**.
+
+---
+
+## 🗺️ Planned Improvements
+
+Potential future improvements include:
+
+- Safe package reuse across GUI restarts
+- Additional package-state validation
+- Further Discovery and Updates UX improvements
+- Additional automated tests
+
+Cross-session package reuse will only be added when existing package folders can be validated reliably before they are trusted.
+
+---
 
 ## 🙏 Credits
 
-WinTuner GUI is built on the WinTuner PowerShell module created by Stephan van Rooij.
+WinTuner GUI is built on the **WinTuner PowerShell module** created by Stephan van Rooij.
 
-GUI development: **Manuel Höfler**.
+GUI development: **Manuel Höfler**
 
 Special thanks to Julian Hilgenberg for the initial idea, as well as the WinGet, Microsoft Graph and PowerShell communities.
+
+---
 
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
 
+---
+
 ## 🤝 Contributing
 
-Contributions are welcome. For development work, create a dedicated branch and submit a pull request rather than committing experimental changes directly to `main`.
+Contributions are welcome.
+
+Use a development branch and submit a pull request instead of committing experimental changes directly to `main`.
+
+---
 
 ## 📞 Support
 
-Use the repository Issues area for bugs and feature requests. See the changelog for known fixes and recent changes.
+Use the repository **Issues** area for bugs and feature requests.
+
+When reporting an issue, include relevant WinTuner GUI log entries whenever possible.
 
 ---
 
