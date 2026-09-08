@@ -440,6 +440,8 @@ function Invoke-AppSelfUpdate {
     [string]$HashUrl = $null
   )
 
+  $tempFile = $null
+
   try {
     # Determine current script path
     $currentPath = $null
@@ -452,6 +454,7 @@ function Invoke-AppSelfUpdate {
       $sfd.Title = "Save updated WinTuner GUI"
       $sfd.Filter = "PowerShell Script (*.ps1)|*.ps1"
       $sfd.FileName = "WinTuner_GUI.ps1"
+
       if ($sfd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
         $currentPath = $sfd.FileName
       } else {
@@ -460,90 +463,170 @@ function Invoke-AppSelfUpdate {
       }
     }
 
+    $currentPath = [System.IO.Path]::GetFullPath($currentPath)
+
     Write-Log "Downloading update from: $DownloadUrl"
     Update-Status "Downloading update..."
 
     $tempFile = [System.IO.Path]::GetTempFileName() + ".ps1"
 
-    # Temporarily clear PSDefaultParameterValues to prevent parameter binding conflicts
-    # (wildcard entries like '*:ProgressAction' can corrupt URI resolution in some PS7 builds)
+    # Temporarily clear PSDefaultParameterValues to prevent parameter binding conflicts.
     $savedDefaults = $PSDefaultParameterValues.Clone()
     try {
       $PSDefaultParameterValues = @{}
       $headers = @{ 'User-Agent' = 'WinTuner-GUI-UpdateCheck' }
-      Invoke-WebRequest -Uri $DownloadUrl -OutFile $tempFile -Headers $headers -TimeoutSec 60 -UseBasicParsing -ErrorAction Stop
+
+      Invoke-WebRequest `
+        -Uri $DownloadUrl `
+        -OutFile $tempFile `
+        -Headers $headers `
+        -TimeoutSec 60 `
+        -UseBasicParsing `
+        -ErrorAction Stop
     } finally {
       $PSDefaultParameterValues = $savedDefaults
     }
 
-    # Validate download
+    # Validate download.
     if (-not (Test-Path $tempFile)) {
       throw "Download failed: temp file not found"
     }
+
     $fileSize = (Get-Item $tempFile).Length
+
     if ($fileSize -lt 1000) {
       throw "Download failed: file too small ($fileSize bytes)"
     }
+
     $content = Get-Content $tempFile -Raw -ErrorAction Stop
+
     if ($content -notmatch 'WinTuner GUI') {
       throw "Download validation failed: file doesn't appear to be WinTuner GUI"
     }
 
-    # SHA256 integrity check (optional – skipped if no hash URL provided)
+    # Validate PowerShell syntax before replacing the running script.
+    $parseTokens = $null
+    $parseErrors = $null
+
+    [void][System.Management.Automation.Language.Parser]::ParseInput(
+      $content,
+      [ref]$parseTokens,
+      [ref]$parseErrors
+    )
+
+    if ($parseErrors.Count -gt 0) {
+      throw "Downloaded update contains invalid PowerShell syntax: $($parseErrors[0].Message)"
+    }
+
+    # SHA256 integrity check.
     if ($HashUrl) {
       $hashMismatch = $false
+
       try {
         Write-Log "Verifying SHA256 integrity..."
+
         $savedDefaults2 = $PSDefaultParameterValues.Clone()
+
         try {
           $PSDefaultParameterValues = @{}
-          $expectedHash = (Invoke-RestMethod -Uri $HashUrl -TimeoutSec 15 -ErrorAction Stop).Trim().ToUpper()
+
+          $expectedHash = (
+            Invoke-RestMethod `
+              -Uri $HashUrl `
+              -TimeoutSec 15 `
+              -ErrorAction Stop
+          ).Trim().ToUpper()
         } finally {
           $PSDefaultParameterValues = $savedDefaults2
         }
-        # Hash file may contain "HASH filename" or just "HASH"
+
         $expectedHash = ($expectedHash -split '\s+')[0].ToUpper()
         $actualHash = (Get-FileHash $tempFile -Algorithm SHA256).Hash.ToUpper()
+
         if ($actualHash -ne $expectedHash) {
           $hashMismatch = $true
           throw "SHA256 mismatch: download may be corrupt or tampered! Expected: $expectedHash, Got: $actualHash"
         }
+
         Write-Log "SHA256 verified OK: $actualHash"
       } catch {
-        # Re-throw only real hash mismatches, not network errors
-        if ($hashMismatch) { throw }
+        if ($hashMismatch) {
+          throw
+        }
+
         Write-Log "Warning: SHA256 check skipped (could not fetch hash): $($_.Exception.Message)"
       }
     }
 
     Write-Log "Download complete ($fileSize bytes). Replacing script..."
 
-    # Create backup
+    # Create backup.
     $backupPath = "$currentPath.backup"
+
     try {
-      Copy-Item -Path $currentPath -Destination $backupPath -Force -ErrorAction Stop
+      Copy-Item `
+        -Path $currentPath `
+        -Destination $backupPath `
+        -Force `
+        -ErrorAction Stop
+
       Write-Log "Backup created: $backupPath"
     } catch {
       Write-Log "Warning: Could not create backup: $($_.Exception.Message)"
     }
 
-    # Replace current script
-    Move-Item -Path $tempFile -Destination $currentPath -Force -ErrorAction Stop
+    # Replace current script.
+    Move-Item `
+      -Path $tempFile `
+      -Destination $currentPath `
+      -Force `
+      -ErrorAction Stop
 
-    Write-Log "Script replaced successfully. Restart required."
+    $tempFile = $null
+
+    Write-Log "Script replaced successfully. Starting updated version..."
+    Update-Status "Update installed. Restarting..."
+
+    # Start the updated script using the same PowerShell 7 host.
+    $pwshPath = Join-Path $PSHOME 'pwsh.exe'
+
+    if (-not (Test-Path $pwshPath)) {
+      throw "PowerShell 7 executable not found: $pwshPath"
+    }
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $pwshPath
+    $startInfo.UseShellExecute = $false
+    [void]$startInfo.ArgumentList.Add('-NoProfile')
+    [void]$startInfo.ArgumentList.Add('-ExecutionPolicy')
+    [void]$startInfo.ArgumentList.Add('Bypass')
+    [void]$startInfo.ArgumentList.Add('-File')
+    [void]$startInfo.ArgumentList.Add($currentPath)
+
+    $newProcess = [System.Diagnostics.Process]::Start($startInfo)
+
+    if (-not $newProcess) {
+      throw "Updated WinTuner process could not be started"
+    }
+
+    Write-Log "Updated WinTuner started successfully. PID: $($newProcess.Id)"
+
     return $true
 
   } catch {
     Write-Log "Self-update failed: $($_.Exception.Message)"
+
     if ($tempFile -and (Test-Path $tempFile)) {
       Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
     }
+
     [System.Windows.Forms.MessageBox]::Show(
       "Update failed: $($_.Exception.Message)`n`nYou can update manually from:`nhttps://github.com/$($script:githubRepo)/releases/latest",
       "Update Failed",
       [System.Windows.Forms.MessageBoxButtons]::OK,
       [System.Windows.Forms.MessageBoxIcon]::Error
     )
+
     return $false
   }
 }
