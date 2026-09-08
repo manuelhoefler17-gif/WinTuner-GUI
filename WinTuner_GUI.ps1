@@ -1855,6 +1855,11 @@ $uploadButton.Visible = $true
 $uploadButton.Enabled = $false
 $tabCreate.Controls.Add($uploadButton)
 
+# A package must be rebuilt whenever the selected app changes
+$dropdown.Add_SelectedIndexChanged({
+  $uploadButton.Enabled = $false
+})
+
 # Tab: Updates
 $tabUpdate = New-Object System.Windows.Forms.TabPage
 $tabUpdate.Text = "Updates"
@@ -2554,7 +2559,7 @@ $createButton.Add_Click({
       $effectiveVersion = $resPkg.EffectiveVersion
       if (-not $effectiveVersion) { $effectiveVersion = $package.Version }
       Update-Status ("Package created successfully (version {0})" -f $effectiveVersion)
-      $uploadButton.Enabled = $true
+      $uploadButton.Enabled = [bool]$script:isConnected
       if ($effectiveVersion) { $script:builtVersions[$packageID] = $effectiveVersion }
     } else {
       Update-Status "Package creation failed"
