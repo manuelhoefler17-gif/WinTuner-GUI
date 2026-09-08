@@ -1976,6 +1976,12 @@ $discoveredHeaderLabel.AutoSize = $true
 $discoveredHeaderLabel.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
 $tabDiscovered.Controls.Add($discoveredHeaderLabel)
 
+$lastDiscoveryLabel = New-Object System.Windows.Forms.Label
+$lastDiscoveryLabel.Text = "Last discovery: Never"
+$lastDiscoveryLabel.Location = New-Object System.Drawing.Point(250,24)
+$lastDiscoveryLabel.AutoSize = $true
+$tabDiscovered.Controls.Add($lastDiscoveryLabel)
+
 $scanDiscoveredButton = New-Object System.Windows.Forms.Button
 $scanDiscoveredButton.Text = "1. Scan Discovered Apps"
 $scanDiscoveredButton.Location = New-Object System.Drawing.Point(20,50)
@@ -3500,6 +3506,9 @@ $scanDiscoveredButton.Add_Click({
 
     # Befüllt die Liste initial mit Sortierung
     Update-DiscoveredListUI
+
+    $lastDiscoveryTime = Get-Date
+    $lastDiscoveryLabel.Text = "Last discovery: $($lastDiscoveryTime.ToString('HH:mm:ss'))"
 
     $graphSource = if ([bool]$detectedResult.FromCache) { "Cached" } else { "Fresh" }
     $wingetCacheSummary = "$($batchResult.CacheHits)/$($batchResult.TotalQueries) cached"
