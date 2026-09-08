@@ -4,7 +4,7 @@
 
 [![PowerShell Version](https://img.shields.io/badge/PowerShell-7.0%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.10.13-orange.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.14-orange.svg)](CHANGELOG.md)
 
 ## 🎯 Overview
 
@@ -157,7 +157,7 @@ Verify that automatic update checking is enabled in Settings and review `WinTune
 
 See [CHANGELOG.md](CHANGELOG.md) for the detailed version history.
 
-Current application version: **0.10.13**.
+Current application version: **0.10.14**.
 
 ## 🙏 Credits
 

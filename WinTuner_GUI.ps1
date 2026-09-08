@@ -55,7 +55,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.13"
+$script:appVersion  = "0.10.14"
 
 # Bootstrap release dependencies and keep them synchronized with the GUI release.
 $requiredReleaseFiles = @(
@@ -441,6 +441,8 @@ function Invoke-AppSelfUpdate {
   )
 
   $tempFile = $null
+  $backupPath = $null
+  $scriptReplaced = $false
 
   try {
     # Determine current script path
@@ -560,20 +562,16 @@ function Invoke-AppSelfUpdate {
 
     Write-Log "Download complete ($fileSize bytes). Replacing script..."
 
-    # Create backup.
+    # Create backup. A valid backup is required before replacing the script.
     $backupPath = "$currentPath.backup"
 
-    try {
-      Copy-Item `
-        -Path $currentPath `
-        -Destination $backupPath `
-        -Force `
-        -ErrorAction Stop
+    Copy-Item `
+      -Path $currentPath `
+      -Destination $backupPath `
+      -Force `
+      -ErrorAction Stop
 
-      Write-Log "Backup created: $backupPath"
-    } catch {
-      Write-Log "Warning: Could not create backup: $($_.Exception.Message)"
-    }
+    Write-Log "Backup created: $backupPath"
 
     # Replace current script.
     Move-Item `
@@ -583,6 +581,7 @@ function Invoke-AppSelfUpdate {
       -ErrorAction Stop
 
     $tempFile = $null
+    $scriptReplaced = $true
 
     Write-Log "Script replaced successfully. Starting updated version..."
     Update-Status "Update installed. Restarting..."
@@ -614,14 +613,49 @@ function Invoke-AppSelfUpdate {
     return $true
 
   } catch {
-    Write-Log "Self-update failed: $($_.Exception.Message)"
+    $updateError = $_.Exception.Message
+    $rollbackMessage = $null
+
+    Write-Log "Self-update failed: $updateError"
 
     if ($tempFile -and (Test-Path $tempFile)) {
       Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
     }
 
-    [System.Windows.Forms.MessageBox]::Show(
-      "Update failed: $($_.Exception.Message)`n`nYou can update manually from:`nhttps://github.com/$($script:githubRepo)/releases/latest",
+    if ($scriptReplaced) {
+      if ($backupPath -and (Test-Path $backupPath)) {
+        try {
+          Write-Log "Update failed after script replacement. Rolling back from backup..."
+
+          Copy-Item `
+            -Path $backupPath `
+            -Destination $currentPath `
+            -Force `
+            -ErrorAction Stop
+
+          $rollbackMessage = "The previous WinTuner version was restored automatically."
+          Write-Log "Rollback completed successfully: $currentPath"
+        } catch {
+          $rollbackError = $_.Exception.Message
+          $rollbackMessage = "Automatic rollback also failed: $rollbackError"
+          Write-Log "CRITICAL: Automatic rollback failed: $rollbackError"
+        }
+      } else {
+        $rollbackMessage = "The script was replaced, but no backup was available for rollback."
+        Write-Log "CRITICAL: Script was replaced but backup is unavailable."
+      }
+    }
+
+    $errorMessage = "Update failed: $updateError"
+
+    if ($rollbackMessage) {
+      $errorMessage += "`n`n$rollbackMessage"
+    }
+
+    $errorMessage += "`n`nYou can update manually from:`nhttps://github.com/$($script:githubRepo)/releases/latest"
+
+    [void][System.Windows.Forms.MessageBox]::Show(
+      $errorMessage,
       "Update Failed",
       [System.Windows.Forms.MessageBoxButtons]::OK,
       [System.Windows.Forms.MessageBoxIcon]::Error
@@ -704,18 +738,7 @@ function Invoke-UpdateCheckFeedback {
           $success = Invoke-AppSelfUpdate -DownloadUrl $UpdateResult.DownloadUrl -HashUrl $UpdateResult.HashUrl
 
           if ($success) {
-            & $setStatus "Update installed successfully. Please restart WinTuner GUI."
-            $restartMsg  = "Update installed successfully!`n`n"
-            $restartMsg += "WinTuner GUI needs to restart to apply the update.`n"
-            $restartMsg += "Click OK to close. Please start the script again manually."
-
-            [System.Windows.Forms.MessageBox]::Show(
-              $restartMsg,
-              "Update Complete",
-              [System.Windows.Forms.MessageBoxButtons]::OK,
-              [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-
+            & $setStatus "Update installed successfully. Restarting WinTuner..."
             $form.Close()
           } else {
             & $setStatus "Update download/install failed. See log for details."
