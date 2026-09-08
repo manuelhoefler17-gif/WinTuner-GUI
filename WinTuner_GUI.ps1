@@ -3477,15 +3477,19 @@ $scanDiscoveredButton.Add_Click({
     # Befüllt die Liste initial mit Sortierung
     Update-DiscoveredListUI
 
+    $graphSource = if ([bool]$detectedResult.FromCache) { "Cached" } else { "Fresh" }
+    $wingetCacheSummary = "$($batchResult.CacheHits)/$($batchResult.TotalQueries) cached"
+
     if ($matchCount -gt 0) {
-        Update-Status "Scanned: $($detectedApps.Count) | Filtered: $total | Matched apps: $matchedRawCount | Unique packages: $matchCount"
-        Write-Log "Discovery summary -> Scanned: $($detectedApps.Count), Filtered: $total, Matched apps: $matchedRawCount, Unique packages: $matchCount"
+        Update-Status "Scanned: $($detectedApps.Count) | Filtered: $total | Matched apps: $matchedRawCount | Unique packages: $matchCount | Graph: $graphSource | WinGet: $wingetCacheSummary"
+        Write-Log "Discovery summary -> Scanned: $($detectedApps.Count), Filtered: $total, Matched apps: $matchedRawCount, Unique packages: $matchCount, Graph: $graphSource, WinGet cache: $wingetCacheSummary"
         $deployDiscoveredButton.Enabled = $true
         $exportDiscoveredCsvButton.Enabled = $true
         $checkAllDiscoveredButton.Enabled = $true
         $uncheckAllDiscoveredButton.Enabled = $true
     } else {
-        Update-Status "No Winget matches found (or all are already managed)."
+        Update-Status "No Winget matches found (or all are already managed). | Graph: $graphSource | WinGet: $wingetCacheSummary"
+        Write-Log "Discovery summary -> No Winget matches, Graph: $graphSource, WinGet cache: $wingetCacheSummary"
         $exportDiscoveredCsvButton.Enabled = $false
     }
 
