@@ -57,6 +57,69 @@ $PSDefaultParameterValues = @{
 # --- Application metadata ---
 $script:appVersion  = "0.10.13"
 
+# Bootstrap release dependencies when upgrading from older single-file releases.
+$requiredReleaseFiles = @(
+  'Modules/WinTuner.Core.psm1',
+  'Modules/WinTuner.Winget.psm1',
+  'Modules/WinTuner.Settings.psm1',
+  'Modules/WinTuner.Logging.psm1',
+  'Modules/WinTuner.Intune.psm1',
+  'Workers/WinTuner.DiscoveryWorker.ps1'
+)
+
+$missingReleaseFiles = @(
+  $requiredReleaseFiles | Where-Object {
+    -not (Test-Path (Join-Path $PSScriptRoot $_))
+  }
+)
+
+if ($missingReleaseFiles.Count -gt 0) {
+  try {
+    $releaseTag = "v$($script:appVersion)"
+    $rawBaseUrl = "https://raw.githubusercontent.com/manuelhoefler17-gif/WinTuner-GUI/$releaseTag"
+
+    foreach ($relativePath in $missingReleaseFiles) {
+      $targetPath = Join-Path $PSScriptRoot $relativePath
+      $targetDirectory = Split-Path -Parent $targetPath
+
+      if (-not (Test-Path $targetDirectory)) {
+        New-Item -ItemType Directory -Path $targetDirectory -Force | Out-Null
+      }
+
+      $downloadUrl = "$rawBaseUrl/$($relativePath -replace '\\','/')"
+
+      $savedDefaults = $PSDefaultParameterValues.Clone()
+      try {
+        $PSDefaultParameterValues = @{}
+        Invoke-WebRequest `
+          -Uri $downloadUrl `
+          -OutFile $targetPath `
+          -Headers @{ 'User-Agent' = "WinTuner-GUI/$($script:appVersion)" } `
+          -TimeoutSec 30 `
+          -UseBasicParsing `
+          -ErrorAction Stop
+      } finally {
+        $PSDefaultParameterValues = $savedDefaults
+      }
+
+      if (-not (Test-Path $targetPath)) {
+        throw "Bootstrap download failed for $relativePath"
+      }
+    }
+  } catch {
+    try {
+      Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+      [void][System.Windows.Forms.MessageBox]::Show(
+        "WinTuner GUI could not download required release files.`n`n$($_.Exception.Message)",
+        "WinTuner Update Error",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+      )
+    } catch {}
+
+    return
+  }
+}
 # Load WinTuner core helpers
 $coreModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Core.psm1'
 Import-Module $coreModulePath -Force

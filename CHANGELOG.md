@@ -28,6 +28,7 @@ All notable changes to WinTuner GUI are documented here.
 - Fixed asynchronous startup update checks failing because BackgroundWorker threads had no PowerShell runspace.
 - Fixed manual update checks using the same broken asynchronous path.
 - Fixed false "Update available" prompts when the local and GitHub versions were identical.
+- Fixed upgrades from legacy single-file releases by automatically bootstrapping required modules and worker files.
 
 ## [0.10.12] – 2026-09-01
 
