@@ -2486,6 +2486,7 @@ $versionsButton.Add_Click({
   $chosen = Show-VersionPickerDialog -Title ("Select version for {0}" -f $packageID) -Versions $versions
   if ($chosen) {
     $script:selectedPackageVersions[$packageID] = $chosen
+    $uploadButton.Enabled = $false
     Update-Status ("Selected version for {0}: {1}" -f $packageID, $chosen)
   } else {
     Update-Status "Version selection canceled."
