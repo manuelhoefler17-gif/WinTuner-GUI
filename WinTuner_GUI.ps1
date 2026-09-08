@@ -57,7 +57,7 @@ $PSDefaultParameterValues = @{
 # --- Application metadata ---
 $script:appVersion  = "0.10.13"
 
-# Bootstrap release dependencies when upgrading from older single-file releases.
+# Bootstrap release dependencies and keep them synchronized with the GUI release.
 $requiredReleaseFiles = @(
   'Modules/WinTuner.Core.psm1',
   'Modules/WinTuner.Winget.psm1',
@@ -67,18 +67,35 @@ $requiredReleaseFiles = @(
   'Workers/WinTuner.DiscoveryWorker.ps1'
 )
 
-$missingReleaseFiles = @(
-  $requiredReleaseFiles | Where-Object {
-    -not (Test-Path (Join-Path $PSScriptRoot $_))
-  }
-)
+$releaseMarkerPath = Join-Path $PSScriptRoot '.wintuner-release-version'
+$installedReleaseVersion = $null
 
-if ($missingReleaseFiles.Count -gt 0) {
+if (Test-Path $releaseMarkerPath) {
+  try {
+    $installedReleaseVersion = (Get-Content $releaseMarkerPath -Raw -ErrorAction Stop).Trim()
+  } catch {
+    $installedReleaseVersion = $null
+  }
+}
+
+$refreshAllReleaseFiles = ($installedReleaseVersion -ne $script:appVersion)
+
+$releaseFilesToDownload = if ($refreshAllReleaseFiles) {
+  @($requiredReleaseFiles)
+} else {
+  @(
+    $requiredReleaseFiles | Where-Object {
+      -not (Test-Path (Join-Path $PSScriptRoot $_))
+    }
+  )
+}
+
+if ($releaseFilesToDownload.Count -gt 0) {
   try {
     $releaseTag = "v$($script:appVersion)"
     $rawBaseUrl = "https://raw.githubusercontent.com/manuelhoefler17-gif/WinTuner-GUI/$releaseTag"
 
-    foreach ($relativePath in $missingReleaseFiles) {
+    foreach ($relativePath in $releaseFilesToDownload) {
       $targetPath = Join-Path $PSScriptRoot $relativePath
       $targetDirectory = Split-Path -Parent $targetPath
 
@@ -87,28 +104,75 @@ if ($missingReleaseFiles.Count -gt 0) {
       }
 
       $downloadUrl = "$rawBaseUrl/$($relativePath -replace '\\','/')"
+      $tempPath = "$targetPath.download-$PID-$([guid]::NewGuid().ToString('N'))"
 
-      $savedDefaults = $PSDefaultParameterValues.Clone()
       try {
-        $PSDefaultParameterValues = @{}
-        Invoke-WebRequest `
-          -Uri $downloadUrl `
-          -OutFile $targetPath `
-          -Headers @{ 'User-Agent' = "WinTuner-GUI/$($script:appVersion)" } `
-          -TimeoutSec 30 `
-          -UseBasicParsing `
-          -ErrorAction Stop
-      } finally {
-        $PSDefaultParameterValues = $savedDefaults
-      }
+        $savedDefaults = $PSDefaultParameterValues.Clone()
 
-      if (-not (Test-Path $targetPath)) {
-        throw "Bootstrap download failed for $relativePath"
+        try {
+          $PSDefaultParameterValues = @{}
+
+          Invoke-WebRequest `
+            -Uri $downloadUrl `
+            -OutFile $tempPath `
+            -Headers @{ 'User-Agent' = "WinTuner-GUI/$($script:appVersion)" } `
+            -TimeoutSec 30 `
+            -UseBasicParsing `
+            -ErrorAction Stop
+        } finally {
+          $PSDefaultParameterValues = $savedDefaults
+        }
+
+        if (-not (Test-Path $tempPath)) {
+          throw "Bootstrap download did not create a file for $relativePath"
+        }
+
+        $downloadedFile = Get-Item $tempPath -ErrorAction Stop
+
+        if ($downloadedFile.Length -lt 100) {
+          throw "Bootstrap download for $relativePath is unexpectedly small ($($downloadedFile.Length) bytes)"
+        }
+
+        $downloadedContent = Get-Content $tempPath -Raw -ErrorAction Stop
+        $parseTokens = $null
+        $parseErrors = $null
+
+        [void][System.Management.Automation.Language.Parser]::ParseInput(
+          $downloadedContent,
+          [ref]$parseTokens,
+          [ref]$parseErrors
+        )
+
+        if ($parseErrors.Count -gt 0) {
+          throw "Bootstrap download for $relativePath contains invalid PowerShell syntax: $($parseErrors[0].Message)"
+        }
+
+        Move-Item -Path $tempPath -Destination $targetPath -Force
+      } catch {
+        Remove-Item $tempPath -Force -ErrorAction SilentlyContinue
+        throw
       }
+    }
+
+    # Only mark the release as installed after every dependency completed successfully.
+    $markerTempPath = "$releaseMarkerPath.download-$PID-$([guid]::NewGuid().ToString('N'))"
+
+    try {
+      [System.IO.File]::WriteAllText(
+        $markerTempPath,
+        $script:appVersion,
+        [System.Text.UTF8Encoding]::new($false)
+      )
+
+      Move-Item -Path $markerTempPath -Destination $releaseMarkerPath -Force
+    } catch {
+      Remove-Item $markerTempPath -Force -ErrorAction SilentlyContinue
+      throw
     }
   } catch {
     try {
       Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+
       [void][System.Windows.Forms.MessageBox]::Show(
         "WinTuner GUI could not download required release files.`n`n$($_.Exception.Message)",
         "WinTuner Update Error",
