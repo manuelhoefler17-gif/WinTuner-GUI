@@ -78,16 +78,40 @@ if (Test-Path $releaseMarkerPath) {
   }
 }
 
-$refreshAllReleaseFiles = ($installedReleaseVersion -ne $script:appVersion)
+$isDevelopmentCheckout = Test-Path (Join-Path $PSScriptRoot '.git')
 
-$releaseFilesToDownload = if ($refreshAllReleaseFiles) {
+$missingReleaseFiles = @(
+  $requiredReleaseFiles | Where-Object {
+    -not (Test-Path (Join-Path $PSScriptRoot $_))
+  }
+)
+
+if ($isDevelopmentCheckout -and $missingReleaseFiles.Count -gt 0) {
+  try {
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+
+    [void][System.Windows.Forms.MessageBox]::Show(
+      "WinTuner development checkout is missing required local files:`n`n$($missingReleaseFiles -join "`n")",
+      "WinTuner Development Error",
+      [System.Windows.Forms.MessageBoxButtons]::OK,
+      [System.Windows.Forms.MessageBoxIcon]::Error
+    )
+  } catch {}
+
+  return
+}
+
+$refreshAllReleaseFiles = (
+  -not $isDevelopmentCheckout -and
+  ($installedReleaseVersion -ne $script:appVersion)
+)
+
+$releaseFilesToDownload = if ($isDevelopmentCheckout) {
+  @()
+} elseif ($refreshAllReleaseFiles) {
   @($requiredReleaseFiles)
 } else {
-  @(
-    $requiredReleaseFiles | Where-Object {
-      -not (Test-Path (Join-Path $PSScriptRoot $_))
-    }
-  )
+  @($missingReleaseFiles)
 }
 
 if ($releaseFilesToDownload.Count -gt 0) {
