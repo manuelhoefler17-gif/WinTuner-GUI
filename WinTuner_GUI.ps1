@@ -153,6 +153,159 @@ function Test-AppUpdateAvailable {
   return $result
 }
 
+function Invoke-AsyncUpdateCheck {
+  param(
+    [Parameter(Mandatory=$true)]
+    [scriptblock]$OnComplete,
+
+    [string]$StatusText = "Checking for updates..."
+  )
+
+  Update-Status $StatusText
+  Write-Log "[Update] Prüfe asynchron auf neue Version..."
+
+  $progressControl = $null
+  if ($script:progressBar -is [System.Windows.Forms.ProgressBar] -and -not $script:progressBar.IsDisposed) {
+    $progressControl = $script:progressBar
+    try {
+      $progressControl.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+      $progressControl.MarqueeAnimationSpeed = 30
+      $progressControl.Visible = $true
+    } catch {
+      Write-LogSafe "Async update progress warning: $($_.Exception.Message)"
+    }
+  }
+
+  $httpClient = [System.Net.Http.HttpClient]::new()
+  $httpClient.Timeout = [TimeSpan]::FromSeconds(15)
+  $httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("WinTuner-GUI/$($script:appVersion)")
+
+  $requestTask = $httpClient.GetStringAsync($script:githubApiUrl)
+
+  # Capture primitive values before GetNewClosure creates its own script scope.
+  $currentAppVersion = [string]$script:appVersion
+
+  $timer = New-Object System.Windows.Forms.Timer
+  $timer.Interval = 100
+
+  $tickHandler = {
+    param($sender, $e)
+
+    if (-not $requestTask.IsCompleted) {
+      return
+    }
+
+    $sender.Stop()
+
+    $result = [pscustomobject]@{
+      UpdateAvailable = $false
+      LatestVersion   = $null
+      DownloadUrl     = $null
+      HashUrl         = $null
+      ReleaseUrl      = $null
+      ReleaseNotes    = $null
+      ErrorMessage    = $null
+    }
+
+    try {
+      if ($requestTask.IsCanceled) {
+        throw "GitHub update request was canceled."
+      }
+
+      if ($requestTask.IsFaulted) {
+        $exception = $requestTask.Exception
+
+        if ($exception.InnerException) {
+          throw $exception.InnerException
+        }
+
+        throw $exception
+      }
+
+      $json = $requestTask.GetAwaiter().GetResult()
+      $releaseInfo = $json | ConvertFrom-Json -ErrorAction Stop
+
+      $latestVersionTag = [string]$releaseInfo.tag_name
+      $latestVersionTag = $latestVersionTag -replace '[^0-9.]', ''
+
+      if ([string]::IsNullOrWhiteSpace($latestVersionTag)) {
+        throw "Release enthält keine gültige Versionsnummer (tag_name)."
+      }
+
+      $latestVersion = [version]$latestVersionTag
+      $currentVersion = [version]$currentAppVersion
+
+      $result.LatestVersion = $latestVersion.ToString()
+      $result.ReleaseUrl    = $releaseInfo.html_url
+      $result.ReleaseNotes  = $releaseInfo.body
+
+      $scriptFileName = if ($PSCommandPath) {
+        [System.IO.Path]::GetFileName($PSCommandPath)
+      } else {
+        'WinTuner_GUI.ps1'
+      }
+
+      $asset = $releaseInfo.assets |
+        Where-Object { $_.name -like "*$scriptFileName*" } |
+        Select-Object -First 1
+
+      if (-not $asset) {
+        $asset = $releaseInfo.assets |
+          Where-Object { $_.name -like '*.ps1' } |
+          Select-Object -First 1
+      }
+
+      if ($asset) {
+        $result.DownloadUrl = $asset.browser_download_url
+      }
+
+      $shaAsset = $releaseInfo.assets |
+        Where-Object { $_.name -like '*.sha256' } |
+        Select-Object -First 1
+
+      if ($shaAsset) {
+        $result.HashUrl = $shaAsset.browser_download_url
+      }
+
+      if ($latestVersion -gt $currentVersion) {
+        $result.UpdateAvailable = $true
+        Write-Log "[*] Neue Version verfügbar: $latestVersion"
+      } else {
+        Write-Log "[√] Skript ist aktuell."
+      }
+    } catch {
+      $result.ErrorMessage = $_.Exception.Message
+      Write-Log "Async update check failed: $($_.Exception.Message)"
+    } finally {
+      try {
+        $httpClient.Dispose()
+      } catch {}
+
+      try {
+        if ($progressControl -and -not $progressControl.IsDisposed) {
+          $progressControl.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+          $progressControl.Value = 0
+          $progressControl.Visible = $false
+        }
+      } catch {
+        Write-LogSafe "Async update progress cleanup warning: $($_.Exception.Message)"
+      }
+
+      try {
+        & $OnComplete $result
+      } catch {
+        Write-LogSafe "Async update completion callback error: $($_.Exception.Message)"
+      }
+
+      try {
+        $sender.Dispose()
+      } catch {}
+    }
+  }.GetNewClosure()
+
+  $timer.Add_Tick($tickHandler)
+  $timer.Start()
+}
 function Invoke-AppSelfUpdate {
   param(
     [Parameter(Mandatory=$true)]
@@ -316,7 +469,7 @@ function Invoke-UpdateCheckFeedback {
     return
   }
 
-  if ($UpdateResult -and $UpdateResult.UpdateAvailable) {
+  if ($UpdateResult -and $UpdateResult.LatestVersion -and (Test-IsNewerVersion -Latest $UpdateResult.LatestVersion -Current $script:appVersion)) {
     & $setStatus "Update available: v$($UpdateResult.LatestVersion)"
     try {
       $msg  = "A new version of WinTuner GUI is available!`n`n"
@@ -1122,14 +1275,34 @@ function Clear-RecentUsers {
 
 # Helper: check if WinTuner is connected (simple smoke test)
 function Test-WtConnected {
-  try {
-    # Avoid Select-Object -First 1 to prevent WinForms pipeline crash during login
-    $apps = Get-WtWin32Apps -Update:$false -Superseded:$false -ErrorAction Stop
-    foreach ($app in $apps) {
+  param(
+    [int]$MaxAttempts = 4,
+    [int]$RetryDelayMs = 500
+  )
+
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    try {
+      # Avoid Select-Object -First 1 to prevent WinForms pipeline crash during login
+      $apps = Get-WtWin32Apps -Update:$false -Superseded:$false -ErrorAction Stop
+
+      foreach ($app in $apps) {
         return $true # Exit safely on first found element
+      }
+
+      return $true # No apps found but no error either
+    } catch {
+      if ($attempt -ge $MaxAttempts) {
+        Write-Log "Connection verification failed after $MaxAttempts attempts: $($_.Exception.Message)"
+        return $false
+      }
+
+      Write-Log "Connection verification attempt $attempt failed; retrying in ${RetryDelayMs}ms..."
+      Start-Sleep -Milliseconds $RetryDelayMs
+      [System.Windows.Forms.Application]::DoEvents()
     }
-    return $true # No apps found but no error either
-  } catch { return $false }
+  }
+
+  return $false
 }
 
 # Heuristic filter to avoid very slow/low-value WinGet queries (mainly mobile/system artifacts)
@@ -1786,10 +1959,9 @@ $checkUpdateButton.Height = 35
 $tabSettings.Controls.Add($checkUpdateButton)
 
 $checkUpdateButton.Add_Click({
+
   $checkUpdateButton.Enabled = $false
-  Invoke-AsyncOperation -StatusText "Checking for updates..." -ScriptBlock {
-    Test-AppUpdateAvailable
-  } -OnComplete {
+  Invoke-AsyncUpdateCheck -StatusText "Checking for updates..." -OnComplete {
     param($updateResult)
     $checkUpdateButton.Enabled = $true
     Invoke-UpdateCheckFeedback -UpdateResult $updateResult -Context 'Manual'
@@ -3315,9 +3487,7 @@ try {
 
 # Async update check on startup so it doesn't block the UI
 $form.Add_Shown({
-  Invoke-AsyncOperation -StatusText "Checking for updates..." -ScriptBlock {
-    Test-AppUpdateAvailable
-  } -OnComplete {
+  Invoke-AsyncUpdateCheck -StatusText "Checking for updates..." -OnComplete {
     param($updateResult)
     Invoke-UpdateCheckFeedback -UpdateResult $updateResult -Context 'Startup'
   }
