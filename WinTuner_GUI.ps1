@@ -2519,7 +2519,6 @@ $createButton.Add_Click({
     return
   }
   if (-not (Test-Path $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
-  $filePath  = Join-Path $folder "$packageID.wtpackage"
 
   $desired = $null
   if ($script:selectedPackageVersions.ContainsKey($packageID)) {
@@ -2543,18 +2542,8 @@ $createButton.Add_Click({
     return
   }
   
-  if (Test-Path $filePath) {
-    $res = [System.Windows.Forms.MessageBox]::Show(("A package file already exists:\n{0}\nOverwrite it?" -f $filePath), "Confirm overwrite", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
-    if ($res -ne [System.Windows.Forms.DialogResult]::Yes) { Update-Status "Creation aborted by user (existing package)."; $uploadButton.Enabled = $true; return }
-    try { 
-      Remove-Item -Path $filePath -Force -ErrorAction Stop 
-    } catch {
-      Write-Log "Warning: Failed to delete existing package file ${filePath}: $($_.Exception.Message)"
-      Update-Status "Warning: Could not delete existing package, continuing anyway..."
-    }
-  }
-
   try {
+
     $createButton.Enabled = $false
     $searchButton.Enabled = $false
     $versionsButton.Enabled = $false
