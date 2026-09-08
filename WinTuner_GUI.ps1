@@ -704,18 +704,7 @@ function Invoke-UpdateCheckFeedback {
           $success = Invoke-AppSelfUpdate -DownloadUrl $UpdateResult.DownloadUrl -HashUrl $UpdateResult.HashUrl
 
           if ($success) {
-            & $setStatus "Update installed successfully. Please restart WinTuner GUI."
-            $restartMsg  = "Update installed successfully!`n`n"
-            $restartMsg += "WinTuner GUI needs to restart to apply the update.`n"
-            $restartMsg += "Click OK to close. Please start the script again manually."
-
-            [System.Windows.Forms.MessageBox]::Show(
-              $restartMsg,
-              "Update Complete",
-              [System.Windows.Forms.MessageBoxButtons]::OK,
-              [System.Windows.Forms.MessageBoxIcon]::Information
-            )
-
+            & $setStatus "Update installed successfully. Restarting WinTuner..."
             $form.Close()
           } else {
             & $setStatus "Update download/install failed. See log for details."
