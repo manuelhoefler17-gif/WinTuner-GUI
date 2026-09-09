@@ -295,4 +295,40 @@ function Get-WinTunerUpdateActionState {
     }
 }
 
-Export-ModuleMember -Function Test-IsNewerVersion, Test-WinTunerPackageArtifact, Get-WinTunerUpdateActionState
+function Get-WinTunerDiscoveryActionState {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [bool]$Connected,
+
+        [Parameter(Mandatory)]
+        [bool]$IsScanning,
+
+        [Parameter(Mandatory)]
+        [bool]$CancelRequested,
+
+        [Parameter(Mandatory)]
+        [bool]$IsDeploying,
+
+        [Parameter(Mandatory)]
+        [ValidateRange(0, [int]::MaxValue)]
+        [int]$ResultCount,
+
+        [Parameter(Mandatory)]
+        [ValidateRange(0, [int]::MaxValue)]
+        [int]$CheckedCount
+    )
+
+    $effectiveCheckedCount = [Math]::Min($CheckedCount, $ResultCount)
+    $isIdle = $Connected -and -not $IsScanning -and -not $IsDeploying
+
+    return [pscustomobject]@{
+        CanScan       = $Connected -and -not $IsDeploying -and -not $CancelRequested
+        CanDeploy     = $isIdle -and $effectiveCheckedCount -gt 0
+        CanExport     = $isIdle -and $ResultCount -gt 0
+        CanCheckAll   = $isIdle -and $ResultCount -gt 0 -and $effectiveCheckedCount -lt $ResultCount
+        CanUncheckAll = $isIdle -and $effectiveCheckedCount -gt 0
+    }
+}
+
+Export-ModuleMember -Function Test-IsNewerVersion, Test-WinTunerPackageArtifact, Get-WinTunerUpdateActionState, Get-WinTunerDiscoveryActionState

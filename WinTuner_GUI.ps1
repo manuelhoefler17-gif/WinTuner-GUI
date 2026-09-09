@@ -1607,10 +1607,10 @@ function Set-ConnectedUIState {
     $script:updateVisibleApps = [System.Collections.Generic.List[object]]::new()
     if ($updateListBox) { $updateListBox.Items.Clear() }
     if ($updateFilterBox) { $updateFilterBox.Text = '' }
+    Clear-DiscoveryCandidateState
   }
   Update-UpdateActionState
-  if ($scanDiscoveredButton) { $scanDiscoveredButton.Enabled = $Connected }
-  if ($exportDiscoveredCsvButton) { $exportDiscoveredCsvButton.Enabled = ($Connected -and $script:discoveredRaw -and $script:discoveredRaw.Count -gt 0) }
+  Update-DiscoveryActionState
   if ($supersededSearchButton) { $supersededSearchButton.Enabled = $Connected }
   if ($deleteSelectedAppButton) { $deleteSelectedAppButton.Enabled = $Connected }
   if ($removeOldAppsButton) { $removeOldAppsButton.Enabled = $Connected }
@@ -2080,7 +2080,9 @@ $discoveredListBox.CheckOnClick = $true
 $discoveredListBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right -bor [System.Windows.Forms.AnchorStyles]::Bottom
 $tabDiscovered.Controls.Add($discoveredListBox)
 
-$script:discoveredRaw = @()
+$script:discoveredRaw = [System.Collections.Generic.List[object]]::new()
+$script:discoveredVisible = [System.Collections.Generic.List[object]]::new()
+$script:isDiscoveryDeploymentActive = $false
 
 # ==================================================
 # Tab: Settings
@@ -2315,6 +2317,20 @@ function Update-PackageActionState {
     }
 }
 
+function Update-LogoutActionState {
+    try {
+        $logoutButton.Enabled = (
+            [bool]$script:isConnected -and
+            -not [bool]$script:isUpdateOperationActive -and
+            -not [bool]$script:discoveryScanRunning -and
+            -not [bool]$script:isDiscoveryDeploymentActive
+        )
+    } catch {
+        $logoutButton.Enabled = $false
+        Write-LogSafe "Logout action state warning: $($_.Exception.Message)"
+    }
+}
+
 function Update-UpdateActionState {
     try {
         $candidates = @($script:updateApps)
@@ -2330,16 +2346,63 @@ function Update-UpdateActionState {
         $uncheckAllButton.Enabled = $state.CanUncheckAll
         $updateSelectedButton.Enabled = $state.CanUpdateSelected
         $updateAllButton.Enabled = $state.CanUpdateAll
-        $logoutButton.Enabled = $state.CanLogout
     } catch {
         $updateSearchButton.Enabled = $false
         $checkAllButton.Enabled = $false
         $uncheckAllButton.Enabled = $false
         $updateSelectedButton.Enabled = $false
         $updateAllButton.Enabled = $false
-        $logoutButton.Enabled = $false
         Write-LogSafe "Update action state warning: $($_.Exception.Message)"
     }
+
+    Update-LogoutActionState
+}
+
+function Clear-DiscoveryCandidateState {
+    $script:discoveredRaw = [System.Collections.Generic.List[object]]::new()
+    $script:discoveredVisible = [System.Collections.Generic.List[object]]::new()
+    $discoveredListBox.Items.Clear()
+    $discoveredAppSearchBox.Text = ''
+    $discoveredPublisherBox.BeginUpdate()
+    $discoveredPublisherBox.Items.Clear()
+    [void]$discoveredPublisherBox.Items.Add('<All Publishers>')
+    $discoveredPublisherBox.SelectedIndex = 0
+    $discoveredPublisherBox.EndUpdate()
+    $lastDiscoveryLabel.Text = 'Last discovery: Never'
+}
+
+function Update-DiscoveryActionState {
+    try {
+        $results = @($script:discoveredRaw)
+        $checkedCount = @($results | Where-Object { $_ -and $_.Checked }).Count
+        $state = Get-WinTunerDiscoveryActionState `
+            -Connected ([bool]$script:isConnected) `
+            -IsScanning ([bool]$script:discoveryScanRunning) `
+            -CancelRequested ([bool]$script:cancelDiscoveryScan) `
+            -IsDeploying ([bool]$script:isDiscoveryDeploymentActive) `
+            -ResultCount $results.Count `
+            -CheckedCount $checkedCount
+
+        $scanDiscoveredButton.Text = if ($script:discoveryScanRunning) {
+            if ($script:cancelDiscoveryScan) { 'Cancelling...' } else { 'Cancel Scan' }
+        } else {
+            '1. Scan Discovered Apps'
+        }
+        $scanDiscoveredButton.Enabled = $state.CanScan
+        $deployDiscoveredButton.Enabled = $state.CanDeploy
+        $exportDiscoveredCsvButton.Enabled = $state.CanExport
+        $checkAllDiscoveredButton.Enabled = $state.CanCheckAll
+        $uncheckAllDiscoveredButton.Enabled = $state.CanUncheckAll
+    } catch {
+        $scanDiscoveredButton.Enabled = $false
+        $deployDiscoveredButton.Enabled = $false
+        $exportDiscoveredCsvButton.Enabled = $false
+        $checkAllDiscoveredButton.Enabled = $false
+        $uncheckAllDiscoveredButton.Enabled = $false
+        Write-LogSafe "Discovery action state warning: $($_.Exception.Message)"
+    }
+
+    Update-LogoutActionState
 }
 
 # Cache for winget searches to speed up repeated searches
@@ -3270,6 +3333,7 @@ $logoutButton.Add_Click({
 function Update-DiscoveredListUI {
     $discoveredListBox.BeginUpdate()
     $discoveredListBox.Items.Clear()
+    $script:discoveredVisible = [System.Collections.Generic.List[object]]::new()
     
     $searchText = $discoveredAppSearchBox.Text
     $pubText = $discoveredPublisherBox.Text
@@ -3315,11 +3379,13 @@ function Update-DiscoveredListUI {
     if ($newFiltered) {
         foreach ($obj in $newFiltered) {
             $idx = $discoveredListBox.Items.Add($obj.DisplayText)
+            [void]$script:discoveredVisible.Add($obj)
             # Stellt den Haken (Checked-Status) wieder her, falls er vorher gesetzt war
             $discoveredListBox.SetItemChecked($idx, $obj.Checked)
         }
     }
     $discoveredListBox.EndUpdate()
+    Update-DiscoveryActionState
 }
 
 # Listener für das Suchfeld (Text-Eingabe) – debounced 200ms
@@ -3344,10 +3410,10 @@ $discoveredSortBox.Add_SelectedIndexChanged({ Update-DiscoveredListUI })
 # Wenn ein Haken gesetzt/entfernt wird, Zustand im Array speichern (überlebt Filterung!)
 $discoveredListBox.Add_ItemCheck({
     param($sender, $e)
-    $itemText = $discoveredListBox.Items[$e.Index]
-    $obj = $script:discoveredRaw | Where-Object { $_.DisplayText -eq $itemText } | Select-Object -First 1
-    if ($obj) {
+    if ($e.Index -ge 0 -and $e.Index -lt $script:discoveredVisible.Count) {
+        $obj = $script:discoveredVisible[$e.Index]
         $obj.Checked = ($e.NewValue -eq [System.Windows.Forms.CheckState]::Checked)
+        Update-DiscoveryActionState
     }
 })
 
@@ -3369,17 +3435,21 @@ $script:cancelDiscoveryScan = $false
 $scanDiscoveredButton.Add_Click({
   if ($script:discoveryScanRunning) {
     $script:cancelDiscoveryScan = $true
-    $scanDiscoveredButton.Text = "Cancelling..."
-    $scanDiscoveredButton.Enabled = $false
+    Update-DiscoveryActionState
     Update-Status "Cancel requested - finishing current WinGet query..."
     Write-Log "Discovery scan cancellation requested by user."
     return
   }
 
+  if (-not $script:isConnected) {
+    Update-Status "Please login first."
+    Update-DiscoveryActionState
+    return
+  }
+
   $script:discoveryScanRunning = $true
   $script:cancelDiscoveryScan = $false
-  $scanDiscoveredButton.Text = "Cancel Scan"
-  if (-not $script:isConnected) { Update-Status "Please login first."; return }
+  Update-DiscoveryActionState
 
   # Speichere die originalen Streams und schalte sie stumm, um Threading-Crashes zu vermeiden
   $oldProgress = $ProgressPreference
@@ -3388,11 +3458,8 @@ $scanDiscoveredButton.Add_Click({
   $InformationPreference = 'SilentlyContinue'
 
   try {
-    $scanDiscoveredButton.Enabled = $true
-    $deployDiscoveredButton.Enabled = $false
-    $exportDiscoveredCsvButton.Enabled = $false
-    $discoveredListBox.Items.Clear()
-    $script:discoveredRaw = [System.Collections.Generic.List[object]]::new()
+    Clear-DiscoveryCandidateState
+    Update-DiscoveryActionState
     
     $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
     $script:progressBar.Visible = $true
@@ -3516,8 +3583,9 @@ $scanDiscoveredButton.Add_Click({
             }
 
         if ($batchResult.Canceled -or $script:cancelDiscoveryScan) {
+            Clear-DiscoveryCandidateState
             Update-Status "Discovery scan canceled during WinGet search phase."
-            Write-Log "Discovery scan canceled during isolated WinGet worker phase."
+            Write-Log "Discovery scan canceled during isolated WinGet worker phase; partial results discarded."
             return
         }
 
@@ -3562,8 +3630,9 @@ $scanDiscoveredButton.Add_Click({
         [System.Windows.Forms.Application]::DoEvents()
 
         if ($script:cancelDiscoveryScan) {
+            Clear-DiscoveryCandidateState
             Update-Status "Discovery scan canceled during matching."
-            Write-Log "Discovery scan canceled during matching phase."
+            Write-Log "Discovery scan canceled during matching phase; partial results discarded."
             return
         }
 
@@ -3615,7 +3684,7 @@ $scanDiscoveredButton.Add_Click({
                         Checked     = $false
                         DisplayText = "[$($app.deviceCount) PCs] $cleanName ($($app.publisher))  -->  Winget: $($bestMatch.Name) [$($bestMatch.PackageID)]"
                     }
-                    $script:discoveredRaw.Add($itemObj)
+                    [void]$script:discoveredRaw.Add($itemObj)
                     $discoveredByPackageId[$bestMatch.PackageID] = $itemObj
                     $matchCount++
                 }
@@ -3651,19 +3720,15 @@ $scanDiscoveredButton.Add_Click({
     if ($matchCount -gt 0) {
         Update-Status "Scanned: $($detectedApps.Count) | Filtered: $total | Matched apps: $matchedRawCount | Unique packages: $matchCount | Graph: $graphSource | WinGet: $wingetCacheSummary"
         Write-Log "Discovery summary -> Scanned: $($detectedApps.Count), Filtered: $total, Matched apps: $matchedRawCount, Unique packages: $matchCount, Graph: $graphSource, WinGet cache: $wingetCacheSummary"
-        $deployDiscoveredButton.Enabled = $true
-        $exportDiscoveredCsvButton.Enabled = $true
-        $checkAllDiscoveredButton.Enabled = $true
-        $uncheckAllDiscoveredButton.Enabled = $true
     } else {
         Update-Status "No Winget matches found (or all are already managed). | Graph: $graphSource | WinGet: $wingetCacheSummary"
         Write-Log "Discovery summary -> No Winget matches, Graph: $graphSource, WinGet cache: $wingetCacheSummary"
-        $exportDiscoveredCsvButton.Enabled = $false
     }
 
   } catch {
+    Clear-DiscoveryCandidateState
     Update-Status "Error fetching discovered apps: $($_.Exception.Message)"
-    Write-Log "Scan Discovered Error: $($_.Exception.Message)"
+    Write-Log "Scan Discovered Error: $($_.Exception.Message); partial results discarded."
   } finally {
     try {
         Save-WinTunerDiscoveryCache
@@ -3675,8 +3740,7 @@ $scanDiscoveredButton.Add_Click({
     $InformationPreference = $oldInfo
     $script:discoveryScanRunning = $false
     $script:cancelDiscoveryScan = $false
-    $scanDiscoveredButton.Text = "1. Scan Discovered Apps"
-    $scanDiscoveredButton.Enabled = $true
+    Update-DiscoveryActionState
     $script:progressBar.Maximum = 100
     $script:progressBar.Value = 0
     $script:progressBar.Visible = $false
@@ -3699,12 +3763,10 @@ $deployDiscoveredButton.Add_Click({
     $ProgressPreference = 'SilentlyContinue'
     $InformationPreference = 'SilentlyContinue'
 
+    $script:isDiscoveryDeploymentActive = $true
+    Update-DiscoveryActionState
+
     try {
-        $deployDiscoveredButton.Enabled = $false
-        $scanDiscoveredButton.Enabled = $false
-        $checkAllDiscoveredButton.Enabled = $false
-        $uncheckAllDiscoveredButton.Enabled = $false
-        
         $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
         $script:progressBar.Maximum = $checkedItems.Count
         $script:progressBar.Value = 0
@@ -3713,6 +3775,7 @@ $deployDiscoveredButton.Add_Click({
         $successCount = 0
         $failedCount = 0
         $i = 0
+        $successfulItems = [System.Collections.Generic.List[object]]::new()
 
         foreach ($item in $checkedItems) {
             $i++
@@ -3743,12 +3806,18 @@ $deployDiscoveredButton.Add_Click({
                     -ErrorAction Stop
                 
                 $successCount++
+                [void]$successfulItems.Add($item)
                 Write-Log "Successfully deployed new app: $packageId"
             } catch {
                 $failedCount++
                 Write-Log "Failed to deploy $($wingetApp.Name): $($_.Exception.Message)"
             }
         }
+
+        foreach ($successfulItem in $successfulItems) {
+            [void]$script:discoveredRaw.Remove($successfulItem)
+        }
+        Update-DiscoveredListUI
 
         Update-Status "Deployment complete: $successCount successful, $failedCount failed."
         [System.Windows.Forms.MessageBox]::Show(
@@ -3764,10 +3833,8 @@ $deployDiscoveredButton.Add_Click({
     } finally {
         $ProgressPreference = $oldProgress
         $InformationPreference = $oldInfo
-        $deployDiscoveredButton.Enabled = $true
-        $scanDiscoveredButton.Enabled = $true
-        $checkAllDiscoveredButton.Enabled = $true
-        $uncheckAllDiscoveredButton.Enabled = $true
+        $script:isDiscoveryDeploymentActive = $false
+        Update-DiscoveryActionState
         $script:progressBar.Maximum = 100
         $script:progressBar.Value = 0
         $script:progressBar.Visible = $false
