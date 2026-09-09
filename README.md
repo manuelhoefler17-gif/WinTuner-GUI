@@ -47,6 +47,9 @@ Existing package folders from earlier GUI sessions are reused only when the sele
 - Compare deployed versions with available WinGet versions
 - Display the number of checked applications and update candidates
 - Select individual or multiple applications
+- Keep checked candidates selected while filtering the list
+- Enable update actions only when their required scan results and selections exist
+- Clear tenant-specific candidates on logout
 - Package and deploy updates in bulk
 
 ### 🔍 Discovered Apps
@@ -252,10 +255,12 @@ Changing the selected version invalidates the previous Upload state. The new ver
 
 1. Open **Updates**.
 2. Click **Search Updates**.
-3. Review checked applications and update candidates.
-4. Filter or sort the results if required.
+3. Review the update candidates.
+4. Filter the results if required; checked candidates remain selected when hidden by the filter.
 5. Select the applications to update.
-6. Start the update operation.
+6. Start the checked or all-candidates update operation.
+
+Update actions remain disabled until their required candidates or checked selections exist. Logging out clears the current tenant's candidate list.
 
 ### 4. Discover Intune applications
 

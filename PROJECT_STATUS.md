@@ -286,6 +286,10 @@ Completed:
 - centralized persistent artifact validation
 - package-root state recalculation
 - automated positive and negative package-artifact tests
+- centralized Updates action state based on connection, scan results, selection, and active operations
+- filter-stable checked update candidates
+- tenant-specific update candidate cleanup on logout
+- automated update-action-state tests
 
 Next candidates:
 

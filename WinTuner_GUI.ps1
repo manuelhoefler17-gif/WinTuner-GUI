@@ -1109,11 +1109,8 @@ function Invoke-AppUpdateBatch {
     [string]$RootPackageFolder
   )
 
-  $updateSelectedButton.Enabled = $false
-  $updateAllButton.Enabled = $false
-  $updateSearchButton.Enabled = $false
-  $checkAllButton.Enabled = $false
-  $uncheckAllButton.Enabled = $false
+  $script:isUpdateOperationActive = $true
+  Update-UpdateActionState
 
   $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
   $script:progressBar.MarqueeAnimationSpeed = 30
@@ -1154,11 +1151,19 @@ function Invoke-AppUpdateBatch {
         $successCount++
         Write-Log "Successfully updated: $appName"
 
-        # Immediately remove the updated app from the UI list
-        $idxToRemove = $updateListBox.Items.IndexOf($appName)
-        if ($idxToRemove -ge 0) { $updateListBox.Items.RemoveAt($idxToRemove) }
-        $toRemove = $script:updateApps | Where-Object { $_.Name -eq $appName }
-        foreach ($item in @($toRemove)) { [void]$script:updateApps.Remove($item) }
+        # Immediately remove the updated app from the cached and visible lists.
+        $cachedApp = $script:updateApps | Where-Object {
+          ($appGraphId -and $_.GraphId -eq $appGraphId) -or
+          (-not $appGraphId -and $_.Name -eq $appName)
+        } | Select-Object -First 1
+        if ($cachedApp) {
+          $visibleIndex = $script:updateVisibleApps.IndexOf($cachedApp)
+          if ($visibleIndex -ge 0) {
+            $script:updateVisibleApps.RemoveAt($visibleIndex)
+            $updateListBox.Items.RemoveAt($visibleIndex)
+          }
+          [void]$script:updateApps.Remove($cachedApp)
+        }
         [System.Windows.Forms.Application]::DoEvents()
       } else {
         $failedCount++
@@ -1178,19 +1183,13 @@ function Invoke-AppUpdateBatch {
       )
     }
 
-    # Refresh update list
-    try { $updateSearchButton.PerformClick() } catch {}
-
     return @{ SuccessCount = $successCount; FailedList = $failedList }
   } finally {
     $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
     $script:progressBar.Visible = $false
     $script:progressBar.Value = 0
-    $updateSelectedButton.Enabled = $true
-    $updateAllButton.Enabled = $true
-    $updateSearchButton.Enabled = $true
-    $checkAllButton.Enabled = $true
-    $uncheckAllButton.Enabled = $true
+    $script:isUpdateOperationActive = $false
+    Update-UpdateActionState
   }
 }
 
@@ -1603,11 +1602,15 @@ function Set-ConnectedUIState {
     if ($clearHistoryButton) { $clearHistoryButton.Visible = $true }
   }
   if ($rememberCheckBox) { $rememberCheckBox.Visible = -not $Connected }
-  if ($updateSearchButton) { $updateSearchButton.Enabled = $Connected }
+  if (-not $Connected) {
+    $script:updateApps = [System.Collections.Generic.List[object]]::new()
+    $script:updateVisibleApps = [System.Collections.Generic.List[object]]::new()
+    if ($updateListBox) { $updateListBox.Items.Clear() }
+    if ($updateFilterBox) { $updateFilterBox.Text = '' }
+  }
+  Update-UpdateActionState
   if ($scanDiscoveredButton) { $scanDiscoveredButton.Enabled = $Connected }
   if ($exportDiscoveredCsvButton) { $exportDiscoveredCsvButton.Enabled = ($Connected -and $script:discoveredRaw -and $script:discoveredRaw.Count -gt 0) }
-  if ($updateSelectedButton) { $updateSelectedButton.Enabled = $Connected }
-  if ($updateAllButton) { $updateAllButton.Enabled = $Connected }
   if ($supersededSearchButton) { $supersededSearchButton.Enabled = $Connected }
   if ($deleteSelectedAppButton) { $deleteSelectedAppButton.Enabled = $Connected }
   if ($removeOldAppsButton) { $removeOldAppsButton.Enabled = $Connected }
@@ -1623,6 +1626,9 @@ $script:currentUserUpn = ""
 
 # Cache effective builds and package versions validated from disk
 $script:builtVersions = @{}
+$script:updateApps = [System.Collections.Generic.List[object]]::new()
+$script:updateVisibleApps = [System.Collections.Generic.List[object]]::new()
+$script:isUpdateOperationActive = $false
 # Cache for winget version lookups (speeds up repeated searches)
 # Disk cache loaded once at first use (Fix 1)
 # Create form
@@ -2308,6 +2314,34 @@ function Update-PackageActionState {
         Write-LogSafe "Package action state validation warning: $($_.Exception.Message)"
     }
 }
+
+function Update-UpdateActionState {
+    try {
+        $candidates = @($script:updateApps)
+        $checkedCount = @($candidates | Where-Object { $_ -and $_.Checked }).Count
+        $state = Get-WinTunerUpdateActionState `
+            -Connected ([bool]$script:isConnected) `
+            -IsBusy ([bool]$script:isUpdateOperationActive) `
+            -CandidateCount $candidates.Count `
+            -CheckedCount $checkedCount
+
+        $updateSearchButton.Enabled = $state.CanSearch
+        $checkAllButton.Enabled = $state.CanCheckAll
+        $uncheckAllButton.Enabled = $state.CanUncheckAll
+        $updateSelectedButton.Enabled = $state.CanUpdateSelected
+        $updateAllButton.Enabled = $state.CanUpdateAll
+        $logoutButton.Enabled = $state.CanLogout
+    } catch {
+        $updateSearchButton.Enabled = $false
+        $checkAllButton.Enabled = $false
+        $uncheckAllButton.Enabled = $false
+        $updateSelectedButton.Enabled = $false
+        $updateAllButton.Enabled = $false
+        $logoutButton.Enabled = $false
+        Write-LogSafe "Update action state warning: $($_.Exception.Message)"
+    }
+}
+
 # Cache for winget searches to speed up repeated searches
 # (initialized at script scope; see earlier declaration)
 
@@ -2784,28 +2818,30 @@ $uploadButton.Add_Click({
 # Check All / Uncheck All Buttons
 # ----------------------------------------------
 $checkAllButton.Add_Click({
+  foreach ($app in $script:updateApps) { $app.Checked = $true }
   for ($i = 0; $i -lt $updateListBox.Items.Count; $i++) {
     $updateListBox.SetItemChecked($i, $true)
   }
-  foreach ($app in $script:updateApps) { $app.Checked = $true }
-  Update-Status "All apps checked ($($updateListBox.Items.Count) items)"
+  Update-UpdateActionState
+  Update-Status "All update candidates checked ($($script:updateApps.Count) items)"
 })
 
 $uncheckAllButton.Add_Click({
+  foreach ($app in $script:updateApps) { $app.Checked = $false }
   for ($i = 0; $i -lt $updateListBox.Items.Count; $i++) {
     $updateListBox.SetItemChecked($i, $false)
   }
-  foreach ($app in $script:updateApps) { $app.Checked = $false }
-  Update-Status "All apps unchecked"
+  Update-UpdateActionState
+  Update-Status "All update candidates unchecked"
 })
 
 # Save checked state when user checks/unchecks an item in the update list
 $updateListBox.Add_ItemCheck({
   param($sender, $e)
-  $itemName = $updateListBox.Items[$e.Index]
-  $appObj = $script:updateApps | Where-Object { $_.Name -eq $itemName } | Select-Object -First 1
-  if ($appObj) {
+  if ($e.Index -ge 0 -and $e.Index -lt $script:updateVisibleApps.Count) {
+    $appObj = $script:updateVisibleApps[$e.Index]
     $appObj.Checked = ($e.NewValue -eq [System.Windows.Forms.CheckState]::Checked)
+    Update-UpdateActionState
   }
 })
 
@@ -2821,12 +2857,14 @@ $updateFilterDebounceTimer.Add_Tick({
   # Clear and repopulate list with filtered items
   $updateListBox.BeginUpdate()
   $updateListBox.Items.Clear()
+  $script:updateVisibleApps = [System.Collections.Generic.List[object]]::new()
 
   if ([string]::IsNullOrWhiteSpace($filterText)) {
     # No filter - show all apps
     foreach ($app in @($script:updateApps)) {
       if ($app -and $app.Name) {
         $idx = $updateListBox.Items.Add($app.Name)
+        [void]$script:updateVisibleApps.Add($app)
         if ($app.Checked) { $updateListBox.SetItemChecked($idx, $true) }
       }
     }
@@ -2838,11 +2876,13 @@ $updateFilterDebounceTimer.Add_Tick({
     foreach ($app in @($filtered)) {
       if ($app -and $app.Name) {
         $idx = $updateListBox.Items.Add($app.Name)
+        [void]$script:updateVisibleApps.Add($app)
         if ($app.Checked) { $updateListBox.SetItemChecked($idx, $true) }
       }
     }
   }
   $updateListBox.EndUpdate()
+  Update-UpdateActionState
   # Update status with filter info
   if (-not [string]::IsNullOrWhiteSpace($filterText)) {
     Update-Status "Filter: $($updateListBox.Items.Count) apps match '$filterText'"
@@ -2865,13 +2905,15 @@ $updateSearchButton.Add_Click({
   }
 
   try {
-    $updateSearchButton.Enabled = $false
+    $script:isUpdateOperationActive = $true
+    Update-UpdateActionState
     Update-Status "Loading apps from Intune..."
     
     # Reset UI / cache
     $updateFilterBox.Text = ""  # Clear filter
     $updateListBox.Items.Clear()
-    $script:updateApps = @()
+    $script:updateApps = [System.Collections.Generic.List[object]]::new()
+    $script:updateVisibleApps = [System.Collections.Generic.List[object]]::new()
 
     # 1) Load all apps
     $all = @()
@@ -2896,7 +2938,7 @@ $updateSearchButton.Add_Click({
     # Show progress bar
     $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
     $script:progressBar.Value = 0
-    $script:progressBar.Maximum = $appsToCheck.Count
+    $script:progressBar.Maximum = [Math]::Max(1, $appsToCheck.Count)
     $script:progressBar.Visible = $true
 
     $candidates = [System.Collections.Generic.List[object]]::new()
@@ -2953,6 +2995,7 @@ $updateSearchButton.Add_Click({
     $updateListBox.BeginUpdate()
     
     $script:updateApps = [System.Collections.Generic.List[object]]::new()
+    $script:updateVisibleApps = [System.Collections.Generic.List[object]]::new()
     
     foreach ($app in ($candidates | Sort-Object Name)) {
       if (-not $app -or -not $app.Name) { continue }
@@ -2961,7 +3004,8 @@ $updateSearchButton.Add_Click({
         $app | Add-Member -NotePropertyName Checked -NotePropertyValue $false -Force
       }
       [void]$updateListBox.Items.Add($app.Name)
-      $script:updateApps.Add($app)
+      [void]$script:updateApps.Add($app)
+      [void]$script:updateVisibleApps.Add($app)
       $count++
     }
     $updateListBox.EndUpdate()
@@ -2969,17 +3013,13 @@ $updateSearchButton.Add_Click({
     if ($count -gt 0) {
       Update-Status "Update scan complete | Checked: $totalCount | Candidates: $count"
       Write-Log "Update scan summary -> Checked: $totalCount, Candidates: $count"
-      # Enable check/uncheck buttons
-      $checkAllButton.Enabled = $true
-      $uncheckAllButton.Enabled = $true
     } else {
       Update-Status "Update scan complete | Checked: $totalCount | Candidates: 0"
       Write-Log "Update scan summary -> Checked: $totalCount, Candidates: 0"
-      $checkAllButton.Enabled = $false
-      $uncheckAllButton.Enabled = $false
     }
   } finally {
-    $updateSearchButton.Enabled = $true
+    $script:isUpdateOperationActive = $false
+    Update-UpdateActionState
     $script:progressBar.Maximum = 100
     $script:progressBar.Value = 0
     $script:progressBar.Visible = $false
@@ -2990,40 +3030,21 @@ $updateSearchButton.Add_Click({
 # UPDATED: Update Checked Apps flow
 # -----------------------------
 $updateSelectedButton.Add_Click({
-    # Get checked items
     $checkedApps = [System.Collections.Generic.List[object]]::new()
-
-    Write-Log "Processing $($updateListBox.CheckedItems.Count) checked items from UI"
-    Write-Log "global:updateApps cache has $($script:updateApps.Count) apps"
-
-    foreach ($itemName in $updateListBox.CheckedItems) {
-        Write-Log "Looking for app: '$itemName'"
-
-        # Find matching app in cache
-        $foundApp = $null
-        foreach ($cachedApp in $script:updateApps) {
-            if ($cachedApp -and $cachedApp.Name -eq $itemName) {
-                $foundApp = $cachedApp
-                break
-            }
-        }
-
-        if ($foundApp) {
-            Write-Log "Found: $($foundApp.Name) (Current: $($foundApp.CurrentVersion), Latest: $($foundApp.LatestVersion), GraphId: $($foundApp.GraphId))"
-            $checkedApps.Add($foundApp)
-        } else {
-            Write-Log "WARNING: Could not find '$itemName' in cache!"
-            Write-Log "Available apps in cache: $($script:updateApps.Name -join ', ')"
+    foreach ($app in $script:updateApps) {
+        if ($app -and $app.Checked) {
+            [void]$checkedApps.Add($app)
         }
     }
 
     if ($checkedApps.Count -eq 0) {
-        Update-Status "No valid apps found. Try 'Search Updates' again."
-        Write-Log "ERROR: 0 apps matched from $($updateListBox.CheckedItems.Count) checked items"
+        Update-Status "No update candidates are checked."
+        Write-Log "Update checked apps blocked: no candidates are checked."
+        Update-UpdateActionState
         return
     }
 
-    Write-Log "Successfully matched $($checkedApps.Count) apps for update"
+    Write-Log "Starting update for $($checkedApps.Count) checked candidate(s), including filtered items."
 
     $rootPackageFolder = [System.IO.Path]::GetFullPath($pathBox.Text.Trim())
     $forbiddenPaths = @(
