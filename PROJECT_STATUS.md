@@ -2,7 +2,11 @@
 
 ## Current Version
 
-Development version: **0.10.14**
+Current application version: **0.10.14**
+
+Latest published stable release: **v0.10.14**
+
+Next planned development version: **0.10.15**
 
 Repository:
 `manuelhoefler17-gif/WinTuner-GUI`
@@ -255,20 +259,21 @@ Stage only explicitly intended files.
 
 ---
 
-## Current Next Steps
+## 0.10.14 Release Status
 
-### 0.10.14 Release Preparation
+Released: **2026-09-09**
 
-1. Complete `CHANGELOG.md` for 0.10.14
-2. Perform final E2E testing
-3. Verify version references
-4. Verify README and release documentation
-5. Verify syntax/tests
-6. Tag `v0.10.14`
-7. Create GitHub release
-8. Attach release files
-9. Generate and attach SHA256 checksum
-10. Verify standalone update/bootstrap path
+Completed:
+
+- finalized `CHANGELOG.md` for 0.10.14
+- completed manual E2E testing
+- verified version references and release documentation
+- validated PowerShell syntax and automated tests
+- created tag `v0.10.14`
+- published the GitHub release
+- attached `WinTuner_GUI.ps1` and its SHA256 checksum
+- verified standalone dependency bootstrap
+- verified self-update from v0.10.13 to v0.10.14, including automatic restart, backup, dependency refresh, and checksum validation
 
 ---
 
@@ -323,12 +328,12 @@ For significant function changes, prefer replacing a complete known block rather
 
 Latest published stable release:
 
-**v0.10.13**
+**v0.10.14**
 
-Current development version:
+Current application version:
 
 **0.10.14**
 
-0.10.14 is not yet published.
+0.10.14 was published on 2026-09-09.
 
-Do not create a release until the changelog and final E2E tests are complete.
+Next planned development version: **0.10.15**.
