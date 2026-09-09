@@ -2,11 +2,9 @@
 
 ## Current Version
 
-Current application version: **0.10.14**
+Development version: **0.10.15**
 
 Latest published stable release: **v0.10.14**
-
-Next planned development version: **0.10.15**
 
 Repository:
 `manuelhoefler17-gif/WinTuner-GUI`
@@ -277,7 +275,7 @@ Completed:
 
 ---
 
-## Planned 0.10.15 Work
+## Current 0.10.15 Work
 
 Potential improvements:
 
@@ -330,10 +328,8 @@ Latest published stable release:
 
 **v0.10.14**
 
-Current application version:
+Current development version:
 
-**0.10.14**
+**0.10.15**
 
 0.10.14 was published on 2026-09-09.
-
-Next planned development version: **0.10.15**.

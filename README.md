@@ -4,7 +4,7 @@
 
 [![PowerShell Version](https://img.shields.io/badge/PowerShell-7.0%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.10.14-orange.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.15-orange.svg)](CHANGELOG.md)
 
 ## 🎯 Overview
 
@@ -436,7 +436,7 @@ A development checkout intentionally uses its local dependency files and is ther
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete version history.
 
-Current development version: **0.10.14**.
+Current development version: **0.10.15**.
 
 ---
 
