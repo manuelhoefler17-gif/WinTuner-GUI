@@ -2,6 +2,11 @@
 
 All notable changes to WinTuner GUI are documented here.
 
+## [Unreleased]
+
+### Changed
+- Started development for version 0.10.15.
+
 ## [0.10.14] – 2026-09-09
 
 ### Added
