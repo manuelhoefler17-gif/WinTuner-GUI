@@ -2,11 +2,27 @@
 
 All notable changes to WinTuner GUI are documented here.
 
-## [Unreleased]
+## [0.10.14] – Unreleased
+
+### Added
+- Added reuse of successfully built packages with the same version during the current GUI session. Packages from previous sessions are not automatically trusted.
+- Added the time of the last successful discovery scan to the Discovered Apps tab.
+- Added discovery status and log summaries showing fresh/cached Graph data and WinGet cache-hit counts.
 
 ### Changed
-- Development work is performed on the `Test` branch before promotion to `main`.
-- Repository documentation and metadata cleanup started.
+- Update scan status and logs now report both the number of applications checked and the number of update candidates.
+- Centralized Upload button state calculation around the tenant connection, selected package/version, built version, package metadata, and expected `.intunewin` file.
+- Removed obsolete `.wtpackage` overwrite handling.
+- Refreshed the README for the modular architecture, release bootstrap, development checkout behavior, package validation, and session-based package reuse.
+- Added repository development guidance and project status documentation for the `Test` -> Pull Request -> `main` workflow.
+
+### Fixed
+- Self-update now requires a successful backup before replacing the script and attempts to restore that backup if an error occurs after replacement, including a restart failure.
+- Removed the obsolete manual restart prompt after self-update to match the automatic restart behavior.
+- Git development checkouts no longer download release dependencies over local `Modules` and `Workers` files; startup stops with a clear error if required local files are missing.
+- Upload readiness is recalculated after package/version selection changes, login/logout, successful builds, package reuse, and upload errors.
+- Upload validates the package root, readable `win32LobApp.json`, and the exact `.intunewin` filename referenced by its metadata before deployment.
+- Upload is no longer unconditionally re-enabled after deployment; it stays disabled after success and is revalidated after an upload error.
 
 ## [0.10.13] – 2026-09-08
 
