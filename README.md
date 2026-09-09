@@ -33,13 +33,13 @@ WinTuner GUI requires **PowerShell 7**.
 - Search WinGet packages directly from the GUI
 - Select a specific package version when required
 - Package applications through WinTuner
-- Reuse the same successfully built package version during the current GUI session
+- Reuse matching packages across GUI sessions after validating their metadata and exact `.intunewin` file
 - Validate package metadata before upload
 - Validate the exact `.intunewin` referenced by `win32LobApp.json`
 - Prevent stale application or version selections from enabling Upload
 - Upload packages directly to the connected Intune tenant
 
-Package reuse is currently session-based. Existing package folders from an earlier GUI session are not automatically trusted as completed builds.
+Existing package folders from earlier GUI sessions are reused only when the selected package ID and version match a valid package directory, the `displayVersion` in readable `win32LobApp.json`, and its exact non-empty `.intunewin` file.
 
 ### 🔄 Update management
 
@@ -95,7 +95,9 @@ It considers:
 - Package metadata
 - Expected `.intunewin` file
 
-Changing the application or package version invalidates the current Upload state until a matching package has been built or safely reused.
+Existing packages can be reused across GUI sessions only after the selected package ID and version resolve to a valid package directory. WinTuner GUI requires matching `displayVersion` in readable `win32LobApp.json` metadata and the exact non-empty `.intunewin` file referenced by its safe filename.
+
+Changing the application, package version, or package root recalculates Upload readiness. Invalid or stale artifacts cannot enable Upload and are rebuilt when package creation is requested.
 
 ### 🔄 Self-update
 
@@ -444,12 +446,8 @@ Current development version: **0.10.15**.
 
 Potential future improvements include:
 
-- Safe package reuse across GUI restarts
-- Additional package-state validation
 - Further Discovery and Updates UX improvements
-- Additional automated tests
-
-Cross-session package reuse will only be added when existing package folders can be validated reliably before they are trusted.
+- Additional end-to-end and negative-path automation
 
 ---
 

@@ -57,4 +57,211 @@ function Test-IsNewerVersion {
     }
 }
 
-Export-ModuleMember -Function Test-IsNewerVersion
+function Test-WinTunerPackageArtifact {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$RootPackageFolder,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$PackageId,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Version
+    )
+
+    $result = [ordered]@{
+        IsValid      = $false
+        ReasonCode   = 'Unknown'
+        Reason       = 'Package artifact validation did not complete.'
+        RootPath     = $null
+        PackagePath  = $null
+        MetadataPath = $null
+        IntuneWinPath = $null
+        FileName     = $null
+        DisplayVersion = $null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($RootPackageFolder)) {
+        $result['ReasonCode'] = 'InvalidRoot'
+        $result['Reason'] = 'Package root folder is empty.'
+        return [pscustomobject]$result
+    }
+
+    foreach ($component in @(
+        @{ Name = 'PackageId'; Value = $PackageId },
+        @{ Name = 'Version'; Value = $Version }
+    )) {
+        $value = [string]$component.Value
+
+        if (
+            [string]::IsNullOrWhiteSpace($value) -or
+            [System.IO.Path]::IsPathRooted($value) -or
+            $value -in '.', '..' -or
+            $value.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0
+        ) {
+            $result['ReasonCode'] = "Invalid$($component.Name)"
+            $result['Reason'] = "$($component.Name) is not a safe package path component."
+            return [pscustomobject]$result
+        }
+    }
+
+    try {
+        $rootPath = [System.IO.Path]::GetFullPath($RootPackageFolder.Trim())
+    }
+    catch {
+        $result['ReasonCode'] = 'InvalidRoot'
+        $result['Reason'] = "Package root folder is invalid: $($_.Exception.Message)"
+        return [pscustomobject]$result
+    }
+
+    $result['RootPath'] = $rootPath
+
+    if (-not (Test-Path -LiteralPath $rootPath -PathType Container)) {
+        $result['ReasonCode'] = 'RootNotFound'
+        $result['Reason'] = 'Package root folder does not exist.'
+        return [pscustomobject]$result
+    }
+
+    try {
+        $packagePath = [System.IO.Path]::GetFullPath(
+            [System.IO.Path]::Combine($rootPath, $PackageId, $Version)
+        )
+    }
+    catch {
+        $result['ReasonCode'] = 'InvalidPackagePath'
+        $result['Reason'] = "Package directory path is invalid: $($_.Exception.Message)"
+        return [pscustomobject]$result
+    }
+
+    $rootPrefix = $rootPath.TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    ) + [System.IO.Path]::DirectorySeparatorChar
+
+    if (-not $packagePath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $result['ReasonCode'] = 'InvalidPackagePath'
+        $result['Reason'] = 'Package directory resolves outside the selected package root.'
+        return [pscustomobject]$result
+    }
+
+    $result['PackagePath'] = $packagePath
+
+    if (-not (Test-Path -LiteralPath $packagePath -PathType Container)) {
+        $result['ReasonCode'] = 'PackageNotFound'
+        $result['Reason'] = 'Package directory does not exist for the selected package and version.'
+        return [pscustomobject]$result
+    }
+
+    $metadataPath = Join-Path -Path $packagePath -ChildPath 'win32LobApp.json'
+    $result['MetadataPath'] = $metadataPath
+
+    if (-not (Test-Path -LiteralPath $metadataPath -PathType Leaf)) {
+        $result['ReasonCode'] = 'MetadataNotFound'
+        $result['Reason'] = 'win32LobApp.json was not found in the package directory.'
+        return [pscustomobject]$result
+    }
+
+    try {
+        $metadata = Get-Content -LiteralPath $metadataPath -Raw -ErrorAction Stop |
+            ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        $result['ReasonCode'] = 'InvalidMetadata'
+        $result['Reason'] = "win32LobApp.json could not be read: $($_.Exception.Message)"
+        return [pscustomobject]$result
+    }
+
+    $fileName = ''
+    if ($null -ne $metadata) {
+        $fileNameProperty = $metadata.PSObject.Properties['fileName']
+        if ($null -ne $fileNameProperty) {
+            $fileName = ([string]$fileNameProperty.Value).Trim()
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($fileName)) {
+        $result['ReasonCode'] = 'MissingFileName'
+        $result['Reason'] = 'win32LobApp.json does not contain a package filename.'
+        return [pscustomobject]$result
+    }
+
+    $displayVersion = ''
+    if ($null -ne $metadata) {
+        $displayVersionProperty = $metadata.PSObject.Properties['displayVersion']
+        if ($null -ne $displayVersionProperty) {
+            $displayVersion = ([string]$displayVersionProperty.Value).Trim()
+        }
+    }
+
+    $result['DisplayVersion'] = $displayVersion
+
+    if ([string]::IsNullOrWhiteSpace($displayVersion)) {
+        $result['ReasonCode'] = 'MissingDisplayVersion'
+        $result['Reason'] = 'win32LobApp.json does not contain a display version.'
+        return [pscustomobject]$result
+    }
+
+    if (-not $displayVersion.Equals($Version, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $result['ReasonCode'] = 'VersionMismatch'
+        $result['Reason'] = "The package metadata version '$displayVersion' does not match selected version '$Version'."
+        return [pscustomobject]$result
+    }
+
+    if (
+        [System.IO.Path]::IsPathRooted($fileName) -or
+        $fileName -ne [System.IO.Path]::GetFileName($fileName) -or
+        $fileName.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0
+    ) {
+        $result['ReasonCode'] = 'InvalidFileName'
+        $result['Reason'] = 'The package filename in win32LobApp.json is not a safe file name.'
+        return [pscustomobject]$result
+    }
+
+    if (-not $fileName.EndsWith('.intunewin', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $result['ReasonCode'] = 'InvalidFileType'
+        $result['Reason'] = 'The package filename in win32LobApp.json is not an .intunewin file.'
+        return [pscustomobject]$result
+    }
+
+    $intuneWinPath = Join-Path -Path $packagePath -ChildPath $fileName
+    $result['FileName'] = $fileName
+    $result['IntuneWinPath'] = $intuneWinPath
+
+    if (-not (Test-Path -LiteralPath $intuneWinPath -PathType Leaf)) {
+        $result['ReasonCode'] = 'IntuneWinNotFound'
+        $result['Reason'] = 'The exact .intunewin file referenced by win32LobApp.json was not found.'
+        return [pscustomobject]$result
+    }
+
+    try {
+        $intuneWinFile = Get-Item -LiteralPath $intuneWinPath -ErrorAction Stop
+    }
+    catch {
+        $result['ReasonCode'] = 'IntuneWinNotReadable'
+        $result['Reason'] = "The referenced .intunewin file could not be read: $($_.Exception.Message)"
+        return [pscustomobject]$result
+    }
+
+    if ($intuneWinFile.Length -le 0) {
+        $result['ReasonCode'] = 'IntuneWinEmpty'
+        $result['Reason'] = 'The referenced .intunewin file is empty.'
+        return [pscustomobject]$result
+    }
+
+    if (($intuneWinFile.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        $result['ReasonCode'] = 'IntuneWinReparsePoint'
+        $result['Reason'] = 'The referenced .intunewin file is a reparse point and cannot be trusted.'
+        return [pscustomobject]$result
+    }
+
+    $result['IsValid'] = $true
+    $result['ReasonCode'] = 'Valid'
+    $result['Reason'] = 'Package metadata and the referenced .intunewin file are valid.'
+    return [pscustomobject]$result
+}
+
+Export-ModuleMember -Function Test-IsNewerVersion, Test-WinTunerPackageArtifact

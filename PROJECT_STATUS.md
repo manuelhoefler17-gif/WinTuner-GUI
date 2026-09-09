@@ -206,17 +206,20 @@ It now documents:
 
 Current behavior:
 
-Package reuse is intentionally **session-based only**.
+Package reuse supports GUI restarts, but existing package folders are never trusted solely because they exist.
 
-`$script:builtVersions` is reset when the GUI restarts.
+For the currently selected package ID and version, reuse requires:
 
-Existing package directories from earlier sessions are not automatically trusted.
+- a package directory under the selected package root
+- readable `win32LobApp.json` metadata
+- a metadata `displayVersion` matching the selected version
+- a safe leaf filename ending in `.intunewin`
+- the exact non-empty `.intunewin` referenced by the metadata
+- no path traversal or reparse-point package file
 
-Cross-session package reuse is deferred until package folders can be validated reliably.
+`$script:builtVersions` remains an in-memory state cache. After a restart it is repopulated only from an artifact that passes the same centralized validation used for Upload state, post-build checks, and click-time upload checks.
 
-Planned target:
-
-**0.10.15**
+Invalid or stale artifacts keep Upload disabled and package creation rebuilds them.
 
 ---
 
@@ -277,15 +280,18 @@ Completed:
 
 ## Current 0.10.15 Work
 
-Potential improvements:
+Completed:
 
 - safe package reuse across GUI restarts
-- persistent build validation
-- additional automated tests
+- centralized persistent artifact validation
+- package-root state recalculation
+- automated positive and negative package-artifact tests
+
+Next candidates:
+
 - further Discovery UX improvements
 - further Updates UX improvements
-
-Cross-session reuse must validate existing package metadata before trusting any previous build.
+- additional end-to-end automation
 
 ---
 
