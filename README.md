@@ -65,7 +65,10 @@ The discovery pipeline includes:
 - Duplicate search-term handling
 - Isolated PowerShell worker processes
 - Batched WinGet queries
-- Cancellation support
+- Cancellation support with partial-result cleanup
+- Action-state validation based on connection, scan, deployment, results, and checked selections
+- Filter- and sort-stable selection mapping
+- Tenant-specific result cleanup on logout
 - Cache hit statistics
 - Fresh/cached Graph status
 - Timestamp of the last successful discovery
@@ -270,6 +273,8 @@ Update actions remain disabled until their required candidates or checked select
 4. Search terms are generated and matched against WinGet.
 5. Review the matched packages.
 6. Select applications for packaging and deployment.
+
+Deployment remains disabled until at least one result is checked. Filtering and sorting preserve the checked objects. Canceled or failed scans discard partial results, and logging out clears the current tenant's Discovery results.
 
 The status indicates whether Graph data was fresh or cached and how many WinGet discovery queries came from cache.
 

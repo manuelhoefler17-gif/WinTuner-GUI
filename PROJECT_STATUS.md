@@ -290,12 +290,17 @@ Completed:
 - filter-stable checked update candidates
 - tenant-specific update candidate cleanup on logout
 - automated update-action-state tests
+- centralized Discovery action state for connection, scan, cancellation, deployment, results, and selection
+- filter- and sort-stable Discovery selections with unique object mapping
+- partial-result cleanup after canceled or failed Discovery scans
+- tenant-specific Discovery cleanup on logout
+- successful Discovery deployment removal from the candidate list
+- automated Discovery action-state tests
 
 Next candidates:
 
-- further Discovery UX improvements
-- further Updates UX improvements
 - additional end-to-end automation
+- further Discovery and Updates refinements based on production feedback
 
 ---
 

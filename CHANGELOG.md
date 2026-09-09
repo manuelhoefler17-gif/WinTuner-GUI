@@ -8,6 +8,7 @@ All notable changes to WinTuner GUI are documented here.
 - Added safe package reuse across GUI restarts after validating the selected package ID, version, metadata display version, and exact non-empty `.intunewin` file.
 - Added automated package-artifact tests for valid builds, missing or malformed metadata, unsafe filenames, wrong file types, missing exact files, empty files, and unsafe package identifiers.
 - Added automated update-action-state tests for disconnected, empty, selected, fully selected, and busy states.
+- Added automated Discovery action-state tests for disconnected, empty, selected, scanning, canceling, and deploying states.
 
 ### Changed
 - Started development for version 0.10.15.
@@ -16,6 +17,10 @@ All notable changes to WinTuner GUI are documented here.
 - Centralized Updates action state so scanning, selection, connection, and busy state determine which actions are available.
 - Checked update candidates remain selected through filtering and are included when updating checked apps.
 - Logging out clears tenant-specific update candidates and keeps update actions disabled until a new scan.
+- Centralized Discovery action state around connection, scan and cancellation progress, deployment, results, and checked selections.
+- Discovery selections now remain tied to their result objects through filtering and sorting, including duplicate display text.
+- Canceled or failed Discovery scans discard partial results, and successful deployments are removed from the candidate list.
+- Logging out clears tenant-specific Discovery results; logout remains unavailable during active Update or Discovery operations.
 
 ## [0.10.14] – 2026-09-09
 
