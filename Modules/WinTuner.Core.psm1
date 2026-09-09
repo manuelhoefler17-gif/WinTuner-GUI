@@ -264,4 +264,35 @@ function Test-WinTunerPackageArtifact {
     return [pscustomobject]$result
 }
 
-Export-ModuleMember -Function Test-IsNewerVersion, Test-WinTunerPackageArtifact
+function Get-WinTunerUpdateActionState {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [bool]$Connected,
+
+        [Parameter(Mandatory)]
+        [bool]$IsBusy,
+
+        [Parameter(Mandatory)]
+        [ValidateRange(0, [int]::MaxValue)]
+        [int]$CandidateCount,
+
+        [Parameter(Mandatory)]
+        [ValidateRange(0, [int]::MaxValue)]
+        [int]$CheckedCount
+    )
+
+    $effectiveCheckedCount = [Math]::Min($CheckedCount, $CandidateCount)
+    $canInteract = $Connected -and -not $IsBusy
+
+    return [pscustomobject]@{
+        CanSearch         = $canInteract
+        CanCheckAll       = $canInteract -and $CandidateCount -gt 0 -and $effectiveCheckedCount -lt $CandidateCount
+        CanUncheckAll     = $canInteract -and $effectiveCheckedCount -gt 0
+        CanUpdateSelected = $canInteract -and $effectiveCheckedCount -gt 0
+        CanUpdateAll      = $canInteract -and $CandidateCount -gt 0
+        CanLogout         = $canInteract
+    }
+}
+
+Export-ModuleMember -Function Test-IsNewerVersion, Test-WinTunerPackageArtifact, Get-WinTunerUpdateActionState
