@@ -238,7 +238,7 @@ $script:skipLowValueWingetCandidates = $false  # keep all discovered apps; persi
 # --- Runtime state (set during execution) ---
 # $script:isConnected      – whether the user is logged in to a tenant
 # $script:currentUserUpn   – UPN of the currently logged-in user
-# $script:builtVersions    – tracks effective built package versions per PackageId
+# $script:builtVersions    – caches effective or validated package versions per PackageId
 # $script:wingetVersionCache – in-memory cache for winget version lookups
 # $script:versionCachePath – path to the on-disk version cache JSON file
 # $script:isDarkMode       – current theme state (true = dark)
@@ -1621,7 +1621,7 @@ function Set-ConnectedUIState {
 $script:isConnected = $false
 $script:currentUserUpn = ""
 
-# Track effective built versions per PackageId
+# Cache effective builds and package versions validated from disk
 $script:builtVersions = @{}
 # Cache for winget version lookups (speeds up repeated searches)
 # Disk cache loaded once at first use (Fix 1)
@@ -1855,8 +1855,11 @@ $uploadButton.Visible = $true
 $uploadButton.Enabled = $false
 $tabCreate.Controls.Add($uploadButton)
 
-# A package must be rebuilt whenever the selected app changes
+# Recalculate package readiness whenever the selected app or package root changes.
 $dropdown.Add_SelectedIndexChanged({
+  Update-PackageActionState
+})
+$pathBox.Add_TextChanged({
   Update-PackageActionState
 })
 
@@ -2243,16 +2246,10 @@ $script:packageMap = @{}
 $script:selectedPackageVersions = @{}
 
 function Update-PackageActionState {
-    $canUpload = $false
+    $uploadButton.Enabled = $false
 
     try {
-        if (-not $script:isConnected) {
-            $uploadButton.Enabled = $false
-            return
-        }
-
         if (-not $dropdown.SelectedItem) {
-            $uploadButton.Enabled = $false
             return
         }
 
@@ -2260,83 +2257,57 @@ function Update-PackageActionState {
         $package = $script:packageMap[$appName]
 
         if (-not $package -or [string]::IsNullOrWhiteSpace([string]$package.PackageID)) {
-            $uploadButton.Enabled = $false
             return
         }
 
         $packageID = [string]$package.PackageID
-
-        if (-not $script:builtVersions.ContainsKey($packageID)) {
-            $uploadButton.Enabled = $false
-            return
-        }
-
-        $builtVersion = [string]$script:builtVersions[$packageID]
-
-        if ([string]::IsNullOrWhiteSpace($builtVersion)) {
-            $uploadButton.Enabled = $false
-            return
-        }
-
         $desiredVersion = if ($script:selectedPackageVersions.ContainsKey($packageID)) {
             [string]$script:selectedPackageVersions[$packageID]
         } else {
             [string]$package.Version
         }
 
-        if (
-            -not [string]::IsNullOrWhiteSpace($desiredVersion) -and
-            $desiredVersion -ne $builtVersion
-        ) {
-            $uploadButton.Enabled = $false
+        if ([string]::IsNullOrWhiteSpace($desiredVersion)) {
             return
         }
 
-        $folder = [System.IO.Path]::GetFullPath($pathBox.Text.Trim())
+        $validation = Test-WinTunerPackageArtifact `
+            -RootPackageFolder ([string]$pathBox.Text) `
+            -PackageId $packageID `
+            -Version $desiredVersion
 
-        if (-not (Test-Path $folder)) {
-            $uploadButton.Enabled = $false
+        if (-not $validation.IsValid) {
+            if (
+                $script:builtVersions.ContainsKey($packageID) -and
+                ([string]$script:builtVersions[$packageID] -eq $desiredVersion)
+            ) {
+                $script:builtVersions.Remove($packageID)
+                Write-Log "Invalidated package state for $packageID version $desiredVersion ($($validation.ReasonCode)): $($validation.Reason)"
+            }
+
             return
         }
 
-        $builtPackagePath = Join-Path (Join-Path $folder $packageID) $builtVersion
-        $metadataPath = Join-Path $builtPackagePath 'win32LobApp.json'
+        $knownBuildMatches = (
+            $script:builtVersions.ContainsKey($packageID) -and
+            ([string]$script:builtVersions[$packageID] -eq $desiredVersion)
+        )
 
-        if (-not (Test-Path $metadataPath)) {
-            $uploadButton.Enabled = $false
+        if (-not $knownBuildMatches) {
+            $script:builtVersions[$packageID] = $desiredVersion
+            Write-Log "Validated existing package for cross-session reuse: $packageID version $desiredVersion -> $($validation.IntuneWinPath)"
+        }
+
+        if (-not $script:isConnected) {
             return
         }
 
-        try {
-            $packageMetadata = Get-Content $metadataPath -Raw -ErrorAction Stop |
-                ConvertFrom-Json -ErrorAction Stop
-
-            $expectedIntuneWinName = [string]$packageMetadata.fileName
-        } catch {
-            $uploadButton.Enabled = $false
-            return
-        }
-
-        if ([string]::IsNullOrWhiteSpace($expectedIntuneWinName)) {
-            $uploadButton.Enabled = $false
-            return
-        }
-
-        $builtIntuneWinPath = Join-Path $builtPackagePath $expectedIntuneWinName
-
-        if (-not (Test-Path $builtIntuneWinPath)) {
-            $uploadButton.Enabled = $false
-            return
-        }
-
-        $canUpload = $true
+        $uploadButton.Enabled = $true
     } catch {
-        $canUpload = $false
+        $uploadButton.Enabled = $false
+        Write-LogSafe "Package action state validation warning: $($_.Exception.Message)"
     }
-
-    $uploadButton.Enabled = $canUpload
 }
-
 # Cache for winget searches to speed up repeated searches
 # (initialized at script scope; see earlier declaration)
 
@@ -2622,22 +2593,27 @@ $createButton.Add_Click({
   }
 
   $targetVersion = if ($desired) { $desired } else { $package.Version }
-  $builtPackagePath = Join-Path (Join-Path $folder $packageID) $targetVersion
-  $builtIntuneWin = Get-ChildItem -Path $builtPackagePath -Filter '*.intunewin' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+  $existingArtifact = Test-WinTunerPackageArtifact `
+    -RootPackageFolder $folder `
+    -PackageId $packageID `
+    -Version ([string]$targetVersion)
 
+  if ($targetVersion -and $existingArtifact.IsValid) {
+    $script:builtVersions[$packageID] = [string]$targetVersion
+    Update-Status ("Package already built (version {0}). Reusing validated package files." -f $targetVersion)
+    Write-Log "Reusing validated package files for $packageID version $targetVersion -> $($existingArtifact.IntuneWinPath)"
+    Update-PackageActionState
+    return
+  }
 
   if (
     $targetVersion -and
     $script:builtVersions.ContainsKey($packageID) -and
-    ([string]$script:builtVersions[$packageID] -eq [string]$targetVersion) -and
-    $null -ne $builtIntuneWin
+    ([string]$script:builtVersions[$packageID] -eq [string]$targetVersion)
   ) {
-    Update-Status ("Package already built (version {0}). Reusing existing package." -f $targetVersion)
-    Write-Log "Reusing existing package for $packageID version $targetVersion"
-    Update-PackageActionState
-    return
+    $script:builtVersions.Remove($packageID)
+    Write-Log "Existing package for $packageID version $targetVersion failed validation ($($existingArtifact.ReasonCode)); rebuilding."
   }
-  
   try {
 
     $createButton.Enabled = $false
@@ -2661,8 +2637,20 @@ $createButton.Add_Click({
     if ($resPkg -and $resPkg.Succeeded) {
       $effectiveVersion = $resPkg.EffectiveVersion
       if (-not $effectiveVersion) { $effectiveVersion = $package.Version }
-      Update-Status ("Package created successfully (version {0})" -f $effectiveVersion)
-      if ($effectiveVersion) { $script:builtVersions[$packageID] = $effectiveVersion }
+      $createdArtifact = Test-WinTunerPackageArtifact `
+        -RootPackageFolder $folder `
+        -PackageId $packageID `
+        -Version ([string]$effectiveVersion)
+
+      if ($createdArtifact.IsValid) {
+        Update-Status ("Package created successfully (version {0})" -f $effectiveVersion)
+        $script:builtVersions[$packageID] = [string]$effectiveVersion
+      } else {
+        $script:builtVersions.Remove($packageID)
+        Update-Status "Package creation completed, but artifact validation failed."
+        Write-Log "Package build validation failed for $packageID version $effectiveVersion ($($createdArtifact.ReasonCode)): $($createdArtifact.Reason)"
+      }
+
       Update-PackageActionState
     } else {
       Update-Status "Package creation failed"
@@ -2692,11 +2680,10 @@ $uploadButton.Add_Click({
     $package  = $script:packageMap[$appName]
     if (-not $package) { Update-Status "Selected item is invalid."; return }
     $packageID = $package.PackageID
-    $version   = $null
-    if ($script:builtVersions -and $script:builtVersions.ContainsKey($packageID)) { 
-        $version = $script:builtVersions[$packageID] 
-    } else { 
-        $version = $package.Version 
+    $version = if ($script:selectedPackageVersions.ContainsKey($packageID)) {
+        [string]$script:selectedPackageVersions[$packageID]
+    } else {
+        [string]$package.Version
     }
     if ([string]::IsNullOrWhiteSpace($packageID)) { 
         try { $packageID = ($appName -split '—')[-1].Trim() } catch { } 
@@ -2722,49 +2709,24 @@ $uploadButton.Add_Click({
       )
       return
     }
-    if (-not (Test-Path $folder)) {
-        Update-Status "Cannot upload: package root folder does not exist."
-        Write-Log "Upload blocked: package root folder does not exist: $folder"
+    $artifactValidation = Test-WinTunerPackageArtifact `
+        -RootPackageFolder $folder `
+        -PackageId $packageID `
+        -Version $version
+
+    if (-not $artifactValidation.IsValid) {
+        Update-Status "Cannot upload: $($artifactValidation.Reason)"
+        Write-Log "Upload blocked for $packageID version $version ($($artifactValidation.ReasonCode)): $($artifactValidation.Reason)"
+        if (
+            $script:builtVersions.ContainsKey($packageID) -and
+            ([string]$script:builtVersions[$packageID] -eq [string]$version)
+        ) {
+            $script:builtVersions.Remove($packageID)
+        }
         $uploadButton.Enabled = $false
         return
     }
 
-    $builtPackagePath = Join-Path (Join-Path $folder $packageID) $version
-    $metadataPath = Join-Path $builtPackagePath 'win32LobApp.json'
-
-    if (-not (Test-Path $metadataPath)) {
-        Update-Status "Cannot upload: package metadata for $packageID (v$version) was not found."
-        Write-Log "Upload blocked: win32LobApp.json not found in $builtPackagePath"
-        $uploadButton.Enabled = $false
-        return
-    }
-
-    try {
-        $packageMetadata = Get-Content $metadataPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-        $expectedIntuneWinName = [string]$packageMetadata.fileName
-    } catch {
-        Update-Status "Cannot upload: package metadata could not be read."
-        Write-Log "Upload blocked: failed to read ${metadataPath}: $($_.Exception.Message)"
-        $uploadButton.Enabled = $false
-        return
-    }
-
-    if ([string]::IsNullOrWhiteSpace($expectedIntuneWinName)) {
-        Update-Status "Cannot upload: package metadata does not contain an IntuneWin filename."
-        Write-Log "Upload blocked: fileName missing in $metadataPath"
-        $uploadButton.Enabled = $false
-        return
-    }
-
-    $builtIntuneWinPath = Join-Path $builtPackagePath $expectedIntuneWinName
-
-    if (-not (Test-Path $builtIntuneWinPath)) {
-        Update-Status "Cannot upload: expected package file was not found."
-        Write-Log "Upload blocked: expected .intunewin missing: $builtIntuneWinPath"
-        $uploadButton.Enabled = $false
-        return
-    }
-    
     try {
         $uploadButton.Enabled = $false
         $createButton.Enabled = $false

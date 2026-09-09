@@ -4,8 +4,14 @@ All notable changes to WinTuner GUI are documented here.
 
 ## [Unreleased]
 
+### Added
+- Added safe package reuse across GUI restarts after validating the selected package ID, version, metadata display version, and exact non-empty `.intunewin` file.
+- Added automated package-artifact tests for valid builds, missing or malformed metadata, unsafe filenames, wrong file types, missing exact files, empty files, and unsafe package identifiers.
+
 ### Changed
 - Started development for version 0.10.15.
+- Centralized package-artifact validation across Upload state calculation, package reuse, post-build verification, and click-time upload checks.
+- Package-root changes now immediately recalculate whether Upload is safe.
 
 ## [0.10.14] – 2026-09-09
 
