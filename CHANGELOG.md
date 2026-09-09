@@ -2,7 +2,7 @@
 
 All notable changes to WinTuner GUI are documented here.
 
-## [0.10.14] – Unreleased
+## [0.10.14] – 2026-09-09
 
 ### Added
 - Added reuse of successfully built packages with the same version during the current GUI session. Packages from previous sessions are not automatically trusted.
