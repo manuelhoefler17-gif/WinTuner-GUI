@@ -52,6 +52,7 @@ Main application:
 
 Modules:
 
+- `Modules/WinTuner.AppUpdate.psm1`
 - `Modules/WinTuner.Core.psm1`
 - `Modules/WinTuner.Intune.psm1`
 - `Modules/WinTuner.Logging.psm1`
@@ -358,11 +359,16 @@ Implemented on `Test`:
 - kept package selection and Upload available after tenant deployment failures while invalid artifacts remain blocked
 - added clean package-upload runspace shutdown when the GUI closes
 - added automated upload validation, deployment-error, and workflow-routing tests
+- moved checked and all-app update deployment into an isolated PowerShell runspace
+- kept exact post-build artifact validation immediately before every update deployment
+- removed only successful updates from the current candidate list while preserving failed candidates for retry
+- added clean update-deployment runspace shutdown when the GUI closes
+- added automated update-deployment success, missing-ID, invalid-artifact, partial-failure, and workflow-routing tests
 
 Validation completed:
 
-- PowerShell syntax validation passed for all 22 repository scripts and modules
-- all 66 Pester tests passed
+- PowerShell syntax validation passed for all 24 repository scripts and modules
+- all 71 Pester tests passed
 - a separate PowerShell runspace loaded the installed WinTuner module and completed the update-scan logic
 - cooperative runspace cancellation completed without blocking the caller
 - the tenant-connected GUI remained responsive while moving, resizing, and switching tabs during a scan
@@ -372,6 +378,8 @@ Validation completed:
 - the WinGet version list loaded without blocking the GUI, and the modal picker restored the expected package actions after selection or cancellation
 - package creation completed without blocking window movement, resizing, or tab changes; the exact 7zip.7zip 26.03 artifact passed validation and was safely reused on the second request
 - the upload safety module revalidated that exact artifact in an isolated runspace before a non-writing deployment callback
+- the update-deployment module revalidated the exact 7zip.7zip 26.03 artifact in an isolated runspace before a non-writing Graph-ID deployment callback
+- a real tenant app update completed through the background worker while the GUI remained responsive and the successful candidate was removed from the current update list
 - the real tenant upload of 7zip.7zip 26.03 completed successfully in the background while the GUI remained responsive and cleared the package selection afterward
 
 Next candidates:
