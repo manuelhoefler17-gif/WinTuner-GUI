@@ -1892,6 +1892,179 @@ function Start-WinTunerSupersededSearch {
     Update-SupersededActionState
   }
 }
+function Complete-WinTunerPackageSearch {
+  param([Parameter(Mandatory=$true)][object]$Context)
+
+  $searchResult = $null
+  $completionError = $null
+  try {
+    $output = @($Context.PowerShell.EndInvoke($Context.AsyncResult))
+    if ($output.Count -eq 0) {
+      if ($Context.PowerShell.Streams.Error.Count -gt 0) {
+        throw $Context.PowerShell.Streams.Error[0].Exception
+      }
+      throw 'The WinGet package search returned no result.'
+    }
+
+    $json = [string]$output[$output.Count - 1]
+    $searchResult = $json | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    $completionError = $_.Exception.Message
+  } finally {
+    try { $Context.Timer.Stop() } catch {}
+    try { $Context.Timer.Dispose() } catch {}
+    try { $Context.PowerShell.Dispose() } catch {}
+    if ($script:packageSearchContext -eq $Context) {
+      $script:packageSearchContext = $null
+    }
+    $script:isPackageSearchActive = $false
+    try {
+      $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+      $script:progressBar.Value = 0
+      $script:progressBar.Visible = $false
+    } catch {}
+  }
+
+  if ($completionError) {
+    Update-Status "WinGet search failed: $completionError"
+    Write-Log "WinGet package search failed for '$($Context.Query)': $completionError"
+    Update-PackageActionState
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    Update-SupersededActionState
+    Update-PackageSearchActionState
+    return
+  }
+
+  $dropdown.BeginUpdate()
+  try {
+    $dropdown.Items.Clear()
+    $script:packageMap.Clear()
+    foreach ($result in @($searchResult.Results)) {
+      $name = [string]$result.Name
+      $packageId = [string]$result.PackageID
+      if ([string]::IsNullOrWhiteSpace($name) -or [string]::IsNullOrWhiteSpace($packageId)) { continue }
+      $displayText = "$name — $packageId"
+      [void]$dropdown.Items.Add($displayText)
+      $script:packageMap[$displayText] = @{
+        PackageID = $packageId
+        Version   = [string]$result.Version
+      }
+    }
+    if ($dropdown.Items.Count -gt 0) {
+      $dropdown.SelectedIndex = 0
+    }
+  } finally {
+    $dropdown.EndUpdate()
+  }
+
+  if ($dropdown.Items.Count -eq 0) {
+    Update-Status "No results found for '$($Context.Query)'"
+  } else {
+    Update-Status "Search completed: $($dropdown.Items.Count) package(s) found."
+  }
+  Write-Log "Asynchronous WinGet package search completed for '$($Context.Query)': $($dropdown.Items.Count) result(s)."
+  Update-PackageActionState
+  Update-UpdateActionState
+  Update-DiscoveryActionState
+  Update-SupersededActionState
+  Update-PackageSearchActionState
+}
+
+function Start-WinTunerPackageSearch {
+  $query = [string]$appSearchBox.Text
+  if ([string]::IsNullOrWhiteSpace($query)) {
+    [void][System.Windows.Forms.MessageBox]::Show(
+      "App search can't be empty.",
+      'Validation',
+      [System.Windows.Forms.MessageBoxButtons]::OK,
+      [System.Windows.Forms.MessageBoxIcon]::Information
+    )
+    return
+  }
+  $query = $query.Trim()
+
+  if (
+    $script:isPackageSearchActive -or
+    $script:isUpdateOperationActive -or
+    $script:discoveryScanRunning -or
+    $script:isDiscoveryDeploymentActive -or
+    $script:isSupersededOperationActive
+  ) {
+    Update-PackageSearchActionState
+    return
+  }
+
+  $dropdown.Items.Clear()
+  $script:packageMap.Clear()
+  Update-PackageActionState
+  $script:isPackageSearchActive = $true
+  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+  $script:progressBar.MarqueeAnimationSpeed = 30
+  $script:progressBar.Visible = $true
+  Update-Status "Searching WinGet for '$query'..."
+  Write-Log "Starting asynchronous WinGet package search for '$query'."
+  Update-UpdateActionState
+  Update-DiscoveryActionState
+  Update-SupersededActionState
+  Update-PackageSearchActionState
+
+  $searchScript = @(
+    'param($Query)'
+    '$ErrorActionPreference = ''Stop'''
+    '$ProgressPreference = ''SilentlyContinue'''
+    'Import-Module WinTuner -ErrorAction Stop'
+    '$results = @('
+    '  Search-WtWinGetPackage -SearchQuery $Query -ErrorAction Stop | ForEach-Object {'
+    '    [pscustomobject]@{'
+    '      Name = [string]$_.Name'
+    '      PackageID = [string]$_.PackageID'
+    '      Version = [string]$_.Version'
+    '    }'
+    '  }'
+    ')'
+    '[pscustomobject]@{ Results = $results } | ConvertTo-Json -Depth 4 -Compress'
+  ) -join [Environment]::NewLine
+
+  $powerShell = [System.Management.Automation.PowerShell]::Create()
+  $null = $powerShell.AddScript($searchScript).AddArgument($query)
+  $timer = New-Object System.Windows.Forms.Timer
+  $timer.Interval = 150
+  $context = [pscustomobject]@{
+    PowerShell  = $powerShell
+    AsyncResult = $null
+    Timer       = $timer
+    Query       = $query
+  }
+  $script:packageSearchContext = $context
+
+  $timer.Add_Tick({
+    $currentContext = $script:packageSearchContext
+    if ($currentContext -and $currentContext.AsyncResult -and $currentContext.AsyncResult.IsCompleted) {
+      Complete-WinTunerPackageSearch -Context $currentContext
+    }
+  })
+
+  try {
+    $context.AsyncResult = $powerShell.BeginInvoke()
+    $timer.Start()
+  } catch {
+    try { $timer.Dispose() } catch {}
+    try { $powerShell.Dispose() } catch {}
+    $script:packageSearchContext = $null
+    $script:isPackageSearchActive = $false
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $script:progressBar.Value = 0
+    $script:progressBar.Visible = $false
+    Update-Status "WinGet search failed to start: $($_.Exception.Message)"
+    Write-Log "WinGet package search failed to start for '$query': $($_.Exception.Message)"
+    Update-PackageActionState
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    Update-SupersededActionState
+    Update-PackageSearchActionState
+  }
+}
 # Helper: validate M365 username (UPN-like)
 function Test-ValidM365UserName {
   param([string]$UserName)
@@ -2217,12 +2390,14 @@ $dropdown = New-Object System.Windows.Forms.ComboBox
 $dropdown.Location = New-Object System.Drawing.Point(100,60)
 $dropdown.Width = 450
 $dropdown.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+$dropdown.Enabled = $false
 $tabCreate.Controls.Add($dropdown)
 
 $versionsButton = New-Object System.Windows.Forms.Button
 $versionsButton.Text = "Versions..."
 $versionsButton.Location = New-Object System.Drawing.Point(570,60)
 $versionsButton.Width = 180
+$versionsButton.Enabled = $false
 $tabCreate.Controls.Add($versionsButton)
 
 $pathLabel = New-Object System.Windows.Forms.Label
@@ -2255,6 +2430,7 @@ $createButton = New-Object System.Windows.Forms.Button
 $createButton.Text = "Create package"
 $createButton.Location = New-Object System.Drawing.Point(100,140)
 $createButton.Width = 180
+$createButton.Enabled = $false
 $tabCreate.Controls.Add($createButton)
 
 $uploadButton = New-Object System.Windows.Forms.Button
@@ -2268,6 +2444,7 @@ $tabCreate.Controls.Add($uploadButton)
 # Recalculate package readiness whenever the selected app or package root changes.
 $dropdown.Add_SelectedIndexChanged({
   Update-PackageActionState
+  Update-PackageSearchActionState
 })
 $pathBox.Add_TextChanged({
   Update-PackageActionState
@@ -2670,6 +2847,8 @@ $checkUpdateButton.Add_Click({
 
 # Hashtable: AppName -> {PackageID, Version}
 $script:packageMap = @{}
+$script:isPackageSearchActive = $false
+$script:packageSearchContext = $null
 
 # Optional: user-chosen versions per PackageID
 $script:selectedPackageVersions = @{}
@@ -2780,6 +2959,36 @@ function Update-PackageActionState {
     }
 }
 
+function Update-PackageSearchActionState {
+    try {
+        $resultCount = if ($dropdown) { [int]$dropdown.Items.Count } else { 0 }
+        $selectedIndex = if ($dropdown) { [int]$dropdown.SelectedIndex } else { -1 }
+        $isBusy = (
+            [bool]$script:isPackageSearchActive -or
+            [bool]$script:isUpdateOperationActive -or
+            [bool]$script:discoveryScanRunning -or
+            [bool]$script:isDiscoveryDeploymentActive -or
+            [bool]$script:isSupersededOperationActive
+        )
+        $state = Get-WinTunerPackageSearchActionState `
+            -IsBusy $isBusy `
+            -ResultCount $resultCount `
+            -SelectedIndex $selectedIndex
+
+        $searchButton.Enabled = $state.CanSearch
+        $appSearchBox.Enabled = $state.CanEditQuery
+        $dropdown.Enabled = $state.CanSelectResult
+        $versionsButton.Enabled = $state.CanSelectVersion
+        $createButton.Enabled = $state.CanCreatePackage
+    } catch {
+        if ($searchButton) { $searchButton.Enabled = $false }
+        if ($appSearchBox) { $appSearchBox.Enabled = $false }
+        if ($dropdown) { $dropdown.Enabled = $false }
+        if ($versionsButton) { $versionsButton.Enabled = $false }
+        if ($createButton) { $createButton.Enabled = $false }
+        Write-LogSafe "Package search action state warning: $($_.Exception.Message)"
+    }
+}
 function Update-LogoutActionState {
     try {
         $logoutButton.Enabled = (
@@ -2801,7 +3010,7 @@ function Update-UpdateActionState {
         $checkedCount = @($candidates | Where-Object { $_ -and $_.Checked }).Count
         $state = Get-WinTunerUpdateActionState `
             -Connected ([bool]$script:isConnected) `
-            -IsBusy ([bool]($script:isUpdateOperationActive -or $script:isSupersededOperationActive)) `
+            -IsBusy ([bool]($script:isUpdateOperationActive -or $script:isSupersededOperationActive -or $script:isPackageSearchActive)) `
             -CandidateCount $candidates.Count `
             -CheckedCount $checkedCount `
             -IsScanRunning ([bool]$script:updateScanRunning) `
@@ -2827,6 +3036,7 @@ function Update-UpdateActionState {
 
     Update-LogoutActionState
     Update-SupersededActionState
+    Update-PackageSearchActionState
 }
 
 function Clear-DiscoveryCandidateState {
@@ -2851,7 +3061,7 @@ function Update-DiscoveryActionState {
             -IsScanning ([bool]$script:discoveryScanRunning) `
             -CancelRequested ([bool]$script:cancelDiscoveryScan) `
             -IsDeploying ([bool]$script:isDiscoveryDeploymentActive) `
-            -IsOtherOperationActive ([bool]$script:isSupersededOperationActive) `
+            -IsOtherOperationActive ([bool]($script:isSupersededOperationActive -or $script:isPackageSearchActive)) `
             -ResultCount $results.Count `
             -CheckedCount $checkedCount
 
@@ -2876,6 +3086,7 @@ function Update-DiscoveryActionState {
 
     Update-LogoutActionState
     Update-SupersededActionState
+    Update-PackageSearchActionState
 }
 
 function Update-SupersededActionState {
@@ -2886,7 +3097,8 @@ function Update-SupersededActionState {
             [bool]$script:isSupersededOperationActive -or
             [bool]$script:isUpdateOperationActive -or
             [bool]$script:discoveryScanRunning -or
-            [bool]$script:isDiscoveryDeploymentActive
+            [bool]$script:isDiscoveryDeploymentActive -or
+            [bool]$script:isPackageSearchActive
         )
         $state = Get-WinTunerSupersededActionState `
             -Connected ([bool]$script:isConnected) `
@@ -2905,6 +3117,7 @@ function Update-SupersededActionState {
     }
 
     Update-LogoutActionState
+    Update-PackageSearchActionState
 }
 # Cache for winget searches to speed up repeated searches
 # (initialized at script scope; see earlier declaration)
@@ -3121,38 +3334,7 @@ $loginButton.Add_Click({
 })
 
 $searchButton.Add_Click({
-  if ([string]::IsNullOrWhiteSpace($appSearchBox.Text)) {
-    [void][System.Windows.Forms.MessageBox]::Show(
-      "App search can't be empty.",
-      "Validation",
-      [System.Windows.Forms.MessageBoxButtons]::OK,
-      [System.Windows.Forms.MessageBoxIcon]::Information
-    )
-    return
-  }
-  try {
-    $searchButton.Enabled = $false
-    Update-Status "Searching..."
-    $results = Search-WtWinGetPackage -SearchQuery $appSearchBox.Text
-    $dropdown.Items.Clear()
-    $script:packageMap.Clear()
-    foreach ($result in @($results)) {
-      $displayText = "$($result.Name) — $($result.PackageID)"
-      [void]$dropdown.Items.Add($displayText)
-      $script:packageMap[$displayText] = @{
-        PackageID = $result.PackageID
-        Version   = $result.Version
-      }
-    }
-    if ($dropdown.Items.Count -gt 0) { $dropdown.SelectedIndex = 0 }
-    if ($dropdown.Items.Count -eq 0) {
-      Update-Status "No results found for '$($appSearchBox.Text)'"
-    } else {
-      Update-Status "Search completed."
-    }
-  } finally {
-    $searchButton.Enabled = $true
-  }
+  Start-WinTunerPackageSearch
 })
 
 $versionsButton.Add_Click({
@@ -4348,7 +4530,7 @@ $toolTip.InitialDelay = 500
 $toolTip.ReshowDelay  = 500
 $toolTip.ShowAlways   = $true
 
-$toolTip.SetToolTip($searchButton,          "Search the WinGet repository for applications")
+$toolTip.SetToolTip($searchButton,          "Search the WinGet repository without blocking the window")
 $toolTip.SetToolTip($versionsButton,        "Select a specific version for the selected app")
 $toolTip.SetToolTip($browseButton,          "Choose the local folder to store package files")
 if ($createButton)          { $toolTip.SetToolTip($createButton,          "Create the .wtpackage file locally") }
@@ -4417,5 +4599,14 @@ try {
         try { $activeSupersededSearch.PowerShell.Dispose() } catch {}
         try { $activeSupersededSearch.Timer.Dispose() } catch {}
         $script:supersededSearchContext = $null
+    }
+
+    $activePackageSearch = $script:packageSearchContext
+    if ($activePackageSearch) {
+        try { $activePackageSearch.Timer.Stop() } catch {}
+        try { $activePackageSearch.PowerShell.Stop() } catch {}
+        try { $activePackageSearch.PowerShell.Dispose() } catch {}
+        try { $activePackageSearch.Timer.Dispose() } catch {}
+        $script:packageSearchContext = $null
     }
 }

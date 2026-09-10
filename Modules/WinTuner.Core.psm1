@@ -456,4 +456,30 @@ function Get-WinTunerSupersededActionState {
     }
 }
 
-Export-ModuleMember -Function Test-IsNewerVersion, Test-WinTunerPackageRoot, Test-WinTunerPackageArtifact, Get-WinTunerUpdateActionState, Get-WinTunerDiscoveryActionState, Get-WinTunerSupersededActionState
+function Get-WinTunerPackageSearchActionState {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [bool]$IsBusy,
+
+        [Parameter(Mandatory)]
+        [ValidateRange(0, [int]::MaxValue)]
+        [int]$ResultCount,
+
+        [Parameter(Mandatory)]
+        [int]$SelectedIndex
+    )
+
+    $hasSelection = $SelectedIndex -ge 0 -and $SelectedIndex -lt $ResultCount
+    $canInteractWithSelection = -not $IsBusy -and $hasSelection
+
+    return [pscustomobject]@{
+        CanSearch         = -not $IsBusy
+        CanEditQuery      = -not $IsBusy
+        CanSelectResult   = -not $IsBusy -and $ResultCount -gt 0
+        CanSelectVersion  = $canInteractWithSelection
+        CanCreatePackage  = $canInteractWithSelection
+    }
+}
+
+Export-ModuleMember -Function Test-IsNewerVersion, Test-WinTunerPackageRoot, Test-WinTunerPackageArtifact, Get-WinTunerUpdateActionState, Get-WinTunerDiscoveryActionState, Get-WinTunerSupersededActionState, Get-WinTunerPackageSearchActionState

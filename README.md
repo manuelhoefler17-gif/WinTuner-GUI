@@ -250,8 +250,8 @@ WinTuner GUI verifies the tenant connection before enabling tenant-dependent act
 ### 2. Create and deploy a WinGet application
 
 1. Open **WinGet Apps**.
-2. Search for an application.
-3. Select the package.
+2. Search for an application. The WinGet query runs in the background so the window remains responsive.
+3. Select the package after the current search finishes.
 4. Optionally choose a specific version.
 5. Select the package output folder.
 6. Click **Create package**.
