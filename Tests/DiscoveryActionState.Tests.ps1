@@ -80,4 +80,14 @@ Describe 'Get-WinTunerDiscoveryActionState' {
         $state.CanCheckAll | Should -BeFalse
         $state.CanUncheckAll | Should -BeFalse
     }
+
+    It 'disables discovery actions while another workflow is active' {
+        $state = Get-WinTunerDiscoveryActionState -Connected:$true -IsScanning:$false -CancelRequested:$false -IsDeploying:$false -IsOtherOperationActive:$true -ResultCount 3 -CheckedCount 1
+
+        $state.CanScan | Should -BeFalse
+        $state.CanDeploy | Should -BeFalse
+        $state.CanExport | Should -BeFalse
+        $state.CanCheckAll | Should -BeFalse
+        $state.CanUncheckAll | Should -BeFalse
+    }
 }

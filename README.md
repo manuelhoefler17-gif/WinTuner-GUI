@@ -272,7 +272,15 @@ Changing the selected version invalidates the previous Upload state. The new ver
 
 Update actions remain disabled until their required candidates or checked selections exist. Logout is disabled during a scan, both update actions use the current verified scan result, and logging out clears the current tenant's candidate list.
 
-### 4. Discover Intune applications
+### 4. Find superseded Intune applications
+
+1. Open **Updates**.
+2. Click **Search Superseded Apps**. The tenant query runs in the background so the window remains responsive.
+3. Select one result for individual deletion, or review the full result list before using **Delete all Superseded Apps**.
+
+Deletion actions remain disabled until the current tenant search returns valid results. **Delete all Superseded Apps** uses that displayed result set and does not silently fetch a different list before confirmation.
+
+### 5. Discover Intune applications
 
 1. Open **Discovered Apps**.
 2. Start Discovery.

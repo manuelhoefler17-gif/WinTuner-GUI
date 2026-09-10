@@ -1750,6 +1750,148 @@ $result | ConvertTo-Json -Depth 6 -Compress
   }
 }
 
+function Complete-WinTunerSupersededSearch {
+  param([Parameter(Mandatory=$true)][object]$Context)
+
+  $searchResult = $null
+  $completionError = $null
+
+  try {
+    $output = @($Context.PowerShell.EndInvoke($Context.AsyncResult))
+    if ($output.Count -eq 0) {
+      if ($Context.PowerShell.Streams.Error.Count -gt 0) {
+        throw $Context.PowerShell.Streams.Error[0].Exception
+      }
+      throw 'The superseded-app search returned no result.'
+    }
+
+    $json = [string]$output[$output.Count - 1]
+    $searchResult = $json | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    $completionError = $_.Exception.Message
+  } finally {
+    try { $Context.Timer.Stop() } catch {}
+    try { $Context.Timer.Dispose() } catch {}
+    try { $Context.PowerShell.Dispose() } catch {}
+    if ($script:supersededSearchContext -eq $Context) {
+      $script:supersededSearchContext = $null
+    }
+    $script:isSupersededOperationActive = $false
+    try {
+      $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+      $script:progressBar.Value = 0
+      $script:progressBar.Visible = $false
+    } catch {}
+  }
+
+  if ($completionError) {
+    Update-Status "Superseded-app search failed: $completionError"
+    Write-Log "Superseded-app search failed: $completionError"
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    Update-SupersededActionState
+    return
+  }
+
+  $script:supersededApps = @()
+  $supersededDropdown.BeginUpdate()
+  try {
+    $supersededDropdown.Items.Clear()
+    foreach ($app in @($searchResult.Apps | Sort-Object Name, CurrentVersion)) {
+      if (-not $app -or [string]::IsNullOrWhiteSpace([string]$app.Name) -or [string]::IsNullOrWhiteSpace([string]$app.GraphId)) { continue }
+      $script:supersededApps += $app
+      [void]$supersededDropdown.Items.Add("$($app.Name) — $($app.CurrentVersion)")
+    }
+    if ($supersededDropdown.Items.Count -gt 0) {
+      $supersededDropdown.SelectedIndex = 0
+    }
+  } finally {
+    $supersededDropdown.EndUpdate()
+  }
+
+  Update-Status ("Search completed: {0} superseded Apps found." -f $script:supersededApps.Count)
+  Write-Log "Asynchronous superseded-app search completed: $($script:supersededApps.Count) result(s)."
+  Update-UpdateActionState
+  Update-DiscoveryActionState
+  Update-SupersededActionState
+}
+
+function Start-WinTunerSupersededSearch {
+  if (
+    -not $script:isConnected -or
+    $script:isSupersededOperationActive -or
+    $script:isUpdateOperationActive -or
+    $script:discoveryScanRunning -or
+    $script:isDiscoveryDeploymentActive
+  ) {
+    Update-SupersededActionState
+    return
+  }
+
+  $script:supersededApps = @()
+  $supersededDropdown.Items.Clear()
+  $script:isSupersededOperationActive = $true
+  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+  $script:progressBar.MarqueeAnimationSpeed = 30
+  $script:progressBar.Visible = $true
+  Update-Status 'Search for superseded apps...'
+  Write-Log 'Starting asynchronous superseded-app search.'
+  Update-UpdateActionState
+  Update-DiscoveryActionState
+  Update-SupersededActionState
+
+  $searchScript = @(
+    '$ErrorActionPreference = ''Stop'''
+    '$ProgressPreference = ''SilentlyContinue'''
+    'Import-Module WinTuner -ErrorAction Stop'
+    '$apps = @('
+    '  Get-WtWin32Apps -Superseded:$true -ErrorAction Stop | ForEach-Object {'
+    '    [pscustomobject]@{'
+    '      Name = [string]$_.Name'
+    '      CurrentVersion = [string]$_.CurrentVersion'
+    '      GraphId = [string]$_.GraphId'
+    '    }'
+    '  }'
+    ')'
+    '[pscustomobject]@{ Apps = $apps } | ConvertTo-Json -Depth 4 -Compress'
+  ) -join [Environment]::NewLine
+
+  $powerShell = [System.Management.Automation.PowerShell]::Create()
+  $null = $powerShell.AddScript($searchScript)
+  $timer = New-Object System.Windows.Forms.Timer
+  $timer.Interval = 150
+  $context = [pscustomobject]@{
+    PowerShell  = $powerShell
+    AsyncResult = $null
+    Timer       = $timer
+  }
+  $script:supersededSearchContext = $context
+
+  $timer.Add_Tick({
+    $currentContext = $script:supersededSearchContext
+    if ($currentContext -and $currentContext.AsyncResult -and $currentContext.AsyncResult.IsCompleted) {
+      Complete-WinTunerSupersededSearch -Context $currentContext
+    }
+  })
+
+  try {
+    $context.AsyncResult = $powerShell.BeginInvoke()
+    $timer.Start()
+  } catch {
+    try { $timer.Dispose() } catch {}
+    try { $powerShell.Dispose() } catch {}
+    $script:supersededSearchContext = $null
+    $script:isSupersededOperationActive = $false
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $script:progressBar.Value = 0
+    $script:progressBar.Visible = $false
+    Update-Status "Superseded-app search failed to start: $($_.Exception.Message)"
+    Write-Log "Superseded-app search failed to start: $($_.Exception.Message)"
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    Update-SupersededActionState
+  }
+}
 # Helper: validate M365 username (UPN-like)
 function Test-ValidM365UserName {
   param([string]$UserName)
@@ -1862,12 +2004,12 @@ function Set-ConnectedUIState {
     if ($updateListBox) { $updateListBox.Items.Clear() }
     if ($updateFilterBox) { $updateFilterBox.Text = '' }
     Clear-DiscoveryCandidateState
+    $script:supersededApps = @()
+    if ($supersededDropdown) { $supersededDropdown.Items.Clear() }
   }
   Update-UpdateActionState
   Update-DiscoveryActionState
-  if ($supersededSearchButton) { $supersededSearchButton.Enabled = $Connected }
-  if ($deleteSelectedAppButton) { $deleteSelectedAppButton.Enabled = $Connected }
-  if ($removeOldAppsButton) { $removeOldAppsButton.Enabled = $Connected }
+  Update-SupersededActionState
   
   if ($loginInfoLabel) {
     $loginInfoLabel.Visible = $Connected
@@ -1886,6 +2028,9 @@ $script:isUpdateOperationActive = $false
 $script:updateScanRunning = $false
 $script:cancelUpdateScan = $false
 $script:updateScanContext = $null
+$script:supersededApps = @()
+$script:isSupersededOperationActive = $false
+$script:supersededSearchContext = $null
 # Cache for winget version lookups (speeds up repeated searches)
 # Disk cache loaded once at first use (Fix 1)
 # Create form
@@ -2641,7 +2786,8 @@ function Update-LogoutActionState {
             [bool]$script:isConnected -and
             -not [bool]$script:isUpdateOperationActive -and
             -not [bool]$script:discoveryScanRunning -and
-            -not [bool]$script:isDiscoveryDeploymentActive
+            -not [bool]$script:isDiscoveryDeploymentActive -and
+            -not [bool]$script:isSupersededOperationActive
         )
     } catch {
         $logoutButton.Enabled = $false
@@ -2655,7 +2801,7 @@ function Update-UpdateActionState {
         $checkedCount = @($candidates | Where-Object { $_ -and $_.Checked }).Count
         $state = Get-WinTunerUpdateActionState `
             -Connected ([bool]$script:isConnected) `
-            -IsBusy ([bool]$script:isUpdateOperationActive) `
+            -IsBusy ([bool]($script:isUpdateOperationActive -or $script:isSupersededOperationActive)) `
             -CandidateCount $candidates.Count `
             -CheckedCount $checkedCount `
             -IsScanRunning ([bool]$script:updateScanRunning) `
@@ -2680,6 +2826,7 @@ function Update-UpdateActionState {
     }
 
     Update-LogoutActionState
+    Update-SupersededActionState
 }
 
 function Clear-DiscoveryCandidateState {
@@ -2704,6 +2851,7 @@ function Update-DiscoveryActionState {
             -IsScanning ([bool]$script:discoveryScanRunning) `
             -CancelRequested ([bool]$script:cancelDiscoveryScan) `
             -IsDeploying ([bool]$script:isDiscoveryDeploymentActive) `
+            -IsOtherOperationActive ([bool]$script:isSupersededOperationActive) `
             -ResultCount $results.Count `
             -CheckedCount $checkedCount
 
@@ -2727,8 +2875,37 @@ function Update-DiscoveryActionState {
     }
 
     Update-LogoutActionState
+    Update-SupersededActionState
 }
 
+function Update-SupersededActionState {
+    try {
+        $results = @($script:supersededApps)
+        $selectedIndex = if ($supersededDropdown) { [int]$supersededDropdown.SelectedIndex } else { -1 }
+        $isBusy = (
+            [bool]$script:isSupersededOperationActive -or
+            [bool]$script:isUpdateOperationActive -or
+            [bool]$script:discoveryScanRunning -or
+            [bool]$script:isDiscoveryDeploymentActive
+        )
+        $state = Get-WinTunerSupersededActionState `
+            -Connected ([bool]$script:isConnected) `
+            -IsBusy $isBusy `
+            -ResultCount $results.Count `
+            -SelectedIndex $selectedIndex
+
+        $supersededSearchButton.Enabled = $state.CanSearch
+        $deleteSelectedAppButton.Enabled = $state.CanDeleteSelected
+        $removeOldAppsButton.Enabled = $state.CanDeleteAll
+    } catch {
+        if ($supersededSearchButton) { $supersededSearchButton.Enabled = $false }
+        if ($deleteSelectedAppButton) { $deleteSelectedAppButton.Enabled = $false }
+        if ($removeOldAppsButton) { $removeOldAppsButton.Enabled = $false }
+        Write-LogSafe "Superseded action state warning: $($_.Exception.Message)"
+    }
+
+    Update-LogoutActionState
+}
 # Cache for winget searches to speed up repeated searches
 # (initialized at script scope; see earlier declaration)
 
@@ -3366,102 +3543,131 @@ $updateAllButton.Add_Click({
 
 
 $removeOldAppsButton.Add_Click({
-  try {
-    $supersededApps = @(Get-WtWin32Apps -Superseded:$true -ErrorAction Stop)
-  } catch {
-    Update-Status "Error fetching superseded apps: $($_.Exception.Message)"
-    Write-Log "removeOldApps error: $($_.Exception.Message)"
+  $supersededApps = @($script:supersededApps)
+  if (-not $script:isConnected -or $script:isSupersededOperationActive) {
+    Update-SupersededActionState
     return
   }
-  try {
-    if ($supersededApps.Count -eq 0) { Update-Status "No Superseded Apps Found"; return }
-    $appNames = ($supersededApps | Select-Object -ExpandProperty Name) -join "`r`n"
-    $result = [System.Windows.Forms.MessageBox]::Show(
-      "The following outdated apps will be removed:`r`n$appNames",
-      "Confirmation",
-      [System.Windows.Forms.MessageBoxButtons]::YesNo,
-      [System.Windows.Forms.MessageBoxIcon]::Question
-    )
-    if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
-      $script:progressBar.Value = 0
-      $script:progressBar.Visible = $true
-      foreach ($app in @($supersededApps)) {
-        try {
-          Remove-WtWin32App -GraphId $app.GraphId -ErrorAction Stop
-          Update-Status ("Removed: {0}" -f $app.Name)
-        } catch {
-          if ($_.Exception.Message -match 'not found') {
-            Write-Log "App already removed or not found in Intune: $($app.Name)"
-            Update-Status "Already removed: $($app.Name)"
-          } else {
-            Update-Status ("Error removing {0}: {1}" -f $app.Name, $_.Exception.Message)
-            Write-Log "Error while removal: $($_.Exception.Message)"
-          }
-        }
-      }
-      $script:progressBar.Maximum = 100
-      $script:progressBar.Value = 100
-      Update-Status "Deleted all superseded Apps..."
-      try { $supersededSearchButton.PerformClick() } catch {}
-    } else {
-      Update-Status "Removal aborted."
-    }
-  } catch {
-    Write-Log "Error loading superseded apps: $($_.Exception.Message)"
-    Update-Status "Error: $($_.Exception.Message)"
-  }
-})
-
-# Handler: Search superseded apps
-$script:supersededApps = @()
-$supersededSearchButton.Add_Click({
-  try {
-    Update-Status "Search for superseded apps..."
-    $script:supersededApps = Get-WtWin32Apps -Superseded $true
-    $supersededDropdown.Items.Clear()
-    foreach ($app in @($script:supersededApps)) {
-      $name = $app.Name
-      $version = $app.CurrentVersion
-      $display = "$name — $version"
-      [void]$supersededDropdown.Items.Add($display)
-    }
-    if ($supersededDropdown.Items.Count -gt 0) { $supersededDropdown.SelectedIndex = 0 }
-    Update-Status ("Search completed: {0} superseded Apps found." -f $supersededDropdown.Items.Count)
-  } catch {
-    Write-Log "Superseded search error: $($_.Exception.Message)"
-    Update-Status ("Error while search: {0}" -f $_.Exception.Message)
-  }
-})
-
-
- 
-
-# Handler: Delete selected superseded app
-$deleteSelectedAppButton.Add_Click({
-  if (-not $script:supersededApps -or $supersededDropdown.SelectedIndex -lt 0) {
-    Update-Status "Please first select a superseded app from the dropdown."
+  if ($supersededApps.Count -eq 0) {
+    Update-Status 'No Superseded Apps Found'
+    Update-SupersededActionState
     return
   }
-  $app = $script:supersededApps[$supersededDropdown.SelectedIndex]
+
+  $appNames = ($supersededApps | Select-Object -ExpandProperty Name) -join [Environment]::NewLine
   $result = [System.Windows.Forms.MessageBox]::Show(
-    "Delete App '" + $app.Name + "'?",
-    "Confirmation",
+    "The following outdated apps will be removed:$([Environment]::NewLine)$appNames",
+    'Confirmation',
     [System.Windows.Forms.MessageBoxButtons]::YesNo,
     [System.Windows.Forms.MessageBoxIcon]::Question
   )
-  if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
-    try {
-      Remove-WtWin32App -GraphId $app.GraphId -ErrorAction Stop
-      Update-Status ("Deleted: {0}" -f $app.Name)
-      try { $supersededSearchButton.PerformClick() } catch {}
-    } catch {
-      Update-Status ("Error while removal: {0}" -f $_.Exception.Message)
-    }
-  } else {
-    Update-Status "Removal aborted."
+  if ($result -ne [System.Windows.Forms.DialogResult]::Yes) {
+    Update-Status 'Removal aborted.'
+    return
   }
+
+  $script:isSupersededOperationActive = $true
+  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+  $script:progressBar.Minimum = 0
+  $script:progressBar.Maximum = [Math]::Max(1, $supersededApps.Count)
+  $script:progressBar.Value = 0
+  $script:progressBar.Visible = $true
+  Update-UpdateActionState
+  Update-DiscoveryActionState
+  Update-SupersededActionState
+
+  $processedCount = 0
+  try {
+    foreach ($app in $supersededApps) {
+      try {
+        Remove-WtWin32App -GraphId $app.GraphId -ErrorAction Stop
+        Update-Status ("Removed: {0}" -f $app.Name)
+      } catch {
+        if ($_.Exception.Message -match 'not found') {
+          Write-Log "App already removed or not found in Intune: $($app.Name)"
+          Update-Status "Already removed: $($app.Name)"
+        } else {
+          Update-Status ("Error removing {0}: {1}" -f $app.Name, $_.Exception.Message)
+          Write-Log "Error while removal: $($_.Exception.Message)"
+        }
+      }
+      $processedCount++
+      $script:progressBar.Value = [Math]::Min($processedCount, $script:progressBar.Maximum)
+    }
+    Update-Status 'Deleted all superseded Apps.'
+  } catch {
+    Write-Log "Error removing superseded apps: $($_.Exception.Message)"
+    Update-Status "Error: $($_.Exception.Message)"
+  } finally {
+    $script:isSupersededOperationActive = $false
+    $script:progressBar.Value = 0
+    $script:progressBar.Visible = $false
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    Update-SupersededActionState
+  }
+
+  Start-WinTunerSupersededSearch
 })
 
+# Handler: Search superseded apps
+$supersededSearchButton.Add_Click({
+  Start-WinTunerSupersededSearch
+})
+
+$supersededDropdown.Add_SelectedIndexChanged({
+  Update-SupersededActionState
+})
+
+# Handler: Delete selected superseded app
+$deleteSelectedAppButton.Add_Click({
+  $selectedIndex = $supersededDropdown.SelectedIndex
+  if (
+    -not $script:isConnected -or
+    $script:isSupersededOperationActive -or
+    $selectedIndex -lt 0 -or
+    $selectedIndex -ge @($script:supersededApps).Count
+  ) {
+    Update-Status 'Please first select a superseded app from the dropdown.'
+    Update-SupersededActionState
+    return
+  }
+
+  $app = $script:supersededApps[$selectedIndex]
+  $result = [System.Windows.Forms.MessageBox]::Show(
+    "Delete App '$($app.Name)'?",
+    'Confirmation',
+    [System.Windows.Forms.MessageBoxButtons]::YesNo,
+    [System.Windows.Forms.MessageBoxIcon]::Question
+  )
+  if ($result -ne [System.Windows.Forms.DialogResult]::Yes) {
+    Update-Status 'Removal aborted.'
+    return
+  }
+
+  $script:isSupersededOperationActive = $true
+  Update-UpdateActionState
+  Update-DiscoveryActionState
+  Update-SupersededActionState
+  $removed = $false
+  try {
+    Remove-WtWin32App -GraphId $app.GraphId -ErrorAction Stop
+    Update-Status ("Deleted: {0}" -f $app.Name)
+    $removed = $true
+  } catch {
+    Update-Status ("Error while removal: {0}" -f $_.Exception.Message)
+    Write-Log "Error while removing superseded app '$($app.Name)': $($_.Exception.Message)"
+  } finally {
+    $script:isSupersededOperationActive = $false
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    Update-SupersededActionState
+  }
+
+  if ($removed) {
+    Start-WinTunerSupersededSearch
+  }
+})
 $logoutButton.Add_Click({
   try {
     Disconnect-WtWinTuner -ErrorAction Stop
@@ -4162,7 +4368,7 @@ if ($rememberCheckBox)      { $toolTip.SetToolTip($rememberCheckBox,      "Save 
 # tabUpdate
 if ($checkAllButton)        { $toolTip.SetToolTip($checkAllButton,        "Check all apps in the update list") }
 if ($uncheckAllButton)      { $toolTip.SetToolTip($uncheckAllButton,      "Uncheck all apps in the update list") }
-if ($supersededSearchButton){ $toolTip.SetToolTip($supersededSearchButton,"Search for outdated (superseded) app versions in Intune") }
+if ($supersededSearchButton){ $toolTip.SetToolTip($supersededSearchButton,"Search for outdated (superseded) app versions in Intune without blocking the window") }
 if ($deleteSelectedAppButton){ $toolTip.SetToolTip($deleteSelectedAppButton, "Delete the app currently selected in the dropdown from Intune") }
 if ($removeOldAppsButton)   { $toolTip.SetToolTip($removeOldAppsButton,   "Delete all superseded app versions from Intune at once") }
 
@@ -4202,5 +4408,14 @@ try {
         try { $activeScan.Timer.Dispose() } catch {}
         Remove-Item -LiteralPath $activeScan.ProgressPath, $activeScan.CancelPath -Force -ErrorAction SilentlyContinue
         $script:updateScanContext = $null
+    }
+
+    $activeSupersededSearch = $script:supersededSearchContext
+    if ($activeSupersededSearch) {
+        try { $activeSupersededSearch.Timer.Stop() } catch {}
+        try { $activeSupersededSearch.PowerShell.Stop() } catch {}
+        try { $activeSupersededSearch.PowerShell.Dispose() } catch {}
+        try { $activeSupersededSearch.Timer.Dispose() } catch {}
+        $script:supersededSearchContext = $null
     }
 }
