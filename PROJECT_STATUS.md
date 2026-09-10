@@ -342,6 +342,7 @@ Implemented on `Test`:
 - disabled tenant workflows while a WinGet package search owns the shared progress UI
 - added clean package-search runspace shutdown when the GUI closes
 - added automated WinGet package-search action-state tests
+- upgraded GitHub Actions checkout from v4 to v7 for the native Node.js 24 runtime
 
 Validation completed:
 
