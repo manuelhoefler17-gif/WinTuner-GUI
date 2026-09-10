@@ -4,7 +4,7 @@
 
 Development version: **0.10.15**
 
-Latest published stable release: **v0.10.14**
+Latest published stable release: **v0.10.15**
 
 Repository:
 `manuelhoefler17-gif/WinTuner-GUI`
@@ -278,7 +278,9 @@ Completed:
 
 ---
 
-## Current 0.10.15 Work
+## 0.10.15 Release Status
+
+Released: **2026-09-10**
 
 Completed:
 
@@ -306,6 +308,13 @@ Completed:
 - GitHub Actions checks for pull requests to main and pushes to Test
 - corrected settings and cache-path documentation
 - responsive main content, Updates, Discovery, and header controls without unused space or button overlap
+- finalized CHANGELOG.md for 0.10.15
+- validated 14 PowerShell files and 39 automated tests
+- created and published tag v0.10.15
+- published the GitHub release with WinTuner_GUI.ps1 and its SHA256 checksum
+- verified the published assets and checksum through an independent download
+- verified standalone dependency bootstrap directly from tag v0.10.15
+- verified self-update from v0.10.14 to v0.10.15, including checksum validation, backup, replacement, restart, and dependency bootstrap
 
 Next candidates:
 
@@ -353,10 +362,10 @@ For significant function changes, prefer replacing a complete known block rather
 
 Latest published stable release:
 
-**v0.10.14**
+**v0.10.15**
 
 Current development version:
 
 **0.10.15**
 
-0.10.14 was published on 2026-09-09.
+0.10.15 was published on 2026-09-10.
