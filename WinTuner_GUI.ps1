@@ -61,6 +61,7 @@ $script:appVersion  = "0.10.16"
 $requiredReleaseFiles = @(
   'Modules/WinTuner.Core.psm1',
   'Modules/WinTuner.PackageBuild.psm1',
+  'Modules/WinTuner.PackageUpload.psm1',
   'Modules/WinTuner.Winget.psm1',
   'Modules/WinTuner.UpdateScan.psm1',
   'Modules/WinTuner.Settings.psm1',
@@ -1616,7 +1617,7 @@ function Complete-WinTunerUpdateScan {
 }
 
 function Start-WinTunerUpdateScan {
-  if ($script:updateScanRunning -or $script:isUpdateOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive -or $script:isSupersededOperationActive -or $script:discoveryScanRunning -or $script:isDiscoveryDeploymentActive) { return }
+  if ($script:updateScanRunning -or $script:isUpdateOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive -or $script:isPackageUploadActive -or $script:isSupersededOperationActive -or $script:discoveryScanRunning -or $script:isDiscoveryDeploymentActive) { return }
 
   $scanModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.UpdateScan.psm1'
   if (-not (Test-Path -LiteralPath $scanModulePath -PathType Leaf)) {
@@ -1824,6 +1825,7 @@ function Start-WinTunerSupersededSearch {
     $script:isPackageSearchActive -or
     $script:isVersionLookupActive -or
     $script:isPackageBuildActive -or
+    $script:isPackageUploadActive -or
     $script:isUpdateOperationActive -or
     $script:discoveryScanRunning -or
     $script:isDiscoveryDeploymentActive
@@ -1992,6 +1994,7 @@ function Start-WinTunerPackageSearch {
     $script:isPackageSearchActive -or
     $script:isVersionLookupActive -or
     $script:isPackageBuildActive -or
+    $script:isPackageUploadActive -or
     $script:isUpdateOperationActive -or
     $script:discoveryScanRunning -or
     $script:isDiscoveryDeploymentActive -or
@@ -2168,6 +2171,7 @@ function Start-WinTunerVersionLookup {
     $script:isPackageSearchActive -or
     $script:isVersionLookupActive -or
     $script:isPackageBuildActive -or
+    $script:isPackageUploadActive -or
     $script:isUpdateOperationActive -or
     $script:discoveryScanRunning -or
     $script:isDiscoveryDeploymentActive -or
@@ -2363,6 +2367,7 @@ function Start-WinTunerPackageBuild {
     $script:isPackageSearchActive -or
     $script:isVersionLookupActive -or
     $script:isPackageBuildActive -or
+    $script:isPackageUploadActive -or
     $script:isUpdateOperationActive -or
     $script:discoveryScanRunning -or
     $script:isDiscoveryDeploymentActive -or
@@ -2439,6 +2444,199 @@ function Start-WinTunerPackageBuild {
     $script:progressBar.Visible = $false
     Update-Status "Package creation failed to start: $($_.Exception.Message)"
     Write-Log "Background package build failed to start for '$PackageId': $($_.Exception.Message)"
+    Update-PackageActionState
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    Update-SupersededActionState
+    Update-PackageSearchActionState
+  }
+}
+function Complete-WinTunerPackageUpload {
+  param([Parameter(Mandatory=$true)][object]$Context)
+
+  $uploadResult = $null
+  $completionError = $null
+  try {
+    $output = @($Context.PowerShell.EndInvoke($Context.AsyncResult))
+    if ($output.Count -eq 0) {
+      if ($Context.PowerShell.Streams.Error.Count -gt 0) {
+        throw $Context.PowerShell.Streams.Error[0].Exception
+      }
+      throw 'The package upload returned no result.'
+    }
+
+    $json = [string]$output[$output.Count - 1]
+    $uploadResult = $json | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    $completionError = $_.Exception.Message
+  } finally {
+    try { $Context.Timer.Stop() } catch {}
+    try { $Context.Timer.Dispose() } catch {}
+    try { $Context.PowerShell.Dispose() } catch {}
+    if ($script:packageUploadContext -eq $Context) {
+      $script:packageUploadContext = $null
+    }
+    try {
+      $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+      $script:progressBar.Value = 0
+      $script:progressBar.Visible = $false
+    } catch {}
+  }
+
+  $script:isPackageUploadActive = $false
+  if ($completionError -or -not [bool]$uploadResult.Succeeded) {
+    $reasonCode = if ($completionError) { 'RunspaceError' } elseif ([string]::IsNullOrWhiteSpace([string]$uploadResult.ReasonCode)) { 'UploadFailed' } else { [string]$uploadResult.ReasonCode }
+    $errorMessage = if ($completionError) { $completionError } elseif ([string]::IsNullOrWhiteSpace([string]$uploadResult.ErrorMessage)) { 'Unknown upload error.' } else { [string]$uploadResult.ErrorMessage }
+
+    if ($reasonCode -ne 'DeploymentFailed' -and $script:builtVersions.ContainsKey($Context.PackageId)) {
+      $script:builtVersions.Remove($Context.PackageId)
+    }
+
+    Update-Status 'Upload failed: See log for details'
+    Write-Log "Background upload failed for '$($Context.PackageId)' version $($Context.Version) ($reasonCode): $errorMessage"
+    Update-PackageActionState
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    Update-SupersededActionState
+    Update-PackageSearchActionState
+
+    $errorDetails = "Upload of $($Context.PackageId) (v$($Context.Version)) failed.`n`n"
+    $errorDetails += "Error: $errorMessage`n`n"
+    $errorDetails += "Possible solutions:`n"
+    $errorDetails += "1. Check if the app already exists in Intune (delete and retry)`n"
+    $errorDetails += "2. Update WinTuner module: Update-Module WinTuner`n"
+    $errorDetails += "3. Try a different app to test`n"
+    $errorDetails += "4. Check Intune service health`n"
+    $errorDetails += "`nActivity logged to WinTuner_GUI.log"
+    [void][System.Windows.Forms.MessageBox]::Show(
+      $errorDetails,
+      'Upload Failed',
+      [System.Windows.Forms.MessageBoxButtons]::OK,
+      [System.Windows.Forms.MessageBoxIcon]::Error
+    )
+    return
+  }
+
+  Update-Status 'Upload completed successfully'
+  Write-Log "Background upload completed for '$($Context.PackageId)' version $($Context.Version) -> $($uploadResult.IntuneWinPath)"
+  $appSearchBox.Text = ''
+  $dropdown.Items.Clear()
+  $script:packageMap.Clear()
+  if ($script:selectedPackageVersions.ContainsKey($Context.PackageId)) {
+    $script:selectedPackageVersions.Remove($Context.PackageId)
+    Write-Log "Cleared cached version for $($Context.PackageId) after upload"
+  }
+
+  Update-PackageActionState
+  Update-UpdateActionState
+  Update-DiscoveryActionState
+  Update-SupersededActionState
+  Update-PackageSearchActionState
+}
+
+function Start-WinTunerPackageUpload {
+  param(
+    [Parameter(Mandatory=$true)][string]$PackageId,
+    [Parameter(Mandatory=$true)][string]$Version,
+    [Parameter(Mandatory=$true)][string]$RootPackageFolder
+  )
+
+  if (
+    -not $script:isConnected -or
+    $script:isPackageSearchActive -or
+    $script:isVersionLookupActive -or
+    $script:isPackageBuildActive -or
+    $script:isPackageUploadActive -or
+    $script:isUpdateOperationActive -or
+    $script:discoveryScanRunning -or
+    $script:isDiscoveryDeploymentActive -or
+    $script:isSupersededOperationActive
+  ) {
+    Update-PackageActionState
+    return
+  }
+
+  $artifactValidation = Test-WinTunerPackageArtifact `
+    -RootPackageFolder $RootPackageFolder `
+    -PackageId $PackageId `
+    -Version $Version
+  if (-not $artifactValidation.IsValid) {
+    Update-Status "Cannot upload: $($artifactValidation.Reason)"
+    Write-Log "Upload blocked for $PackageId version $Version ($($artifactValidation.ReasonCode)): $($artifactValidation.Reason)"
+    if (
+      $script:builtVersions.ContainsKey($PackageId) -and
+      ([string]$script:builtVersions[$PackageId] -eq $Version)
+    ) {
+      $script:builtVersions.Remove($PackageId)
+    }
+    Update-PackageActionState
+    return
+  }
+
+  $uploadModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.PackageUpload.psm1'
+  if (-not (Test-Path -LiteralPath $uploadModulePath -PathType Leaf)) {
+    Update-Status 'Upload failed: package upload module is missing.'
+    Write-Log "Package upload module missing: $uploadModulePath"
+    return
+  }
+
+  $script:isPackageUploadActive = $true
+  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+  $script:progressBar.MarqueeAnimationSpeed = 30
+  $script:progressBar.Visible = $true
+  Update-Status "Uploading $PackageId (v$Version) to tenant..."
+  Write-Log "Starting background upload for '$PackageId' version $Version after click-time validation -> $($artifactValidation.IntuneWinPath)"
+  Update-PackageActionState
+  Update-UpdateActionState
+  Update-DiscoveryActionState
+  Update-SupersededActionState
+  Update-PackageSearchActionState
+
+  $uploadScript = @(
+    'param($RepositoryRoot, $PackageId, $Version, $RootPackageFolder)'
+    '$ErrorActionPreference = ''Stop'''
+    '$ProgressPreference = ''SilentlyContinue'''
+    'Import-Module WinTuner -ErrorAction Stop'
+    'Import-Module (Join-Path $RepositoryRoot ''Modules\WinTuner.Core.psm1'') -Force -ErrorAction Stop'
+    'Import-Module (Join-Path $RepositoryRoot ''Modules\WinTuner.PackageUpload.psm1'') -Force -ErrorAction Stop'
+    '$result = Invoke-WinTunerPackageUpload -PackageId $PackageId -Version $Version -RootPackageFolder $RootPackageFolder'
+    '$result | ConvertTo-Json -Depth 4 -Compress'
+  ) -join [Environment]::NewLine
+
+  $powerShell = [System.Management.Automation.PowerShell]::Create()
+  $null = $powerShell.AddScript($uploadScript).AddArgument($PSScriptRoot).AddArgument($PackageId).AddArgument($Version).AddArgument($RootPackageFolder)
+  $timer = New-Object System.Windows.Forms.Timer
+  $timer.Interval = 150
+  $context = [pscustomobject]@{
+    PowerShell       = $powerShell
+    AsyncResult      = $null
+    Timer            = $timer
+    PackageId        = $PackageId
+    Version          = $Version
+    RootPackageFolder = $RootPackageFolder
+  }
+  $script:packageUploadContext = $context
+
+  $timer.Add_Tick({
+    $currentContext = $script:packageUploadContext
+    if ($currentContext -and $currentContext.AsyncResult -and $currentContext.AsyncResult.IsCompleted) {
+      Complete-WinTunerPackageUpload -Context $currentContext
+    }
+  })
+
+  try {
+    $context.AsyncResult = $powerShell.BeginInvoke()
+    $timer.Start()
+  } catch {
+    try { $timer.Dispose() } catch {}
+    try { $powerShell.Dispose() } catch {}
+    $script:packageUploadContext = $null
+    $script:isPackageUploadActive = $false
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $script:progressBar.Value = 0
+    $script:progressBar.Visible = $false
+    Update-Status "Upload failed to start: $($_.Exception.Message)"
+    Write-Log "Background upload failed to start for '$PackageId': $($_.Exception.Message)"
     Update-PackageActionState
     Update-UpdateActionState
     Update-DiscoveryActionState
@@ -3234,6 +3432,8 @@ $script:isVersionLookupActive = $false
 $script:versionLookupContext = $null
 $script:isPackageBuildActive = $false
 $script:packageBuildContext = $null
+$script:isPackageUploadActive = $false
+$script:packageUploadContext = $null
 
 # Optional: user-chosen versions per PackageID
 $script:selectedPackageVersions = @{}
@@ -3282,8 +3482,9 @@ function Resolve-WinTunerPackageRootForOperation {
 }
 function Update-PackageActionState {
     $uploadButton.Enabled = $false
+    $uploadButton.Text = if ($script:isPackageUploadActive) { 'Uploading...' } else { 'Upload to Tenant' }
 
-    if ($script:isPackageBuildActive) {
+    if ($script:isPackageBuildActive -or $script:isPackageUploadActive) {
         return
     }
 
@@ -3356,6 +3557,7 @@ function Update-PackageSearchActionState {
             [bool]$script:isPackageSearchActive -or
             [bool]$script:isVersionLookupActive -or
             [bool]$script:isPackageBuildActive -or
+            [bool]$script:isPackageUploadActive -or
             [bool]$script:isUpdateOperationActive -or
             [bool]$script:discoveryScanRunning -or
             [bool]$script:isDiscoveryDeploymentActive -or
@@ -3373,8 +3575,8 @@ function Update-PackageSearchActionState {
         $versionsButton.Enabled = $state.CanSelectVersion
         $createButton.Text = if ($script:isPackageBuildActive) { 'Creating...' } else { 'Create package' }
         $createButton.Enabled = $state.CanCreatePackage
-        $pathBox.Enabled = -not [bool]$script:isPackageBuildActive
-        $browseButton.Enabled = -not [bool]$script:isPackageBuildActive
+        $pathBox.Enabled = -not [bool]($script:isPackageBuildActive -or $script:isPackageUploadActive)
+        $browseButton.Enabled = -not [bool]($script:isPackageBuildActive -or $script:isPackageUploadActive)
     } catch {
         if ($searchButton) { $searchButton.Enabled = $false }
         if ($appSearchBox) { $appSearchBox.Enabled = $false }
@@ -3392,7 +3594,8 @@ function Update-LogoutActionState {
             -not [bool]$script:discoveryScanRunning -and
             -not [bool]$script:isDiscoveryDeploymentActive -and
             -not [bool]$script:isSupersededOperationActive -and
-            -not [bool]$script:isPackageBuildActive
+            -not [bool]$script:isPackageBuildActive -and
+            -not [bool]$script:isPackageUploadActive
         )
     } catch {
         $logoutButton.Enabled = $false
@@ -3406,7 +3609,7 @@ function Update-UpdateActionState {
         $checkedCount = @($candidates | Where-Object { $_ -and $_.Checked }).Count
         $state = Get-WinTunerUpdateActionState `
             -Connected ([bool]$script:isConnected) `
-            -IsBusy ([bool]($script:isUpdateOperationActive -or $script:isSupersededOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive)) `
+            -IsBusy ([bool]($script:isUpdateOperationActive -or $script:isSupersededOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive -or $script:isPackageUploadActive)) `
             -CandidateCount $candidates.Count `
             -CheckedCount $checkedCount `
             -IsScanRunning ([bool]$script:updateScanRunning) `
@@ -3457,7 +3660,7 @@ function Update-DiscoveryActionState {
             -IsScanning ([bool]$script:discoveryScanRunning) `
             -CancelRequested ([bool]$script:cancelDiscoveryScan) `
             -IsDeploying ([bool]$script:isDiscoveryDeploymentActive) `
-            -IsOtherOperationActive ([bool]($script:isSupersededOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive)) `
+            -IsOtherOperationActive ([bool]($script:isSupersededOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive -or $script:isPackageUploadActive)) `
             -ResultCount $results.Count `
             -CheckedCount $checkedCount
 
@@ -3496,7 +3699,8 @@ function Update-SupersededActionState {
             [bool]$script:isDiscoveryDeploymentActive -or
             [bool]$script:isPackageSearchActive -or
             [bool]$script:isVersionLookupActive -or
-            [bool]$script:isPackageBuildActive
+            [bool]$script:isPackageBuildActive -or
+            [bool]$script:isPackageUploadActive
         )
         $state = Get-WinTunerSupersededActionState `
             -Connected ([bool]$script:isConnected) `
@@ -3744,6 +3948,7 @@ $createButton.Add_Click({
     $script:isPackageSearchActive -or
     $script:isVersionLookupActive -or
     $script:isPackageBuildActive -or
+    $script:isPackageUploadActive -or
     $script:isUpdateOperationActive -or
     $script:discoveryScanRunning -or
     $script:isDiscoveryDeploymentActive -or
@@ -3795,107 +4000,48 @@ $createButton.Add_Click({
     -LatestVersion ([string]$package.Version)
 })
 $uploadButton.Add_Click({
-    if ($script:isPackageBuildActive) {
+    if (
+        $script:isPackageSearchActive -or
+        $script:isVersionLookupActive -or
+        $script:isPackageBuildActive -or
+        $script:isPackageUploadActive -or
+        $script:isUpdateOperationActive -or
+        $script:discoveryScanRunning -or
+        $script:isDiscoveryDeploymentActive -or
+        $script:isSupersededOperationActive
+    ) {
         Update-PackageActionState
         return
     }
     if (-not $script:isConnected) {
         [void][System.Windows.Forms.MessageBox]::Show(
-            "Please login to your tenant first.",
-            "Information",
+            'Please login to your tenant first.',
+            'Information',
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Information
         )
         return
     }
-    if (-not $dropdown.SelectedItem) { Update-Status "Please select a package."; return }
-    $appName  = $dropdown.SelectedItem
-    $package  = $script:packageMap[$appName]
-    if (-not $package) { Update-Status "Selected item is invalid."; return }
-    $packageID = $package.PackageID
+    if (-not $dropdown.SelectedItem) { Update-Status 'Please select a package.'; return }
+    $appName = [string]$dropdown.SelectedItem
+    $package = $script:packageMap[$appName]
+    if (-not $package) { Update-Status 'Selected item is invalid.'; return }
+    $packageID = [string]$package.PackageID
     $version = if ($script:selectedPackageVersions.ContainsKey($packageID)) {
         [string]$script:selectedPackageVersions[$packageID]
     } else {
         [string]$package.Version
     }
-    if ([string]::IsNullOrWhiteSpace($packageID)) { 
-        try { $packageID = ($appName -split '—')[-1].Trim() } catch { } 
-    }
-    if ([string]::IsNullOrWhiteSpace($version))   { Update-Status "Version could not be determined."; return }
-    if ([string]::IsNullOrWhiteSpace($packageID)) { Update-Status "Cannot upload: failed to resolve PackageId."; return }
+    if ([string]::IsNullOrWhiteSpace($version)) { Update-Status 'Version could not be determined.'; return }
+    if ([string]::IsNullOrWhiteSpace($packageID)) { Update-Status 'Cannot upload: failed to resolve PackageId.'; return }
     $folder = Resolve-WinTunerPackageRootForOperation -Path $pathBox.Text
     if ([string]::IsNullOrWhiteSpace($folder)) { return }
-    $artifactValidation = Test-WinTunerPackageArtifact `
-        -RootPackageFolder $folder `
+
+    Start-WinTunerPackageUpload `
         -PackageId $packageID `
-        -Version $version
-
-    if (-not $artifactValidation.IsValid) {
-        Update-Status "Cannot upload: $($artifactValidation.Reason)"
-        Write-Log "Upload blocked for $packageID version $version ($($artifactValidation.ReasonCode)): $($artifactValidation.Reason)"
-        if (
-            $script:builtVersions.ContainsKey($packageID) -and
-            ([string]$script:builtVersions[$packageID] -eq [string]$version)
-        ) {
-            $script:builtVersions.Remove($packageID)
-        }
-        $uploadButton.Enabled = $false
-        return
-    }
-
-    try {
-        $uploadButton.Enabled = $false
-        $createButton.Enabled = $false
-        
-        Update-Status "Uploading $packageID (v$version) to tenant..."
-        $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-        $script:progressBar.MarqueeAnimationSpeed = 30
-        $script:progressBar.Visible = $true
-        [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-        
-        Deploy-WtWin32App -PackageId $packageID -Version $version -RootPackageFolder $folder -ErrorAction Stop
-        
-        Update-Status "Upload completed successfully"
-        $uploadButton.Enabled = $false
-        $appSearchBox.Text = ""
-        $dropdown.Items.Clear()
-        
-        # Clear version cache for this package so updates will use latest version
-        if ($script:selectedPackageVersions.ContainsKey($packageID)) {
-            $script:selectedPackageVersions.Remove($packageID)
-            Write-Log "Cleared cached version for $packageID after upload"
-        }
-    } catch {
-        $errorMsg = $_.Exception.Message
-        Update-Status "Upload failed: See log for details"
-        Write-Log "Upload error: $errorMsg"
-        Update-PackageActionState
-        
-        # Show detailed error dialog
-        $errorDetails = "Upload of $packageID (v$version) failed.`n`n"
-        $errorDetails += "Error: $errorMsg`n`n"
-        $errorDetails += "Possible solutions:`n"
-        $errorDetails += "1. Check if app already exists in Intune (delete and retry)`n"
-        $errorDetails += "2. Update WinTuner module: Update-Module WinTuner`n"
-        $errorDetails += "3. Try a different app to test`n"
-        $errorDetails += "4. Check Intune service health`n"
-        $errorDetails += "`nActivity logged to WinTuner_GUI.log"
-        
-        [System.Windows.Forms.MessageBox]::Show(
-            $errorDetails,
-            "Upload Failed",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Error
-        )
-    } finally {
-        $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-        $script:progressBar.Visible = $false
-        $script:progressBar.Value = 0
-        $createButton.Enabled = $true
-    }
+        -Version $version `
+        -RootPackageFolder $folder
 })
-
-
 # ----------------------------------------------
 # Check All / Uncheck All Buttons
 # ----------------------------------------------
@@ -4891,7 +5037,7 @@ $toolTip.SetToolTip($searchButton,          "Search the WinGet repository withou
 $toolTip.SetToolTip($versionsButton,        "Load and select a specific version without blocking the window")
 $toolTip.SetToolTip($browseButton,          "Choose the local folder to store package files")
 if ($createButton)          { $toolTip.SetToolTip($createButton,          "Create the .wtpackage file locally") }
-if ($uploadButton)          { $toolTip.SetToolTip($uploadButton,          "Upload and deploy the package to Microsoft Intune") }
+if ($uploadButton)          { $toolTip.SetToolTip($uploadButton,          "Upload and deploy the package to Microsoft Intune without blocking the window") }
 if ($updateSearchButton)    { $toolTip.SetToolTip($updateSearchButton,    "Scan Intune Win32 apps for WinGet updates; click again to cancel an active scan") }
 if ($updateAllButton)       { $toolTip.SetToolTip($updateAllButton,       "Update all apps with available updates") }
 if ($updateSelectedButton)  { $toolTip.SetToolTip($updateSelectedButton,  "Update only the checked apps in the list") }
@@ -4983,5 +5129,14 @@ try {
         try { $activePackageBuild.PowerShell.Dispose() } catch {}
         try { $activePackageBuild.Timer.Dispose() } catch {}
         $script:packageBuildContext = $null
+    }
+
+    $activePackageUpload = $script:packageUploadContext
+    if ($activePackageUpload) {
+        try { $activePackageUpload.Timer.Stop() } catch {}
+        try { $activePackageUpload.PowerShell.Stop() } catch {}
+        try { $activePackageUpload.PowerShell.Dispose() } catch {}
+        try { $activePackageUpload.Timer.Dispose() } catch {}
+        $script:packageUploadContext = $null
     }
 }
