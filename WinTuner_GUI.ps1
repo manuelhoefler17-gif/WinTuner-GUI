@@ -60,6 +60,7 @@ $script:appVersion  = "0.10.16"
 # Bootstrap release dependencies and keep them synchronized with the GUI release.
 $requiredReleaseFiles = @(
   'Modules/WinTuner.Core.psm1',
+  'Modules/WinTuner.PackageBuild.psm1',
   'Modules/WinTuner.Winget.psm1',
   'Modules/WinTuner.UpdateScan.psm1',
   'Modules/WinTuner.Settings.psm1',
@@ -1615,7 +1616,7 @@ function Complete-WinTunerUpdateScan {
 }
 
 function Start-WinTunerUpdateScan {
-  if ($script:updateScanRunning -or $script:isUpdateOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isSupersededOperationActive -or $script:discoveryScanRunning -or $script:isDiscoveryDeploymentActive) { return }
+  if ($script:updateScanRunning -or $script:isUpdateOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive -or $script:isSupersededOperationActive -or $script:discoveryScanRunning -or $script:isDiscoveryDeploymentActive) { return }
 
   $scanModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.UpdateScan.psm1'
   if (-not (Test-Path -LiteralPath $scanModulePath -PathType Leaf)) {
@@ -1822,6 +1823,7 @@ function Start-WinTunerSupersededSearch {
     $script:isSupersededOperationActive -or
     $script:isPackageSearchActive -or
     $script:isVersionLookupActive -or
+    $script:isPackageBuildActive -or
     $script:isUpdateOperationActive -or
     $script:discoveryScanRunning -or
     $script:isDiscoveryDeploymentActive
@@ -1989,6 +1991,7 @@ function Start-WinTunerPackageSearch {
   if (
     $script:isPackageSearchActive -or
     $script:isVersionLookupActive -or
+    $script:isPackageBuildActive -or
     $script:isUpdateOperationActive -or
     $script:discoveryScanRunning -or
     $script:isDiscoveryDeploymentActive -or
@@ -2164,6 +2167,7 @@ function Start-WinTunerVersionLookup {
   if (
     $script:isPackageSearchActive -or
     $script:isVersionLookupActive -or
+    $script:isPackageBuildActive -or
     $script:isUpdateOperationActive -or
     $script:discoveryScanRunning -or
     $script:isDiscoveryDeploymentActive -or
@@ -2226,6 +2230,215 @@ function Start-WinTunerVersionLookup {
     $script:progressBar.Visible = $false
     Update-Status "Version lookup failed to start: $($_.Exception.Message)"
     Write-Log "WinGet version lookup failed to start for '$packageId': $($_.Exception.Message)"
+    Update-PackageActionState
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    Update-SupersededActionState
+    Update-PackageSearchActionState
+  }
+}
+function Complete-WinTunerPackageBuild {
+  param([Parameter(Mandatory=$true)][object]$Context)
+
+  $buildResult = $null
+  $completionError = $null
+  try {
+    $output = @($Context.PowerShell.EndInvoke($Context.AsyncResult))
+    if ($output.Count -eq 0) {
+      if ($Context.PowerShell.Streams.Error.Count -gt 0) {
+        throw $Context.PowerShell.Streams.Error[0].Exception
+      }
+      throw 'The package build returned no result.'
+    }
+
+    $json = [string]$output[$output.Count - 1]
+    $buildResult = $json | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    $completionError = $_.Exception.Message
+  } finally {
+    try { $Context.Timer.Stop() } catch {}
+    try { $Context.Timer.Dispose() } catch {}
+    try { $Context.PowerShell.Dispose() } catch {}
+    if ($script:packageBuildContext -eq $Context) {
+      $script:packageBuildContext = $null
+    }
+    try {
+      $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+      $script:progressBar.Value = 0
+      $script:progressBar.Visible = $false
+    } catch {}
+  }
+
+  if ($completionError) {
+    $script:isPackageBuildActive = $false
+    Update-Status "Package creation failed: $completionError"
+    Write-Log "Background package build failed for '$($Context.PackageId)': $completionError"
+    Update-PackageActionState
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    Update-SupersededActionState
+    Update-PackageSearchActionState
+    return
+  }
+
+  if ([string]$buildResult.ChoiceRequired -eq 'HashMismatch') {
+    Write-Log "Package build for '$($Context.PackageId)' requires a hash-mismatch decision."
+    $answer = [System.Windows.Forms.MessageBox]::Show(
+      'Hash mismatch detected. Retry download? Click Yes to retry, No to use the previous available version, or Cancel to abort.',
+      'Hash mismatch',
+      [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+      [System.Windows.Forms.MessageBoxIcon]::Warning,
+      [System.Windows.Forms.MessageBoxDefaultButton]::Button1
+    )
+
+    $script:isPackageBuildActive = $false
+    if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
+      Start-WinTunerPackageBuild -PackageId $Context.PackageId -PackageFolder $Context.PackageFolder -DesiredVersion $Context.DesiredVersion -LatestVersion $Context.LatestVersion -Mode RetrySame
+      return
+    }
+    if ($answer -eq [System.Windows.Forms.DialogResult]::No) {
+      Start-WinTunerPackageBuild -PackageId $Context.PackageId -PackageFolder $Context.PackageFolder -DesiredVersion $Context.DesiredVersion -LatestVersion $Context.LatestVersion -Mode Previous
+      return
+    }
+
+    Update-Status 'Package creation canceled.'
+    Write-Log "Package creation canceled after a hash mismatch for '$($Context.PackageId)'."
+    Update-PackageActionState
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    Update-SupersededActionState
+    Update-PackageSearchActionState
+    return
+  }
+
+  $script:isPackageBuildActive = $false
+  if (-not [bool]$buildResult.Succeeded) {
+    $message = if ([string]::IsNullOrWhiteSpace([string]$buildResult.ErrorMessage)) { 'Unknown package creation error.' } else { [string]$buildResult.ErrorMessage }
+    Update-Status "Package creation failed: $message"
+    Write-Log "Package creation failed for '$($Context.PackageId)': $message"
+    Update-PackageActionState
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    Update-SupersededActionState
+    Update-PackageSearchActionState
+    return
+  }
+
+  $effectiveVersion = [string]$buildResult.EffectiveVersion
+  if ([string]::IsNullOrWhiteSpace($effectiveVersion)) {
+    $effectiveVersion = [string]$Context.LatestVersion
+  }
+  $createdArtifact = Test-WinTunerPackageArtifact `
+    -RootPackageFolder $Context.PackageFolder `
+    -PackageId $Context.PackageId `
+    -Version $effectiveVersion
+
+  if ($createdArtifact.IsValid) {
+    $script:builtVersions[$Context.PackageId] = $effectiveVersion
+    Update-Status ("Package created successfully (version {0})" -f $effectiveVersion)
+    Write-Log "Background package build validated for '$($Context.PackageId)' version $effectiveVersion -> $($createdArtifact.IntuneWinPath)"
+  } else {
+    $script:builtVersions.Remove($Context.PackageId)
+    Update-Status 'Package creation completed, but artifact validation failed.'
+    Write-Log "Package build validation failed for '$($Context.PackageId)' version $effectiveVersion ($($createdArtifact.ReasonCode)): $($createdArtifact.Reason)"
+  }
+
+  Update-PackageActionState
+  Update-UpdateActionState
+  Update-DiscoveryActionState
+  Update-SupersededActionState
+  Update-PackageSearchActionState
+}
+
+function Start-WinTunerPackageBuild {
+  param(
+    [Parameter(Mandatory=$true)][string]$PackageId,
+    [Parameter(Mandatory=$true)][string]$PackageFolder,
+    [AllowNull()][string]$DesiredVersion,
+    [AllowNull()][string]$LatestVersion,
+    [ValidateSet('Automatic', 'RetrySame', 'Previous')][string]$Mode = 'Automatic'
+  )
+
+  if (
+    $script:isPackageSearchActive -or
+    $script:isVersionLookupActive -or
+    $script:isPackageBuildActive -or
+    $script:isUpdateOperationActive -or
+    $script:discoveryScanRunning -or
+    $script:isDiscoveryDeploymentActive -or
+    $script:isSupersededOperationActive
+  ) {
+    Update-PackageSearchActionState
+    return
+  }
+
+  $buildModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.PackageBuild.psm1'
+  if (-not (Test-Path -LiteralPath $buildModulePath -PathType Leaf)) {
+    Update-Status 'Package creation failed: package build module is missing.'
+    Write-Log "Package build module missing: $buildModulePath"
+    return
+  }
+
+  $script:isPackageBuildActive = $true
+  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+  $script:progressBar.MarqueeAnimationSpeed = 30
+  $script:progressBar.Visible = $true
+  $operationText = if ($Mode -eq 'RetrySame') { 'Retrying package creation' } elseif ($Mode -eq 'Previous') { 'Creating previous package version' } else { 'Creating package' }
+  Update-Status "$operationText for $PackageId..."
+  Write-Log "Starting background package build for '$PackageId' (mode: $Mode)."
+  Update-UpdateActionState
+  Update-DiscoveryActionState
+  Update-SupersededActionState
+  Update-PackageSearchActionState
+
+  $buildScript = @(
+    'param($RepositoryRoot, $PackageId, $PackageFolder, $DesiredVersion, $LatestVersion, $Mode)'
+    '$ErrorActionPreference = ''Stop'''
+    '$ProgressPreference = ''SilentlyContinue'''
+    'Import-Module WinTuner -ErrorAction Stop'
+    'Import-Module (Join-Path $RepositoryRoot ''Modules\WinTuner.Core.psm1'') -Force -ErrorAction Stop'
+    'Import-Module (Join-Path $RepositoryRoot ''Modules\WinTuner.Winget.psm1'') -Force -ErrorAction Stop'
+    'Import-Module (Join-Path $RepositoryRoot ''Modules\WinTuner.PackageBuild.psm1'') -Force -ErrorAction Stop'
+    '$result = Invoke-WinTunerPackageBuild -PackageId $PackageId -PackageFolder $PackageFolder -DesiredVersion $DesiredVersion -LatestVersion $LatestVersion -Mode $Mode'
+    '$result | ConvertTo-Json -Depth 4 -Compress'
+  ) -join [Environment]::NewLine
+
+  $powerShell = [System.Management.Automation.PowerShell]::Create()
+  $null = $powerShell.AddScript($buildScript).AddArgument($PSScriptRoot).AddArgument($PackageId).AddArgument($PackageFolder).AddArgument($DesiredVersion).AddArgument($LatestVersion).AddArgument($Mode)
+  $timer = New-Object System.Windows.Forms.Timer
+  $timer.Interval = 150
+  $context = [pscustomobject]@{
+    PowerShell     = $powerShell
+    AsyncResult    = $null
+    Timer          = $timer
+    PackageId      = $PackageId
+    PackageFolder  = $PackageFolder
+    DesiredVersion = $DesiredVersion
+    LatestVersion  = $LatestVersion
+    Mode           = $Mode
+  }
+  $script:packageBuildContext = $context
+
+  $timer.Add_Tick({
+    $currentContext = $script:packageBuildContext
+    if ($currentContext -and $currentContext.AsyncResult -and $currentContext.AsyncResult.IsCompleted) {
+      Complete-WinTunerPackageBuild -Context $currentContext
+    }
+  })
+
+  try {
+    $context.AsyncResult = $powerShell.BeginInvoke()
+    $timer.Start()
+  } catch {
+    try { $timer.Dispose() } catch {}
+    try { $powerShell.Dispose() } catch {}
+    $script:packageBuildContext = $null
+    $script:isPackageBuildActive = $false
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $script:progressBar.Value = 0
+    $script:progressBar.Visible = $false
+    Update-Status "Package creation failed to start: $($_.Exception.Message)"
+    Write-Log "Background package build failed to start for '$PackageId': $($_.Exception.Message)"
     Update-PackageActionState
     Update-UpdateActionState
     Update-DiscoveryActionState
@@ -3019,6 +3232,8 @@ $script:isPackageSearchActive = $false
 $script:packageSearchContext = $null
 $script:isVersionLookupActive = $false
 $script:versionLookupContext = $null
+$script:isPackageBuildActive = $false
+$script:packageBuildContext = $null
 
 # Optional: user-chosen versions per PackageID
 $script:selectedPackageVersions = @{}
@@ -3067,6 +3282,10 @@ function Resolve-WinTunerPackageRootForOperation {
 }
 function Update-PackageActionState {
     $uploadButton.Enabled = $false
+
+    if ($script:isPackageBuildActive) {
+        return
+    }
 
     try {
         if (-not $dropdown.SelectedItem) {
@@ -3136,6 +3355,7 @@ function Update-PackageSearchActionState {
         $isBusy = (
             [bool]$script:isPackageSearchActive -or
             [bool]$script:isVersionLookupActive -or
+            [bool]$script:isPackageBuildActive -or
             [bool]$script:isUpdateOperationActive -or
             [bool]$script:discoveryScanRunning -or
             [bool]$script:isDiscoveryDeploymentActive -or
@@ -3151,7 +3371,10 @@ function Update-PackageSearchActionState {
         $dropdown.Enabled = $state.CanSelectResult
         $versionsButton.Text = if ($script:isVersionLookupActive) { 'Loading...' } else { 'Versions...' }
         $versionsButton.Enabled = $state.CanSelectVersion
+        $createButton.Text = if ($script:isPackageBuildActive) { 'Creating...' } else { 'Create package' }
         $createButton.Enabled = $state.CanCreatePackage
+        $pathBox.Enabled = -not [bool]$script:isPackageBuildActive
+        $browseButton.Enabled = -not [bool]$script:isPackageBuildActive
     } catch {
         if ($searchButton) { $searchButton.Enabled = $false }
         if ($appSearchBox) { $appSearchBox.Enabled = $false }
@@ -3168,7 +3391,8 @@ function Update-LogoutActionState {
             -not [bool]$script:isUpdateOperationActive -and
             -not [bool]$script:discoveryScanRunning -and
             -not [bool]$script:isDiscoveryDeploymentActive -and
-            -not [bool]$script:isSupersededOperationActive
+            -not [bool]$script:isSupersededOperationActive -and
+            -not [bool]$script:isPackageBuildActive
         )
     } catch {
         $logoutButton.Enabled = $false
@@ -3182,7 +3406,7 @@ function Update-UpdateActionState {
         $checkedCount = @($candidates | Where-Object { $_ -and $_.Checked }).Count
         $state = Get-WinTunerUpdateActionState `
             -Connected ([bool]$script:isConnected) `
-            -IsBusy ([bool]($script:isUpdateOperationActive -or $script:isSupersededOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive)) `
+            -IsBusy ([bool]($script:isUpdateOperationActive -or $script:isSupersededOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive)) `
             -CandidateCount $candidates.Count `
             -CheckedCount $checkedCount `
             -IsScanRunning ([bool]$script:updateScanRunning) `
@@ -3233,7 +3457,7 @@ function Update-DiscoveryActionState {
             -IsScanning ([bool]$script:discoveryScanRunning) `
             -CancelRequested ([bool]$script:cancelDiscoveryScan) `
             -IsDeploying ([bool]$script:isDiscoveryDeploymentActive) `
-            -IsOtherOperationActive ([bool]($script:isSupersededOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive)) `
+            -IsOtherOperationActive ([bool]($script:isSupersededOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive)) `
             -ResultCount $results.Count `
             -CheckedCount $checkedCount
 
@@ -3271,7 +3495,8 @@ function Update-SupersededActionState {
             [bool]$script:discoveryScanRunning -or
             [bool]$script:isDiscoveryDeploymentActive -or
             [bool]$script:isPackageSearchActive -or
-            [bool]$script:isVersionLookupActive
+            [bool]$script:isVersionLookupActive -or
+            [bool]$script:isPackageBuildActive
         )
         $state = Get-WinTunerSupersededActionState `
             -Connected ([bool]$script:isConnected) `
@@ -3515,26 +3740,39 @@ $versionsButton.Add_Click({
 })
 
 $createButton.Add_Click({
-  if (-not $dropdown.SelectedItem) { Update-Status "Please select a package."; return }
-  $appName  = $dropdown.SelectedItem
-  $package  = $script:packageMap[$appName]
-  if (-not $package -or -not $package.PackageID) { Update-Status "Selected item is invalid."; return }
-  $packageID = $package.PackageID
+  if (
+    $script:isPackageSearchActive -or
+    $script:isVersionLookupActive -or
+    $script:isPackageBuildActive -or
+    $script:isUpdateOperationActive -or
+    $script:discoveryScanRunning -or
+    $script:isDiscoveryDeploymentActive -or
+    $script:isSupersededOperationActive
+  ) {
+    Update-PackageSearchActionState
+    return
+  }
+
+  if (-not $dropdown.SelectedItem) { Update-Status 'Please select a package.'; return }
+  $appName = [string]$dropdown.SelectedItem
+  $package = $script:packageMap[$appName]
+  if (-not $package -or [string]::IsNullOrWhiteSpace([string]$package.PackageID)) { Update-Status 'Selected item is invalid.'; return }
+  $packageID = [string]$package.PackageID
   $folder = Resolve-WinTunerPackageRootForOperation -Path $pathBox.Text -CreateIfMissing
   if ([string]::IsNullOrWhiteSpace($folder)) { return }
   $desired = $null
   if ($script:selectedPackageVersions.ContainsKey($packageID)) {
-    $desired = $script:selectedPackageVersions[$packageID]
+    $desired = [string]$script:selectedPackageVersions[$packageID]
   }
 
-  $targetVersion = if ($desired) { $desired } else { $package.Version }
+  $targetVersion = if ($desired) { $desired } else { [string]$package.Version }
   $existingArtifact = Test-WinTunerPackageArtifact `
     -RootPackageFolder $folder `
     -PackageId $packageID `
-    -Version ([string]$targetVersion)
+    -Version $targetVersion
 
   if ($targetVersion -and $existingArtifact.IsValid) {
-    $script:builtVersions[$packageID] = [string]$targetVersion
+    $script:builtVersions[$packageID] = $targetVersion
     Update-Status ("Package already built (version {0}). Reusing validated package files." -f $targetVersion)
     Write-Log "Reusing validated package files for $packageID version $targetVersion -> $($existingArtifact.IntuneWinPath)"
     Update-PackageActionState
@@ -3544,63 +3782,23 @@ $createButton.Add_Click({
   if (
     $targetVersion -and
     $script:builtVersions.ContainsKey($packageID) -and
-    ([string]$script:builtVersions[$packageID] -eq [string]$targetVersion)
+    ([string]$script:builtVersions[$packageID] -eq $targetVersion)
   ) {
     $script:builtVersions.Remove($packageID)
     Write-Log "Existing package for $packageID version $targetVersion failed validation ($($existingArtifact.ReasonCode)); rebuilding."
   }
-  try {
 
-    $createButton.Enabled = $false
-    $searchButton.Enabled = $false
-    $versionsButton.Enabled = $false
-    
-    Update-Status "Creating package for $packageID..."
-    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-    $script:progressBar.MarqueeAnimationSpeed = 30
-    $script:progressBar.Visible = $true
-    [System.Windows.Forms.Application]::DoEvents()  # Update UI - TODO: refactor to use Invoke-AsyncOperation
-    
-    $resPkg = New-WingetPackageWithFallback `
-      -PackageId $packageID `
-      -PackageFolder $folder `
-      -DesiredVersion $desired `
-      -LatestVersion $package.Version `
-      -AllowUserRetry `
-      -ErrorAction SilentlyContinue
-    
-    if ($resPkg -and $resPkg.Succeeded) {
-      $effectiveVersion = $resPkg.EffectiveVersion
-      if (-not $effectiveVersion) { $effectiveVersion = $package.Version }
-      $createdArtifact = Test-WinTunerPackageArtifact `
-        -RootPackageFolder $folder `
-        -PackageId $packageID `
-        -Version ([string]$effectiveVersion)
-
-      if ($createdArtifact.IsValid) {
-        Update-Status ("Package created successfully (version {0})" -f $effectiveVersion)
-        $script:builtVersions[$packageID] = [string]$effectiveVersion
-      } else {
-        $script:builtVersions.Remove($packageID)
-        Update-Status "Package creation completed, but artifact validation failed."
-        Write-Log "Package build validation failed for $packageID version $effectiveVersion ($($createdArtifact.ReasonCode)): $($createdArtifact.Reason)"
-      }
-
-      Update-PackageActionState
-    } else {
-      Update-Status "Package creation failed"
-    }
-  } finally {
-    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $script:progressBar.Visible = $false
-    $script:progressBar.Value = 0
-    $createButton.Enabled = $true
-    $searchButton.Enabled = $true
-    $versionsButton.Enabled = $true
-  }
+  Start-WinTunerPackageBuild `
+    -PackageId $packageID `
+    -PackageFolder $folder `
+    -DesiredVersion $desired `
+    -LatestVersion ([string]$package.Version)
 })
-
 $uploadButton.Add_Click({
+    if ($script:isPackageBuildActive) {
+        Update-PackageActionState
+        return
+    }
     if (-not $script:isConnected) {
         [void][System.Windows.Forms.MessageBox]::Show(
             "Please login to your tenant first.",
@@ -4776,5 +4974,14 @@ try {
         try { $activeVersionLookup.PowerShell.Dispose() } catch {}
         try { $activeVersionLookup.Timer.Dispose() } catch {}
         $script:versionLookupContext = $null
+    }
+
+    $activePackageBuild = $script:packageBuildContext
+    if ($activePackageBuild) {
+        try { $activePackageBuild.Timer.Stop() } catch {}
+        try { $activePackageBuild.PowerShell.Stop() } catch {}
+        try { $activePackageBuild.PowerShell.Dispose() } catch {}
+        try { $activePackageBuild.Timer.Dispose() } catch {}
+        $script:packageBuildContext = $null
     }
 }
