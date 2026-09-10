@@ -14,14 +14,14 @@ BeforeAll {
 }
 
 Describe 'Deployment artifact safety' {
-    It 'validates a package artifact before every Deploy-WtWin32App call' {
+    It 'validates a package artifact before every direct GUI deployment call' {
         $deployCommands = @($script:guiAst.FindAll({
             param($node)
             $node -is [System.Management.Automation.Language.CommandAst] -and
             $node.GetCommandName() -eq 'Deploy-WtWin32App'
         }, $true))
 
-        $deployCommands.Count | Should -Be 3
+        $deployCommands.Count | Should -Be 2
 
         foreach ($deployCommand in $deployCommands) {
             $scope = $deployCommand.Parent
@@ -41,5 +41,17 @@ Describe 'Deployment artifact safety' {
                 "deployment at line $($deployCommand.Extent.StartLineNumber) must validate its exact package first"
             )
         }
+    }
+
+    It 'routes the main package upload through click-time validation and the upload safety module' {
+        $uploadFunction = @($script:guiAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Start-WinTunerPackageUpload'
+        }, $true))
+
+        $uploadFunction | Should -HaveCount 1
+        $uploadFunction[0].Extent.Text | Should -Match 'Test-WinTunerPackageArtifact'
+        $uploadFunction[0].Extent.Text | Should -Match 'Invoke-WinTunerPackageUpload'
     }
 }

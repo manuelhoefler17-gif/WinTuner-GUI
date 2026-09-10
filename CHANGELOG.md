@@ -16,6 +16,7 @@ All notable changes to WinTuner GUI are documented here.
 - WinGet package searches now run in an isolated PowerShell runspace and keep the WinForms UI responsive.
 - WinGet version lists now load in the background before the version picker opens.
 - WinGet package creation now runs in an isolated PowerShell runspace while preserving fallback and exact artifact validation.
+- Validated WinGet package uploads now run in the background and revalidate the exact artifact inside the worker before tenant deployment.
 - GitHub Actions validation now uses `actions/checkout@v7` with its native Node.js 24 runtime.
 - Superseded-app searches now run in an isolated PowerShell runspace and keep the WinForms UI responsive.
 - Superseded deletion actions now require a valid current result, and **Delete all Superseded Apps** uses the verified search results instead of fetching a second list.

@@ -56,6 +56,7 @@ Modules:
 - `Modules/WinTuner.Intune.psm1`
 - `Modules/WinTuner.Logging.psm1`
 - `Modules/WinTuner.PackageBuild.psm1`
+- `Modules/WinTuner.PackageUpload.psm1`
 - `Modules/WinTuner.Settings.psm1`
 - `Modules/WinTuner.UpdateScan.psm1`
 - `Modules/WinTuner.Winget.psm1`
@@ -352,11 +353,16 @@ Implemented on `Test`:
 - kept 404 fallback and hash-mismatch decisions explicit without showing dialogs from the worker runspace
 - added clean package-build runspace shutdown when the GUI closes
 - added automated package-build fallback and retry tests
+- moved **Upload to Tenant** into an isolated PowerShell runspace
+- retained click-time artifact validation and added a second exact validation inside the upload worker immediately before deployment
+- kept package selection and Upload available after tenant deployment failures while invalid artifacts remain blocked
+- added clean package-upload runspace shutdown when the GUI closes
+- added automated upload validation, deployment-error, and workflow-routing tests
 
 Validation completed:
 
-- PowerShell syntax validation passed for all 20 repository scripts and modules
-- all 62 Pester tests passed
+- PowerShell syntax validation passed for all 22 repository scripts and modules
+- all 66 Pester tests passed
 - a separate PowerShell runspace loaded the installed WinTuner module and completed the update-scan logic
 - cooperative runspace cancellation completed without blocking the caller
 - the tenant-connected GUI remained responsive while moving, resizing, and switching tabs during a scan
@@ -365,6 +371,8 @@ Validation completed:
 - the WinGet Apps package search kept the GUI responsive and restored result, version, and package actions after completion
 - the WinGet version list loaded without blocking the GUI, and the modal picker restored the expected package actions after selection or cancellation
 - package creation completed without blocking window movement, resizing, or tab changes; the exact 7zip.7zip 26.03 artifact passed validation and was safely reused on the second request
+- the upload safety module revalidated that exact artifact in an isolated runspace before a non-writing deployment callback
+- the real tenant upload of 7zip.7zip 26.03 completed successfully in the background while the GUI remained responsive and cleared the package selection afterward
 
 Next candidates:
 

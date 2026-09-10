@@ -198,6 +198,7 @@ WinTuner-GUI/
 │   ├── WinTuner.Intune.psm1
 │   ├── WinTuner.Logging.psm1
 │   ├── WinTuner.PackageBuild.psm1
+│   ├── WinTuner.PackageUpload.psm1
 │   ├── WinTuner.Settings.psm1
 │   ├── WinTuner.UpdateScan.psm1
 │   └── WinTuner.Winget.psm1
@@ -225,6 +226,9 @@ Logging and log-management functionality.
 
 **`WinTuner.PackageBuild.psm1`**
 Testable package creation and WinGet version fallback decisions used by the background build workflow.
+
+**`WinTuner.PackageUpload.psm1`**
+Exact artifact revalidation and tenant deployment used by the background upload workflow.
 
 **`WinTuner.Settings.psm1`**
 Persistent settings handling.
@@ -259,7 +263,7 @@ WinTuner GUI verifies the tenant connection before enabling tenant-dependent act
 4. Optionally choose a specific version. The version list loads in the background before the selection dialog opens.
 5. Select the package output folder.
 6. Click **Create package**. Package creation runs in the background so the window remains responsive.
-7. After a valid build, click **Upload**.
+7. After a valid build, click **Upload**. The exact artifact is revalidated in the background immediately before tenant deployment.
 
 Changing the selected version invalidates the previous Upload state. The new version must first be built or safely reused.
 
