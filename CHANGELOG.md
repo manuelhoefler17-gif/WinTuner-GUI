@@ -9,6 +9,7 @@ All notable changes to WinTuner GUI are documented here.
 - Added an in-app cancel action and live progress for active update scans.
 - Added automated action-state coverage for Superseded search results, stale selections, disconnected tenants, and active operations.
 - Added automated action-state coverage for WinGet package search results, stale selections, and active operations.
+- Added a dedicated update-deployment module with automated success, missing-ID, invalid-artifact, and partial-failure coverage.
 
 ### Changed
 - Update scans now run in an isolated PowerShell runspace so Intune and WinGet checks no longer block the WinForms UI.
@@ -17,6 +18,7 @@ All notable changes to WinTuner GUI are documented here.
 - WinGet version lists now load in the background before the version picker opens.
 - WinGet package creation now runs in an isolated PowerShell runspace while preserving fallback and exact artifact validation.
 - Validated WinGet package uploads now run in the background and revalidate the exact artifact inside the worker before tenant deployment.
+- Checked and all-app update deployments now build, revalidate, and deploy packages in an isolated runspace while preserving failed candidates for retry.
 - GitHub Actions validation now uses `actions/checkout@v7` with its native Node.js 24 runtime.
 - Superseded-app searches now run in an isolated PowerShell runspace and keep the WinForms UI responsive.
 - Superseded deletion actions now require a valid current result, and **Delete all Superseded Apps** uses the verified search results instead of fetching a second list.

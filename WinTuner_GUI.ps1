@@ -59,6 +59,7 @@ $script:appVersion  = "0.10.16"
 
 # Bootstrap release dependencies and keep them synchronized with the GUI release.
 $requiredReleaseFiles = @(
+  'Modules/WinTuner.AppUpdate.psm1',
   'Modules/WinTuner.Core.psm1',
   'Modules/WinTuner.PackageBuild.psm1',
   'Modules/WinTuner.PackageUpload.psm1',
@@ -1008,203 +1009,6 @@ function Get-UpdateCandidates {
   return @($candidates)
 }
 
-# Performs update workflow for a single app (create package + deploy)
-function Update-SingleApp {
-  param(
-    [Parameter(Mandatory=$true)]
-    [string]$AppName,
-    [Parameter(Mandatory=$false)]
-    [string]$CurrentVersion,
-    [Parameter(Mandatory=$false)]
-    [string]$LatestVersion,
-    [Parameter(Mandatory=$false)]
-    [string]$GraphId,
-    [Parameter(Mandatory=$false)]
-    [string]$PackageIdentifier,
-    [Parameter(Mandatory=$true)]
-    [string]$RootPackageFolder,
-    [switch]$AllowUserRetry
-  )
-  
-  $result = @{
-    Success = $false
-    Message = ""
-    EffectiveVersion = $null
-  }
-  
-  try {
-    Write-Log "Starting update for: $AppName (Current: $CurrentVersion, Latest: $LatestVersion)"
-    
-    # 1) Resolve Winget ID - use PackageIdentifier if available, otherwise fail
-    $wingetId = $PackageIdentifier
-    
-    Write-Log ("Resolved winget id for {0}: {1}" -f $AppName, ($wingetId ? $wingetId : '<none>'))
-    
-    if ([string]::IsNullOrWhiteSpace($wingetId)) {
-      $result.Message = "Cannot determine PackageId for '$AppName'"
-      Write-Log $result.Message
-      return $result
-    }
-    
-    # 2) Create/refresh package using fallback logic
-    Write-Log "Creating package for $AppName..."
-    # For updates, ALWAYS use LatestVersion (ignore cached selectedPackageVersions)
-    $desired = $LatestVersion
-    Write-Log "Update workflow: forcing LatestVersion $desired (ignoring any cached selection)"
-    
-    $resPkg = New-WingetPackageWithFallback `
-      -PackageId $wingetId `
-      -PackageFolder $RootPackageFolder `
-      -DesiredVersion $desired `
-      -LatestVersion $LatestVersion `
-      -InstalledVersion $CurrentVersion `
-      -AllowUserRetry:$AllowUserRetry `
-      -ErrorAction SilentlyContinue
-    
-    if (-not $resPkg -or -not $resPkg.Succeeded) {
-      $errDetail = if ($resPkg -and $resPkg.ErrorMessage) { ": $($resPkg.ErrorMessage)" } else { "" }
-      $result.Message = "Package creation failed for $AppName$errDetail"
-      Write-Log $result.Message
-      return $result
-    }
-    
-    $effectiveVersion = if ($resPkg.EffectiveVersion) { $resPkg.EffectiveVersion } else { $LatestVersion }
-    $result.EffectiveVersion = $effectiveVersion
-    $artifactValidation = Test-WinTunerPackageArtifact `
-      -RootPackageFolder $RootPackageFolder `
-      -PackageId $wingetId `
-      -Version ([string]$effectiveVersion)
-
-    if (-not $artifactValidation.IsValid) {
-      $result.Message = "Package validation failed for $AppName ($($artifactValidation.ReasonCode)): $($artifactValidation.Reason)"
-      Write-Log $result.Message
-      return $result
-    }
-    # 3) Deploy with best available identifier
-    Write-Log "Deploying $AppName version $effectiveVersion..."
-    $deploySplat = @{ 
-      RootPackageFolder = $RootPackageFolder
-      ErrorAction = 'Stop' 
-    }
-    
-    if ($GraphId) {
-      $deploySplat.GraphId = $GraphId
-      $deploySplat.KeepAssignments = $true
-      $deploySplat.PackageId = $wingetId
-      $deploySplat.Version = $effectiveVersion
-      Write-Log "Deploying by GraphId ($GraphId) + PackageId/Version"
-    } else {
-      $deploySplat.PackageId = $wingetId
-      $deploySplat.Version = $effectiveVersion
-      Write-Log "Deploying by PackageId ($wingetId) version $effectiveVersion"
-    }
-    
-    Deploy-WtWin32App @deploySplat
-    
-    $result.Success = $true
-    $result.Message = "Update completed successfully for $AppName"
-    Write-Log $result.Message
-    
-  } catch {
-    $result.Message = "Update failed for ${AppName}: $($_.Exception.Message)"
-    Write-Log $result.Message
-  }
-  
-  return $result
-}
-
-function Invoke-AppUpdateBatch {
-  param(
-    [Parameter(Mandatory=$true)]
-    [object[]]$Apps,
-    [Parameter(Mandatory=$true)]
-    [string]$RootPackageFolder
-  )
-
-  $script:isUpdateOperationActive = $true
-  Update-UpdateActionState
-
-  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-  $script:progressBar.MarqueeAnimationSpeed = 30
-  $script:progressBar.Visible = $true
-
-  $successCount = 0
-  $failedCount = 0
-  $totalCount = $Apps.Count
-  $currentIndex = 0
-  $failedList = [System.Collections.Generic.List[object]]::new()
-
-  try {
-    foreach ($app in $Apps) {
-      $currentIndex++
-      Update-Status ("Updating ({0}/{1}): {2}" -f $currentIndex, $totalCount, $app.Name)
-      [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-
-      # Extract properties from WtWin32App object
-      $appName = $app.Name
-      $appCurrentVersion = $app.CurrentVersion
-      $appLatestVersion = $app.LatestVersion
-      $appGraphId = $app.GraphId
-
-      # Get PackageIdentifier - use Resolve-WingetIdForApp
-      $appPackageId = Resolve-WingetIdForApp -App $app
-
-      Write-Log "Calling Update-SingleApp with: Name='$appName', Current='$appCurrentVersion', Latest='$appLatestVersion', GraphId='$appGraphId', PackageId='$appPackageId'"
-
-      $result = Update-SingleApp `
-        -AppName $appName `
-        -CurrentVersion $appCurrentVersion `
-        -LatestVersion $appLatestVersion `
-        -GraphId $appGraphId `
-        -PackageIdentifier $appPackageId `
-        -RootPackageFolder $RootPackageFolder
-
-      if ($result.Success) {
-        $successCount++
-        Write-Log "Successfully updated: $appName"
-
-        # Immediately remove the updated app from the cached and visible lists.
-        $cachedApp = $script:updateApps | Where-Object {
-          ($appGraphId -and $_.GraphId -eq $appGraphId) -or
-          (-not $appGraphId -and $_.Name -eq $appName)
-        } | Select-Object -First 1
-        if ($cachedApp) {
-          $visibleIndex = $script:updateVisibleApps.IndexOf($cachedApp)
-          if ($visibleIndex -ge 0) {
-            $script:updateVisibleApps.RemoveAt($visibleIndex)
-            $updateListBox.Items.RemoveAt($visibleIndex)
-          }
-          [void]$script:updateApps.Remove($cachedApp)
-        }
-        [System.Windows.Forms.Application]::DoEvents()
-      } else {
-        $failedCount++
-        Write-Log "Failed to update: $appName - $($result.Message)"
-        $failedList.Add([pscustomobject]@{ Name = $appName; Reason = $result.Message })
-      }
-    }
-
-    if ($failedList.Count -gt 0) {
-      $summary = "The following $($failedList.Count) app(s) could not be updated:`n`n"
-      $summary += ($failedList | ForEach-Object { "• $($_.Name): $($_.Reason)" }) -join "`n"
-      [System.Windows.Forms.MessageBox]::Show(
-        $summary,
-        "Update Summary – $($failedList.Count) Failed",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Warning
-      )
-    }
-
-    return @{ SuccessCount = $successCount; FailedList = $failedList }
-  } finally {
-    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $script:progressBar.Visible = $false
-    $script:progressBar.Value = 0
-    $script:isUpdateOperationActive = $false
-    Update-UpdateActionState
-  }
-}
-
 # Dark mode theme colors
 $script:darkTheme = @{
   BackColor       = [System.Drawing.Color]::FromArgb(32, 32, 32)
@@ -1749,6 +1553,188 @@ $result | ConvertTo-Json -Depth 6 -Compress
     Update-Status "Update scan failed to start: $($_.Exception.Message)"
     Write-Log "Update scan failed to start: $($_.Exception.Message)"
     Update-UpdateActionState
+  }
+}
+
+function Complete-WinTunerAppUpdateBatch {
+  param([Parameter(Mandatory=$true)][object]$Context)
+  $batchResult = $null
+  $completionError = $null
+  try {
+    $output = @($Context.PowerShell.EndInvoke($Context.AsyncResult))
+    if ($output.Count -eq 0) {
+      if ($Context.PowerShell.Streams.Error.Count -gt 0) { throw $Context.PowerShell.Streams.Error[0].Exception }
+      throw 'The background update returned no result.'
+    }
+    $batchResult = ([string]$output[$output.Count - 1]) | ConvertFrom-Json -ErrorAction Stop
+  } catch { $completionError = $_.Exception.Message }
+  finally {
+    try { $Context.Timer.Stop() } catch {}
+    try { $Context.Timer.Dispose() } catch {}
+    try { $Context.PowerShell.Dispose() } catch {}
+    Remove-Item -LiteralPath $Context.ProgressPath -Force -ErrorAction SilentlyContinue
+    if ($script:updateDeploymentContext -eq $Context) { $script:updateDeploymentContext = $null }
+    $script:isUpdateOperationActive = $false
+    try {
+      $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+      $script:progressBar.Maximum = 100
+      $script:progressBar.Value = 0
+      $script:progressBar.Visible = $false
+    } catch {}
+  }
+  if ($completionError) {
+    Update-Status "App update failed: $completionError"
+    Write-Log "Background app update failed: $completionError"
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    return
+  }
+  $failedItems = [System.Collections.Generic.List[object]]::new()
+  foreach ($itemResult in @($batchResult.Results)) {
+    if ($itemResult.Succeeded) {
+      Write-Log "Successfully updated in background: $($itemResult.Name) ($($itemResult.CurrentVersion) -> $($itemResult.EffectiveVersion))"
+      $cachedApp = $null
+      foreach ($candidate in @($script:updateApps)) {
+        $graphMatches = (-not [string]::IsNullOrWhiteSpace([string]$itemResult.GraphId) -and [string]$candidate.GraphId -eq [string]$itemResult.GraphId)
+        $packageMatches = ([string]::IsNullOrWhiteSpace([string]$itemResult.GraphId) -and [string]$candidate.PackageId -eq [string]$itemResult.PackageId -and [string]$candidate.Name -eq [string]$itemResult.Name)
+        if ($graphMatches -or $packageMatches) { $cachedApp = $candidate; break }
+      }
+      if ($cachedApp) {
+        $visibleIndex = $script:updateVisibleApps.IndexOf($cachedApp)
+        if ($visibleIndex -ge 0) {
+          $script:updateVisibleApps.RemoveAt($visibleIndex)
+          $updateListBox.Items.RemoveAt($visibleIndex)
+        }
+        [void]$script:updateApps.Remove($cachedApp)
+      }
+    } else {
+      Write-Log "Background update failed for $($itemResult.Name) ($($itemResult.ReasonCode)): $($itemResult.Message)"
+      $failedItems.Add($itemResult)
+    }
+  }
+  if ($failedItems.Count -gt 0) {
+    $summary = "The following $($failedItems.Count) app(s) could not be updated:$([Environment]::NewLine)$([Environment]::NewLine)"
+    $summary += ($failedItems | ForEach-Object { "• $($_.Name): $($_.Message)" }) -join [Environment]::NewLine
+    [void][System.Windows.Forms.MessageBox]::Show($summary, "Update Summary – $($failedItems.Count) Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+  }
+  $successCount = [int]$batchResult.SuccessCount
+  $failureCount = [int]$batchResult.FailureCount
+  $statusPrefix = if ($Context.Mode -eq 'Checked') { 'Checked apps updated' } else { 'All updates completed' }
+  Update-Status ("{0}: {1} successful, {2} failed" -f $statusPrefix, $successCount, $failureCount)
+  Write-Log "Background update summary -> Mode: $($Context.Mode), Successful: $successCount, Failed: $failureCount"
+  Update-UpdateActionState
+  Update-DiscoveryActionState
+}
+
+function Start-WinTunerAppUpdateBatch {
+  param(
+    [Parameter(Mandatory=$true)][object[]]$Apps,
+    [Parameter(Mandatory=$true)][string]$RootPackageFolder,
+    [ValidateSet('Checked','All')][string]$Mode
+  )
+  if (-not $script:isConnected -or $script:isUpdateOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive -or $script:isPackageUploadActive -or $script:isSupersededOperationActive -or $script:discoveryScanRunning -or $script:isDiscoveryDeploymentActive) {
+    Update-UpdateActionState
+    return
+  }
+  $items = @($Apps)
+  if ($items.Count -eq 0) {
+    Update-Status 'No update candidates were provided.'
+    Update-UpdateActionState
+    return
+  }
+  $updateModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.AppUpdate.psm1'
+  if (-not (Test-Path -LiteralPath $updateModulePath -PathType Leaf)) {
+    Update-Status 'App update failed: update module is missing.'
+    Write-Log "App update module missing: $updateModulePath"
+    return
+  }
+  $workerApps = [System.Collections.Generic.List[object]]::new()
+  foreach ($app in $items) {
+    $workerApps.Add([pscustomobject]@{
+      Name = [string]$app.Name
+      CurrentVersion = [string]$app.CurrentVersion
+      LatestVersion = [string]$app.LatestVersion
+      GraphId = [string]$app.GraphId
+      PackageId = [string]$app.PackageId
+    })
+  }
+  $appsJson = @($workerApps) | ConvertTo-Json -Depth 5 -Compress
+  $operationId = [guid]::NewGuid().ToString('N')
+  $progressPath = Join-Path ([System.IO.Path]::GetTempPath()) "wintuner-app-update-$operationId.progress.json"
+  $script:isUpdateOperationActive = $true
+  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+  $script:progressBar.Minimum = 0
+  $script:progressBar.Maximum = [Math]::Max(1, $workerApps.Count)
+  $script:progressBar.Value = 0
+  $script:progressBar.Visible = $true
+  Update-Status "Starting background update for $($workerApps.Count) app(s)..."
+  Write-Log "Starting background app update -> Mode: $Mode, Apps: $($workerApps.Count)"
+  Update-UpdateActionState
+  Update-DiscoveryActionState
+  Update-SupersededActionState
+  $updateScript = @'
+param($RepositoryRoot, $AppsJson, $RootPackageFolder, $ProgressPath)
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+Import-Module WinTuner -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Core.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Winget.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.PackageBuild.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.AppUpdate.psm1') -Force -ErrorAction Stop
+function Write-AppUpdateProgressFile {
+  param([object]$ProgressInfo)
+  $tempPath = "$ProgressPath.$([guid]::NewGuid().ToString('N')).tmp"
+  try {
+    $json = $ProgressInfo | ConvertTo-Json -Depth 4 -Compress
+    [System.IO.File]::WriteAllText($tempPath, $json, [System.Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $tempPath -Destination $ProgressPath -Force
+  } finally { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue }
+}
+$apps = @($AppsJson | ConvertFrom-Json -ErrorAction Stop)
+$result = Invoke-WinTunerAppUpdateBatch -Apps $apps -RootPackageFolder $RootPackageFolder -ReportProgress {
+  param($progressInfo)
+  Write-AppUpdateProgressFile -ProgressInfo $progressInfo
+}
+$result | ConvertTo-Json -Depth 7 -Compress
+'@
+  $powerShell = [System.Management.Automation.PowerShell]::Create()
+  $null = $powerShell.AddScript($updateScript).AddArgument($PSScriptRoot).AddArgument($appsJson).AddArgument($RootPackageFolder).AddArgument($progressPath)
+  $timer = New-Object System.Windows.Forms.Timer
+  $timer.Interval = 150
+  $context = [pscustomobject]@{ PowerShell = $powerShell; AsyncResult = $null; Timer = $timer; ProgressPath = $progressPath; LastProgress = $null; Mode = $Mode }
+  $script:updateDeploymentContext = $context
+  $timer.Add_Tick({
+    $currentContext = $script:updateDeploymentContext
+    if (-not $currentContext) { return }
+    if (Test-Path -LiteralPath $currentContext.ProgressPath -PathType Leaf) {
+      try {
+        $progressJson = Get-Content -LiteralPath $currentContext.ProgressPath -Raw -ErrorAction Stop
+        if ($progressJson -and $progressJson -ne $currentContext.LastProgress) {
+          $currentContext.LastProgress = $progressJson
+          $progressInfo = $progressJson | ConvertFrom-Json -ErrorAction Stop
+          $maximum = [Math]::Max(1, [int]$progressInfo.Total)
+          $script:progressBar.Maximum = $maximum
+          $script:progressBar.Value = [Math]::Min([int]$progressInfo.Processed, $maximum)
+          Update-Status ("Updating ({0}/{1}): {2}" -f $progressInfo.Processed, $progressInfo.Total, $progressInfo.AppName)
+        }
+      } catch {}
+    }
+    if ($currentContext.AsyncResult -and $currentContext.AsyncResult.IsCompleted) { Complete-WinTunerAppUpdateBatch -Context $currentContext }
+  })
+  try {
+    $context.AsyncResult = $powerShell.BeginInvoke()
+    $timer.Start()
+  } catch {
+    try { $timer.Dispose() } catch {}
+    try { $powerShell.Dispose() } catch {}
+    Remove-Item -LiteralPath $progressPath -Force -ErrorAction SilentlyContinue
+    $script:updateDeploymentContext = $null
+    $script:isUpdateOperationActive = $false
+    $script:progressBar.Visible = $false
+    Update-Status "App update failed to start: $($_.Exception.Message)"
+    Write-Log "Background app update failed to start: $($_.Exception.Message)"
+    Update-UpdateActionState
+    Update-DiscoveryActionState
   }
 }
 
@@ -2780,6 +2766,7 @@ $script:isUpdateOperationActive = $false
 $script:updateScanRunning = $false
 $script:cancelUpdateScan = $false
 $script:updateScanContext = $null
+$script:updateDeploymentContext = $null
 $script:supersededApps = @()
 $script:isSupersededOperationActive = $false
 $script:supersededSearchContext = $null
@@ -3605,6 +3592,9 @@ function Update-LogoutActionState {
 
 function Update-UpdateActionState {
     try {
+        $isDeployingUpdates = [bool]$script:updateDeploymentContext
+        $updateSelectedButton.Text = if ($isDeployingUpdates) { 'Updating...' } else { 'Update checked apps' }
+        $updateAllButton.Text = if ($isDeployingUpdates) { 'Updating...' } else { 'Update ALL (unchecked too)' }
         $candidates = @($script:updateApps)
         $checkedCount = @($candidates | Where-Object { $_ -and $_.Checked }).Count
         $state = Get-WinTunerUpdateActionState `
@@ -3660,7 +3650,7 @@ function Update-DiscoveryActionState {
             -IsScanning ([bool]$script:discoveryScanRunning) `
             -CancelRequested ([bool]$script:cancelDiscoveryScan) `
             -IsDeploying ([bool]$script:isDiscoveryDeploymentActive) `
-            -IsOtherOperationActive ([bool]($script:isSupersededOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive -or $script:isPackageUploadActive)) `
+            -IsOtherOperationActive ([bool]($script:isUpdateOperationActive -or $script:isSupersededOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive -or $script:isPackageUploadActive)) `
             -ResultCount $results.Count `
             -CheckedCount $checkedCount
 
@@ -4177,8 +4167,7 @@ $updateSelectedButton.Add_Click({
     if ([string]::IsNullOrWhiteSpace($rootPackageFolder)) { return }
     try {
         Update-Status "Starting update for $($checkedApps.Count) checked apps..."
-        $batchResult = Invoke-AppUpdateBatch -Apps $checkedApps -RootPackageFolder $rootPackageFolder
-        Update-Status "Checked apps updated: $($batchResult.SuccessCount) successful, $($batchResult.FailedList.Count) failed"
+        Start-WinTunerAppUpdateBatch -Apps @($checkedApps) -RootPackageFolder $rootPackageFolder -Mode Checked
     } catch {
         Update-Status "Update error: $($_.Exception.Message)"
         Write-Log "updateSelectedButton error: $($_.Exception.Message)"
@@ -4218,8 +4207,7 @@ $updateAllButton.Add_Click({
 
     try {
         Update-Status "Starting mass update for $($updatedApps.Count) apps..."
-        $batchResult = Invoke-AppUpdateBatch -Apps $updatedApps -RootPackageFolder $rootPackageFolder
-        Update-Status "All Updates Completed: $($batchResult.SuccessCount) successful, $($batchResult.FailedList.Count) failed"
+        Start-WinTunerAppUpdateBatch -Apps $updatedApps -RootPackageFolder $rootPackageFolder -Mode All
     } catch {
         Update-Status "Mass update error: $($_.Exception.Message)"
         Write-Log "updateAllButton error: $($_.Exception.Message)"
@@ -5039,8 +5027,8 @@ $toolTip.SetToolTip($browseButton,          "Choose the local folder to store pa
 if ($createButton)          { $toolTip.SetToolTip($createButton,          "Create the .wtpackage file locally") }
 if ($uploadButton)          { $toolTip.SetToolTip($uploadButton,          "Upload and deploy the package to Microsoft Intune without blocking the window") }
 if ($updateSearchButton)    { $toolTip.SetToolTip($updateSearchButton,    "Scan Intune Win32 apps for WinGet updates; click again to cancel an active scan") }
-if ($updateAllButton)       { $toolTip.SetToolTip($updateAllButton,       "Update all apps with available updates") }
-if ($updateSelectedButton)  { $toolTip.SetToolTip($updateSelectedButton,  "Update only the checked apps in the list") }
+if ($updateAllButton)       { $toolTip.SetToolTip($updateAllButton,       "Update all available apps in the background") }
+if ($updateSelectedButton)  { $toolTip.SetToolTip($updateSelectedButton,  "Update only the checked apps in the background") }
 if ($scanDiscoveredButton)  { $toolTip.SetToolTip($scanDiscoveredButton,  "Scan Intune Discovered Apps and match them to WinGet packages") }
 if ($logoutButton)          { $toolTip.SetToolTip($logoutButton,          "Disconnect from the current Microsoft 365 tenant") }
 if ($themeToggleButton)     { $toolTip.SetToolTip($themeToggleButton,     "Switch between Dark Mode and Light Mode") }
@@ -5095,6 +5083,15 @@ try {
         $script:updateScanContext = $null
     }
 
+    $activeUpdateDeployment = $script:updateDeploymentContext
+    if ($activeUpdateDeployment) {
+        try { $activeUpdateDeployment.Timer.Stop() } catch {}
+        try { $activeUpdateDeployment.PowerShell.Stop() } catch {}
+        try { $activeUpdateDeployment.PowerShell.Dispose() } catch {}
+        try { $activeUpdateDeployment.Timer.Dispose() } catch {}
+        Remove-Item -LiteralPath $activeUpdateDeployment.ProgressPath -Force -ErrorAction SilentlyContinue
+        $script:updateDeploymentContext = $null
+    }
     $activeSupersededSearch = $script:supersededSearchContext
     if ($activeSupersededSearch) {
         try { $activeSupersededSearch.Timer.Stop() } catch {}

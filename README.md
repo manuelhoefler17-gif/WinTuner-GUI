@@ -194,6 +194,7 @@ If required development files are missing, startup stops with a development erro
 WinTuner-GUI/
 ├── WinTuner_GUI.ps1
 ├── Modules/
+│   ├── WinTuner.AppUpdate.psm1
 │   ├── WinTuner.Core.psm1
 │   ├── WinTuner.Intune.psm1
 │   ├── WinTuner.Logging.psm1
@@ -214,6 +215,9 @@ WinTuner-GUI/
 
 **`WinTuner_GUI.ps1`**
 WinForms user interface, application orchestration, authentication workflow, packaging controls and update handling.
+
+**`WinTuner.AppUpdate.psm1`**
+Testable background package-build, exact artifact validation and tenant-deployment batching for existing apps.
 
 **`WinTuner.Core.psm1`**
 Shared core functionality.
@@ -278,7 +282,7 @@ Changing the selected version invalidates the previous Upload state. The new ver
 7. Review the candidate count and checked count.
 8. Confirm the checked or all-candidates update operation.
 
-Update actions remain disabled until their required candidates or checked selections exist. Logout is disabled during a scan, both update actions use the current verified scan result, and logging out clears the current tenant's candidate list.
+Update actions remain disabled until their required candidates or checked selections exist. Logout is disabled during scans and deployments. Both update actions use the current verified scan result, then build, validate, and deploy each app in an isolated background runspace. Successful apps are removed from the list while failed apps remain available for retry.
 
 ### 4. Find superseded Intune applications
 
