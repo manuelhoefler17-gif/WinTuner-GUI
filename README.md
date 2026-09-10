@@ -455,7 +455,7 @@ A development checkout intentionally uses its local dependency files and is ther
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete version history.
 
-Current development version: **0.10.15**.
+Current stable release: **v0.10.15**.
 
 ---
 
