@@ -55,6 +55,7 @@ Modules:
 - `Modules/WinTuner.Core.psm1`
 - `Modules/WinTuner.Intune.psm1`
 - `Modules/WinTuner.Logging.psm1`
+- `Modules/WinTuner.PackageBuild.psm1`
 - `Modules/WinTuner.Settings.psm1`
 - `Modules/WinTuner.UpdateScan.psm1`
 - `Modules/WinTuner.Winget.psm1`
@@ -346,11 +347,16 @@ Implemented on `Test`:
 - moved WinGet version-list retrieval into an isolated PowerShell runspace
 - kept the cached version ordering and modal version picker behavior while preventing concurrent workflows
 - added clean version-lookup runspace shutdown when the GUI closes
+- moved **Create package** into an isolated PowerShell runspace
+- preserved package reuse and exact post-build artifact validation on the UI workflow
+- kept 404 fallback and hash-mismatch decisions explicit without showing dialogs from the worker runspace
+- added clean package-build runspace shutdown when the GUI closes
+- added automated package-build fallback and retry tests
 
 Validation completed:
 
-- PowerShell syntax validation passed for all 18 repository scripts and modules
-- all 57 Pester tests passed
+- PowerShell syntax validation passed for all 20 repository scripts and modules
+- all 62 Pester tests passed
 - a separate PowerShell runspace loaded the installed WinTuner module and completed the update-scan logic
 - cooperative runspace cancellation completed without blocking the caller
 - the tenant-connected GUI remained responsive while moving, resizing, and switching tabs during a scan
@@ -358,6 +364,7 @@ Validation completed:
 - the tenant-connected Superseded Apps search kept the GUI responsive and returned its current result list with correct action states
 - the WinGet Apps package search kept the GUI responsive and restored result, version, and package actions after completion
 - the WinGet version list loaded without blocking the GUI, and the modal picker restored the expected package actions after selection or cancellation
+- package creation completed without blocking window movement, resizing, or tab changes; the exact 7zip.7zip 26.03 artifact passed validation and was safely reused on the second request
 
 Next candidates:
 
