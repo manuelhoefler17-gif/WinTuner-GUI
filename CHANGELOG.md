@@ -2,7 +2,7 @@
 
 All notable changes to WinTuner GUI are documented here.
 
-## [Unreleased]
+## [0.10.15] – 2026-09-10
 
 ### Added
 - Added safe package reuse across GUI restarts after validating the selected package ID, version, metadata display version, and exact non-empty `.intunewin` file.
@@ -15,7 +15,6 @@ All notable changes to WinTuner GUI are documented here.
 - Added a shared PowerShell test runner and GitHub Actions validation for pull requests and pushes to Test.
 
 ### Changed
-- Started development for version 0.10.15.
 - Centralized package-artifact validation across Upload state calculation, package reuse, post-build verification, and click-time upload checks.
 - Package-root changes now immediately recalculate whether Upload is safe.
 - Centralized Updates action state so scanning, selection, connection, and busy state determine which actions are available.
