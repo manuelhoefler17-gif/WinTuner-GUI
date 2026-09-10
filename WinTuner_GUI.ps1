@@ -2560,6 +2560,21 @@ $rememberCheckBox.AutoSize = $true
 $rememberCheckBox.Checked = $false
 $headerPanel.Controls.Add($rememberCheckBox)
 
+function Update-WinTunerHeaderLayout {
+    $rightMargin = 10
+    $themeX = [Math]::Max(
+        $rightMargin,
+        $headerPanel.ClientSize.Width - $themeToggleButton.Width - $rightMargin
+    )
+    $fixedActionRight = [Math]::Max($loginButton.Right, $logoutButton.Right)
+    $themeY = if ($themeX -lt ($fixedActionRight + 10)) { 44 } else { 8 }
+
+    $themeToggleButton.Location = New-Object System.Drawing.Point($themeX, $themeY)
+}
+
+$headerPanel.Add_Resize({ Update-WinTunerHeaderLayout })
+Update-WinTunerHeaderLayout
+
 $script:settingsPath = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'WinTunerGUI\settings.json'
 $script:settings = Import-WinTunerSettings -Path $script:settingsPath
 $rememberCheckBox.Checked = [bool]$script:settings.RememberMe

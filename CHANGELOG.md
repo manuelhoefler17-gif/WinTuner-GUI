@@ -30,7 +30,7 @@ All notable changes to WinTuner GUI are documented here.
 - Updating checked apps now requires confirmation, and both update actions show the installed and target versions.
 - Update All now operates on the current verified scan result instead of fetching a second candidate list.
 - Corrected the documented settings path and listed the persistent cache files.
-- Main tabs, logs, progress, status, update results, and Discovery results now expand with the window width.
+- Main tabs, logs, progress, status, update results, Discovery results, and header actions now adapt to the window width.
 
 ## [0.10.14] – 2026-09-09
 

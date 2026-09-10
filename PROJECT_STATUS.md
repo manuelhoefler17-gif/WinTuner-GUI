@@ -305,7 +305,7 @@ Completed:
 - shared local syntax/Pester test runner
 - GitHub Actions checks for pull requests to main and pushes to Test
 - corrected settings and cache-path documentation
-- responsive main content, Updates, and Discovery widths without an unused right-side area
+- responsive main content, Updates, Discovery, and header controls without unused space or button overlap
 
 Next candidates:
 
