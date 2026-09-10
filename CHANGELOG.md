@@ -9,6 +9,10 @@ All notable changes to WinTuner GUI are documented here.
 - Added automated package-artifact tests for valid builds, missing or malformed metadata, unsafe filenames, wrong file types, missing exact files, empty files, and unsafe package identifiers.
 - Added automated update-action-state tests for disconnected, empty, selected, fully selected, and busy states.
 - Added automated Discovery action-state tests for disconnected, empty, selected, scanning, canceling, and deploying states.
+- Added centralized package-root validation and automated tests for normal, empty, file, drive-root, and protected-system paths.
+- Added installed-to-available version details and candidate/checked counts to the Updates tab.
+- Added Discovery match confidence to the result list and CSV export.
+- Added a shared PowerShell test runner and GitHub Actions validation for pull requests and pushes to Test.
 
 ### Changed
 - Started development for version 0.10.15.
@@ -21,6 +25,12 @@ All notable changes to WinTuner GUI are documented here.
 - Discovery selections now remain tied to their result objects through filtering and sorting, including duplicate display text.
 - Canceled or failed Discovery scans discard partial results, and successful deployments are removed from the candidate list.
 - Logging out clears tenant-specific Discovery results; logout remains unavailable during active Update or Discovery operations.
+- Update and Discovery deployments now validate the exact generated package artifact before any tenant upload.
+- Package creation, Upload, Updates, and Discovery now share the same protected package-root validation.
+- Updating checked apps now requires confirmation, and both update actions show the installed and target versions.
+- Update All now operates on the current verified scan result instead of fetching a second candidate list.
+- Corrected the documented settings path and listed the persistent cache files.
+- Main tabs, logs, progress, status, update results, Discovery results, and header actions now adapt to the window width.
 
 ## [0.10.14] – 2026-09-09
 

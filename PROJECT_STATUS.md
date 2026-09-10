@@ -296,11 +296,23 @@ Completed:
 - tenant-specific Discovery cleanup on logout
 - successful Discovery deployment removal from the candidate list
 - automated Discovery action-state tests
+- exact post-build artifact validation before Update and Discovery deployments
+- centralized protected package-root validation across package creation, Upload, Updates, and Discovery
+- automated package-root validation tests
+- installed-to-available version display, candidate/checked counts, and confirmation for checked updates
+- Update All based on the current verified scan result
+- Discovery match-confidence display and CSV export
+- shared local syntax/Pester test runner
+- GitHub Actions checks for pull requests to main and pushes to Test
+- corrected settings and cache-path documentation
+- responsive main content, Updates, Discovery, and header controls without unused space or button overlap
 
 Next candidates:
 
-- additional end-to-end automation
+- additional end-to-end automation for tenant-connected workflows
 - further Discovery and Updates refinements based on production feedback
+- replace remaining synchronous DoEvents() workflows incrementally with isolated background operations
+- split large GUI event handlers into smaller testable workflow functions as those paths are changed
 
 ---
 

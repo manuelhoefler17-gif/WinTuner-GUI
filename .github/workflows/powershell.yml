@@ -1,0 +1,29 @@
+name: PowerShell validation
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - Test
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Pester
+        shell: pwsh
+        run: Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck
+
+      - name: Run syntax validation and tests
+        shell: pwsh
+        run: ./Tests/Run-Tests.ps1

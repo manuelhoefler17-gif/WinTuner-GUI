@@ -258,12 +258,13 @@ Changing the selected version invalidates the previous Upload state. The new ver
 
 1. Open **Updates**.
 2. Click **Search Updates**.
-3. Review the update candidates.
+3. Review each candidate's installed and available version.
 4. Filter the results if required; checked candidates remain selected when hidden by the filter.
 5. Select the applications to update.
-6. Start the checked or all-candidates update operation.
+6. Review the candidate count and checked count.
+7. Confirm the checked or all-candidates update operation.
 
-Update actions remain disabled until their required candidates or checked selections exist. Logging out clears the current tenant's candidate list.
+Update actions remain disabled until their required candidates or checked selections exist. Both update actions use the current verified scan result, and logging out clears the current tenant's candidate list.
 
 ### 4. Discover Intune applications
 
@@ -271,10 +272,10 @@ Update actions remain disabled until their required candidates or checked select
 2. Start Discovery.
 3. Intune detected applications are collected.
 4. Search terms are generated and matched against WinGet.
-5. Review the matched packages.
+5. Review the matched packages and their displayed match confidence.
 6. Select applications for packaging and deployment.
 
-Deployment remains disabled until at least one result is checked. Filtering and sorting preserve the checked objects. Canceled or failed scans discard partial results, and logging out clears the current tenant's Discovery results.
+Deployment remains disabled until at least one result is checked. Filtering and sorting preserve the checked objects. Every newly built package is validated before upload. Canceled or failed scans discard partial results, and logging out clears the current tenant's Discovery results.
 
 The status indicates whether Graph data was fresh or cached and how many WinGet discovery queries came from cache.
 
@@ -285,12 +286,18 @@ The status indicates whether Graph data was fresh or cached and how many WinGet 
 Settings are stored in:
 
 ```text
-%LOCALAPPDATA%\WinTuner_Settings.json
+%APPDATA%\WinTunerGUI\settings.json
 ```
 
 Typical settings include the package path, automatic update checking, remembered users and WinGet overrides.
 
-Cache data is stored separately under the current user's local application data directory.
+Cache data is stored separately under the current user's local application data directory:
+
+```text
+%LOCALAPPDATA%\WinTuner_VersionCache.json
+%LOCALAPPDATA%\WinTuner_DiscoveryCache.json
+%LOCALAPPDATA%\WinTuner_DetectedAppsCache.json
+```
 
 Use **Clear All Caches** in Settings when a completely fresh lookup is required.
 
