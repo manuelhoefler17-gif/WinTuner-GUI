@@ -7,10 +7,13 @@ All notable changes to WinTuner GUI are documented here.
 ### Added
 - Added a dedicated, testable update-scan module with automated coverage for verified versions, tenant-version fallback, cancellation, missing versions, and load failures.
 - Added an in-app cancel action and live progress for active update scans.
+- Added automated action-state coverage for Superseded search results, stale selections, disconnected tenants, and active operations.
 
 ### Changed
 - Update scans now run in an isolated PowerShell runspace so Intune and WinGet checks no longer block the WinForms UI.
 - Canceling an update scan finishes the current lookup safely and discards partial candidates before update actions are re-enabled.
+- Superseded-app searches now run in an isolated PowerShell runspace and keep the WinForms UI responsive.
+- Superseded deletion actions now require a valid current result, and **Delete all Superseded Apps** uses the verified search results instead of fetching a second list.
 
 ## [0.10.15] – 2026-09-10
 

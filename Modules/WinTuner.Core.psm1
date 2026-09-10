@@ -411,14 +411,16 @@ function Get-WinTunerDiscoveryActionState {
 
         [Parameter(Mandatory)]
         [ValidateRange(0, [int]::MaxValue)]
-        [int]$CheckedCount
+        [int]$CheckedCount,
+
+        [bool]$IsOtherOperationActive = $false
     )
 
     $effectiveCheckedCount = [Math]::Min($CheckedCount, $ResultCount)
-    $isIdle = $Connected -and -not $IsScanning -and -not $IsDeploying
+    $isIdle = $Connected -and -not $IsScanning -and -not $IsDeploying -and -not $IsOtherOperationActive
 
     return [pscustomobject]@{
-        CanScan       = $Connected -and -not $IsDeploying -and -not $CancelRequested
+        CanScan       = $Connected -and -not $IsDeploying -and -not $CancelRequested -and -not $IsOtherOperationActive
         CanDeploy     = $isIdle -and $effectiveCheckedCount -gt 0
         CanExport     = $isIdle -and $ResultCount -gt 0
         CanCheckAll   = $isIdle -and $ResultCount -gt 0 -and $effectiveCheckedCount -lt $ResultCount
@@ -426,4 +428,32 @@ function Get-WinTunerDiscoveryActionState {
     }
 }
 
-Export-ModuleMember -Function Test-IsNewerVersion, Test-WinTunerPackageRoot, Test-WinTunerPackageArtifact, Get-WinTunerUpdateActionState, Get-WinTunerDiscoveryActionState
+function Get-WinTunerSupersededActionState {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [bool]$Connected,
+
+        [Parameter(Mandatory)]
+        [bool]$IsBusy,
+
+        [Parameter(Mandatory)]
+        [ValidateRange(0, [int]::MaxValue)]
+        [int]$ResultCount,
+
+        [Parameter(Mandatory)]
+        [int]$SelectedIndex
+    )
+
+    $canInteract = $Connected -and -not $IsBusy
+    $hasSelection = $SelectedIndex -ge 0 -and $SelectedIndex -lt $ResultCount
+
+    return [pscustomobject]@{
+        CanSearch         = $canInteract
+        CanDeleteSelected = $canInteract -and $hasSelection
+        CanDeleteAll      = $canInteract -and $ResultCount -gt 0
+        CanLogout         = $canInteract
+    }
+}
+
+Export-ModuleMember -Function Test-IsNewerVersion, Test-WinTunerPackageRoot, Test-WinTunerPackageArtifact, Get-WinTunerUpdateActionState, Get-WinTunerDiscoveryActionState, Get-WinTunerSupersededActionState

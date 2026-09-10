@@ -331,15 +331,21 @@ Implemented on `Test`:
 - kept update and logout actions centrally disabled during the background scan
 - added a dedicated update-scan module and automated positive, fallback, cancellation, missing-version, and error tests
 - added clean update-scan runspace shutdown when the GUI closes
+- moved the Superseded Apps tenant query into an isolated PowerShell runspace
+- centralized Superseded search and deletion state around connection, active operations, current results, and valid selection
+- changed bulk Superseded deletion to use the current verified search result instead of loading a second tenant list
+- added clean Superseded-search runspace shutdown when the GUI closes
+- added automated Superseded action-state and cross-workflow busy-state tests
 
 Validation completed:
 
-- PowerShell syntax validation passed for all 16 repository scripts and modules
-- all 47 Pester tests passed
+- PowerShell syntax validation passed for all 17 repository scripts and modules
+- all 53 Pester tests passed
 - a separate PowerShell runspace loaded the installed WinTuner module and completed the update-scan logic
 - cooperative runspace cancellation completed without blocking the caller
 - the tenant-connected GUI remained responsive while moving, resizing, and switching tabs during a scan
 - canceling a tenant scan worked, and a subsequent full update scan completed successfully
+- the tenant-connected Superseded Apps search kept the GUI responsive and returned its current result list with correct action states
 
 Next candidates:
 
