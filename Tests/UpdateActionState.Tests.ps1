@@ -62,5 +62,22 @@ Describe 'Get-WinTunerUpdateActionState' {
         $state.CanUpdateSelected | Should -BeFalse
         $state.CanUpdateAll | Should -BeFalse
         $state.CanLogout | Should -BeFalse
+        $state.SearchButtonText | Should -Be 'Search Updates'
+    }
+
+    It 'turns Search Updates into an enabled cancel action during a scan' {
+        $state = Get-WinTunerUpdateActionState -Connected:$true -IsBusy:$true -IsScanRunning:$true -CancelRequested:$false -CandidateCount 3 -CheckedCount 2
+
+        $state.CanSearch | Should -BeTrue
+        $state.SearchButtonText | Should -Be 'Cancel Scan'
+        $state.CanUpdateSelected | Should -BeFalse
+        $state.CanLogout | Should -BeFalse
+    }
+
+    It 'disables the cancel action after cancellation was requested' {
+        $state = Get-WinTunerUpdateActionState -Connected:$true -IsBusy:$true -IsScanRunning:$true -CancelRequested:$true -CandidateCount 3 -CheckedCount 2
+
+        $state.CanSearch | Should -BeFalse
+        $state.SearchButtonText | Should -Be 'Cancelling...'
     }
 }

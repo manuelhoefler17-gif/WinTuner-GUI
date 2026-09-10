@@ -55,12 +55,13 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.15"
+$script:appVersion  = "0.10.16"
 
 # Bootstrap release dependencies and keep them synchronized with the GUI release.
 $requiredReleaseFiles = @(
   'Modules/WinTuner.Core.psm1',
   'Modules/WinTuner.Winget.psm1',
+  'Modules/WinTuner.UpdateScan.psm1',
   'Modules/WinTuner.Settings.psm1',
   'Modules/WinTuner.Logging.psm1',
   'Modules/WinTuner.Intune.psm1',
@@ -1505,6 +1506,250 @@ function Invoke-AsyncOperation {
   $bw.RunWorkerAsync()
 }
 
+function Request-WinTunerUpdateScanCancellation {
+  if (-not $script:updateScanRunning -or -not $script:updateScanContext) { return }
+  if ($script:cancelUpdateScan) { return }
+
+  $script:cancelUpdateScan = $true
+  try {
+    [System.IO.File]::WriteAllText(
+      $script:updateScanContext.CancelPath,
+      (Get-Date).ToString('O'),
+      [System.Text.UTF8Encoding]::new($false)
+    )
+  } catch {
+    Write-Log "Update scan cancellation signal failed: $($_.Exception.Message)"
+  }
+
+  Update-Status 'Cancel requested - finishing current WinGet query...'
+  Write-Log 'Update scan cancellation requested.'
+  Update-UpdateActionState
+}
+
+function Complete-WinTunerUpdateScan {
+  param([Parameter(Mandatory=$true)][object]$Context)
+
+  $scanResult = $null
+  $completionError = $null
+
+  try {
+    $output = @($Context.PowerShell.EndInvoke($Context.AsyncResult))
+    if ($output.Count -eq 0) {
+      if ($Context.PowerShell.Streams.Error.Count -gt 0) {
+        throw $Context.PowerShell.Streams.Error[0].Exception
+      }
+      throw 'The update scan returned no result.'
+    }
+
+    $json = [string]$output[$output.Count - 1]
+    $scanResult = $json | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    $completionError = $_.Exception.Message
+  } finally {
+    try { $Context.Timer.Stop() } catch {}
+    try { $Context.Timer.Dispose() } catch {}
+    try { $Context.PowerShell.Dispose() } catch {}
+    Remove-Item -LiteralPath $Context.ProgressPath, $Context.CancelPath -Force -ErrorAction SilentlyContinue
+
+    if ($script:updateScanContext -eq $Context) {
+      $script:updateScanContext = $null
+    }
+    $script:updateScanRunning = $false
+    $script:cancelUpdateScan = $false
+    $script:isUpdateOperationActive = $false
+
+    try {
+      $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+      $script:progressBar.Maximum = 100
+      $script:progressBar.Value = 0
+      $script:progressBar.Visible = $false
+    } catch {}
+  }
+
+  if ($completionError) {
+    Update-Status "Update scan failed: $completionError"
+    Write-Log "Update scan failed: $completionError"
+    Update-UpdateActionState
+    return
+  }
+
+  if ($scanResult.ErrorMessage) {
+    Update-Status "Update scan failed: $($scanResult.ErrorMessage)"
+    Write-Log "Update scan failed: $($scanResult.ErrorMessage)"
+    Update-UpdateActionState
+    return
+  }
+
+  if ($scanResult.Canceled) {
+    Update-Status "Update scan canceled | Checked: $($scanResult.CheckedApps)/$($scanResult.TotalApps)"
+    Write-Log "Update scan canceled after $($scanResult.CheckedApps) of $($scanResult.TotalApps) apps; partial results discarded."
+    Update-UpdateActionState
+    return
+  }
+
+  $script:updateApps = [System.Collections.Generic.List[object]]::new()
+  $script:updateVisibleApps = [System.Collections.Generic.List[object]]::new()
+  $updateListBox.BeginUpdate()
+  try {
+    $updateListBox.Items.Clear()
+    foreach ($app in @($scanResult.Candidates | Sort-Object Name)) {
+      if (-not $app -or [string]::IsNullOrWhiteSpace([string]$app.Name)) { continue }
+      $app.Checked = $false
+      [void]$updateListBox.Items.Add((Get-UpdateCandidateDisplayText -App $app))
+      [void]$script:updateApps.Add($app)
+      [void]$script:updateVisibleApps.Add($app)
+      Write-Log ("Update available: {0} ({1} -> {2})" -f $app.Name, $app.CurrentVersion, $app.LatestVersion)
+    }
+  } finally {
+    $updateListBox.EndUpdate()
+  }
+
+  if ([int]$scanResult.LookupFailureCount -gt 0) {
+    Write-Log "Update scan WinGet lookup failures: $($scanResult.LookupFailureCount); available tenant versions were used as fallback where possible."
+  }
+
+  $candidateCount = $script:updateApps.Count
+  Update-Status "Update scan complete | Checked: $($scanResult.CheckedApps) | Candidates: $candidateCount"
+  Write-Log "Update scan summary -> Checked: $($scanResult.CheckedApps), Candidates: $candidateCount"
+  Update-UpdateActionState
+}
+
+function Start-WinTunerUpdateScan {
+  if ($script:updateScanRunning -or $script:isUpdateOperationActive) { return }
+
+  $scanModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.UpdateScan.psm1'
+  if (-not (Test-Path -LiteralPath $scanModulePath -PathType Leaf)) {
+    Update-Status 'Update scan failed: update scan module is missing.'
+    Write-Log "Update scan module missing: $scanModulePath"
+    return
+  }
+
+  $operationId = [guid]::NewGuid().ToString('N')
+  $progressPath = Join-Path ([System.IO.Path]::GetTempPath()) "wintuner-update-scan-$operationId.progress.json"
+  $cancelPath = Join-Path ([System.IO.Path]::GetTempPath()) "wintuner-update-scan-$operationId.cancel"
+
+  $updateFilterBox.Text = ''
+  $updateListBox.Items.Clear()
+  $script:updateApps = [System.Collections.Generic.List[object]]::new()
+  $script:updateVisibleApps = [System.Collections.Generic.List[object]]::new()
+  $script:isUpdateOperationActive = $true
+  $script:updateScanRunning = $true
+  $script:cancelUpdateScan = $false
+
+  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+  $script:progressBar.Minimum = 0
+  $script:progressBar.Maximum = 1
+  $script:progressBar.Value = 0
+  $script:progressBar.Visible = $true
+  Update-Status 'Loading apps from Intune...'
+  Write-Log 'Starting asynchronous update scan.'
+  Update-UpdateActionState
+
+  $scanScript = @'
+param($RepositoryRoot, $ProgressPath, $CancelPath)
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
+Import-Module WinTuner -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Core.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Winget.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.UpdateScan.psm1') -Force -ErrorAction Stop
+
+function Write-UpdateScanProgressFile {
+  param([object]$ProgressInfo)
+  $tempPath = "$ProgressPath.$([guid]::NewGuid().ToString('N')).tmp"
+  try {
+    $json = $ProgressInfo | ConvertTo-Json -Depth 4 -Compress
+    [System.IO.File]::WriteAllText($tempPath, $json, [System.Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $tempPath -Destination $ProgressPath -Force
+  } finally {
+    Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+  }
+}
+
+$result = Invoke-WinTunerUpdateScan `
+  -GetApps { @(Get-WtWin32Apps -Superseded:$false -ErrorAction Stop) } `
+  -ResolvePackageId {
+    param($app)
+    foreach ($propertyName in 'PackageId','PackageID','WingetId','PackageIdentifier') {
+      $property = $app.PSObject.Properties[$propertyName]
+      if ($property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+        return [string]$property.Value
+      }
+    }
+
+    $matches = @(Search-WtWinGetPackage -SearchQuery $app.Name -ErrorAction SilentlyContinue)
+    $exact = @($matches | Where-Object { $_.Name -and $_.Name -eq $app.Name })
+    if ($exact.Count -gt 0 -and $exact[0].PackageID) { return [string]$exact[0].PackageID }
+    if ($matches.Count -gt 0 -and $matches[0].PackageID) { return [string]$matches[0].PackageID }
+    return $null
+  } `
+  -GetVersions { param($packageId) @(Get-WingetVersions -PackageId $packageId -ErrorAction Stop) } `
+  -IsNewerVersion { param($latest, $current) Test-IsNewerVersion -Latest $latest -Current $current } `
+  -ShouldCancel { Test-Path -LiteralPath $CancelPath } `
+  -ReportProgress { param($progressInfo) Write-UpdateScanProgressFile -ProgressInfo $progressInfo }
+
+$result | ConvertTo-Json -Depth 6 -Compress
+'@
+
+  $powerShell = [System.Management.Automation.PowerShell]::Create()
+  $null = $powerShell.AddScript($scanScript).AddArgument($PSScriptRoot).AddArgument($progressPath).AddArgument($cancelPath)
+
+  $timer = New-Object System.Windows.Forms.Timer
+  $timer.Interval = 150
+  $context = [pscustomobject]@{
+    PowerShell   = $powerShell
+    AsyncResult = $null
+    Timer        = $timer
+    ProgressPath = $progressPath
+    CancelPath   = $cancelPath
+    LastProgress = $null
+  }
+  $script:updateScanContext = $context
+
+  $timer.Add_Tick({
+    $currentContext = $script:updateScanContext
+    if (-not $currentContext) { return }
+
+    if (Test-Path -LiteralPath $currentContext.ProgressPath -PathType Leaf) {
+      try {
+        $progressJson = Get-Content -LiteralPath $currentContext.ProgressPath -Raw -ErrorAction Stop
+        if ($progressJson -and $progressJson -ne $currentContext.LastProgress) {
+          $currentContext.LastProgress = $progressJson
+          $progressInfo = $progressJson | ConvertFrom-Json -ErrorAction Stop
+          if ($progressInfo.Stage -eq 'Checking') {
+            $maximum = [Math]::Max(1, [int]$progressInfo.Total)
+            $script:progressBar.Maximum = $maximum
+            $script:progressBar.Value = [Math]::Min([int]$progressInfo.Processed, $maximum)
+            Update-Status ("Checking ({0}/{1}): {2}" -f $progressInfo.Processed, $progressInfo.Total, $progressInfo.AppName)
+          }
+        }
+      } catch {}
+    }
+
+    if ($currentContext.AsyncResult -and $currentContext.AsyncResult.IsCompleted) {
+      Complete-WinTunerUpdateScan -Context $currentContext
+    }
+  })
+
+  try {
+    $context.AsyncResult = $powerShell.BeginInvoke()
+    $timer.Start()
+  } catch {
+    try { $timer.Dispose() } catch {}
+    try { $powerShell.Dispose() } catch {}
+    Remove-Item -LiteralPath $progressPath, $cancelPath -Force -ErrorAction SilentlyContinue
+    $script:updateScanContext = $null
+    $script:updateScanRunning = $false
+    $script:cancelUpdateScan = $false
+    $script:isUpdateOperationActive = $false
+    $script:progressBar.Visible = $false
+    Update-Status "Update scan failed to start: $($_.Exception.Message)"
+    Write-Log "Update scan failed to start: $($_.Exception.Message)"
+    Update-UpdateActionState
+  }
+}
+
 # Helper: validate M365 username (UPN-like)
 function Test-ValidM365UserName {
   param([string]$UserName)
@@ -1638,6 +1883,9 @@ $script:builtVersions = @{}
 $script:updateApps = [System.Collections.Generic.List[object]]::new()
 $script:updateVisibleApps = [System.Collections.Generic.List[object]]::new()
 $script:isUpdateOperationActive = $false
+$script:updateScanRunning = $false
+$script:cancelUpdateScan = $false
+$script:updateScanContext = $null
 # Cache for winget version lookups (speeds up repeated searches)
 # Disk cache loaded once at first use (Fix 1)
 # Create form
@@ -2409,8 +2657,11 @@ function Update-UpdateActionState {
             -Connected ([bool]$script:isConnected) `
             -IsBusy ([bool]$script:isUpdateOperationActive) `
             -CandidateCount $candidates.Count `
-            -CheckedCount $checkedCount
+            -CheckedCount $checkedCount `
+            -IsScanRunning ([bool]$script:updateScanRunning) `
+            -CancelRequested ([bool]$script:cancelUpdateScan)
 
+        $updateSearchButton.Text = $state.SearchButtonText
         $updateSearchButton.Enabled = $state.CanSearch
         $checkAllButton.Enabled = $state.CanCheckAll
         $uncheckAllButton.Enabled = $state.CanUncheckAll
@@ -3011,134 +3262,20 @@ $updateFilterBox.Add_TextChanged({
 
 
 # ----------------------------------------------
-# UPDATED: Robust & verbose "Search Updates"
+# Asynchronous and cancelable update scan
 # ----------------------------------------------
 $updateSearchButton.Add_Click({
-  if (-not $script:isConnected) { 
-    Update-Status "Please login to your tenant first."; 
-    return 
+  if ($script:updateScanRunning) {
+    Request-WinTunerUpdateScanCancellation
+    return
   }
 
-  try {
-    $script:isUpdateOperationActive = $true
-    Update-UpdateActionState
-    Update-Status "Loading apps from Intune..."
-    
-    # Reset UI / cache
-    $updateFilterBox.Text = ""  # Clear filter
-    $updateListBox.Items.Clear()
-    $script:updateApps = [System.Collections.Generic.List[object]]::new()
-    $script:updateVisibleApps = [System.Collections.Generic.List[object]]::new()
-
-    # 1) Load all apps
-    $all = @()
-    try {
-      $all = @(Get-WtWin32Apps -Superseded:$false -ErrorAction Stop)
-      Write-Log ("Loaded {0} apps from Intune" -f $all.Count)
-    } catch {
-      Write-Log ("Failed to load apps: {0}" -f $_.Exception.Message)
-      Update-Status "Failed to load apps from Intune"
-      return
-    }
-
-    if ($all.Count -eq 0) {
-      Update-Status "No apps found in Intune"
-      return
-    }
-
-    # 2) Filter apps that need checking
-    $appsToCheck = @($all | Where-Object { $_ -and $_.CurrentVersion })
-    Write-Log ("Checking {0} apps for updates..." -f $appsToCheck.Count)
-    
-    # Show progress bar
-    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    $script:progressBar.Value = 0
-    $script:progressBar.Maximum = [Math]::Max(1, $appsToCheck.Count)
-    $script:progressBar.Visible = $true
-
-    $candidates = [System.Collections.Generic.List[object]]::new()
-    $processedCount = 0
-    $totalCount = $appsToCheck.Count
-    
-    foreach ($app in $appsToCheck) {
-      $processedCount++
-      
-      # Update progress every app
-      try {
-        $script:progressBar.Value = $processedCount
-        Update-Status ("Checking ({0}/{1}): {2}" -f $processedCount, $totalCount, $app.Name)
-        [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-      } catch { }
-      
-      # Try to resolve winget ID
-      $wingetId = Resolve-WingetIdForApp -App $app
-      $verified = $false
-      
-      if ($wingetId) {
-        # Check winget for latest version
-        try {
-          $wgVersions = @(Get-WingetVersions -PackageId $wingetId -ErrorAction SilentlyContinue)
-          if ($wgVersions -and $wgVersions.Count -gt 0) {
-            $wgLatest = $wgVersions[0]
-            if ($wgLatest) {
-              try { 
-                $app.LatestVersion = $wgLatest 
-              } catch { }
-              
-              if (Test-IsNewerVersion $wgLatest $app.CurrentVersion) {
-                $candidates.Add($app)
-                Write-Log ("Update available: {0} ({1} -> {2})" -f $app.Name, $app.CurrentVersion, $wgLatest)
-              }
-              $verified = $true
-            }
-          }
-        } catch {
-          # Silently skip winget errors
-        }
-      }
-      
-      # Fallback: use LatestVersion if winget check failed
-      if (-not $verified -and $app.LatestVersion) {
-        if (Test-IsNewerVersion $app.LatestVersion $app.CurrentVersion) {
-          $candidates.Add($app)
-          Write-Log ("Update available (fallback): {0} ({1} -> {2})" -f $app.Name, $app.CurrentVersion, $app.LatestVersion)
-        }
-      }
-    }
-       # 3) Populate dropdown and cache
-    $count = 0
-    $updateListBox.BeginUpdate()
-    
-    $script:updateApps = [System.Collections.Generic.List[object]]::new()
-    $script:updateVisibleApps = [System.Collections.Generic.List[object]]::new()
-    
-    foreach ($app in ($candidates | Sort-Object Name)) {
-      if (-not $app -or -not $app.Name) { continue }
-      # Ensure Checked property exists for filter state persistence
-      if (-not ($app | Get-Member -Name Checked -MemberType NoteProperty)) {
-        $app | Add-Member -NotePropertyName Checked -NotePropertyValue $false -Force
-      }
-      [void]$updateListBox.Items.Add((Get-UpdateCandidateDisplayText -App $app))
-      [void]$script:updateApps.Add($app)
-      [void]$script:updateVisibleApps.Add($app)
-      $count++
-    }
-    $updateListBox.EndUpdate()
-
-    if ($count -gt 0) {
-      Update-Status "Update scan complete | Checked: $totalCount | Candidates: $count"
-      Write-Log "Update scan summary -> Checked: $totalCount, Candidates: $count"
-    } else {
-      Update-Status "Update scan complete | Checked: $totalCount | Candidates: 0"
-      Write-Log "Update scan summary -> Checked: $totalCount, Candidates: 0"
-    }
-  } finally {
-    $script:isUpdateOperationActive = $false
-    Update-UpdateActionState
-    $script:progressBar.Maximum = 100
-    $script:progressBar.Value = 0
-    $script:progressBar.Visible = $false
+  if (-not $script:isConnected) {
+    Update-Status 'Please login to your tenant first.'
+    return
   }
+
+  Start-WinTunerUpdateScan
 })
 
 # -----------------------------
@@ -4010,7 +4147,7 @@ $toolTip.SetToolTip($versionsButton,        "Select a specific version for the s
 $toolTip.SetToolTip($browseButton,          "Choose the local folder to store package files")
 if ($createButton)          { $toolTip.SetToolTip($createButton,          "Create the .wtpackage file locally") }
 if ($uploadButton)          { $toolTip.SetToolTip($uploadButton,          "Upload and deploy the package to Microsoft Intune") }
-if ($updateSearchButton)    { $toolTip.SetToolTip($updateSearchButton,    "Scan all Intune Win32 apps for available WinGet updates") }
+if ($updateSearchButton)    { $toolTip.SetToolTip($updateSearchButton,    "Scan Intune Win32 apps for WinGet updates; click again to cancel an active scan") }
 if ($updateAllButton)       { $toolTip.SetToolTip($updateAllButton,       "Update all apps with available updates") }
 if ($updateSelectedButton)  { $toolTip.SetToolTip($updateSelectedButton,  "Update only the checked apps in the list") }
 if ($scanDiscoveredButton)  { $toolTip.SetToolTip($scanDiscoveredButton,  "Scan Intune Discovered Apps and match them to WinGet packages") }
@@ -4049,4 +4186,21 @@ try {
 } catch {
     # Fängt ab, falls das Skript als Ganzes unerwartet beendet wird
     Write-FileLog "FATAL SCRIPT CRASH: $($_.Exception.Message)`n$($_.ScriptStackTrace)"
+} finally {
+    $activeScan = $script:updateScanContext
+    if ($activeScan) {
+        try {
+            [System.IO.File]::WriteAllText(
+                $activeScan.CancelPath,
+                (Get-Date).ToString('O'),
+                [System.Text.UTF8Encoding]::new($false)
+            )
+        } catch {}
+        try { $activeScan.Timer.Stop() } catch {}
+        try { $activeScan.PowerShell.Stop() } catch {}
+        try { $activeScan.PowerShell.Dispose() } catch {}
+        try { $activeScan.Timer.Dispose() } catch {}
+        Remove-Item -LiteralPath $activeScan.ProgressPath, $activeScan.CancelPath -Force -ErrorAction SilentlyContinue
+        $script:updateScanContext = $null
+    }
 }

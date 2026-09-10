@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Development version: **0.10.15**
+Development version: **0.10.16**
 
 Latest published stable release: **v0.10.15**
 
@@ -56,6 +56,7 @@ Modules:
 - `Modules/WinTuner.Intune.psm1`
 - `Modules/WinTuner.Logging.psm1`
 - `Modules/WinTuner.Settings.psm1`
+- `Modules/WinTuner.UpdateScan.psm1`
 - `Modules/WinTuner.Winget.psm1`
 
 Workers:
@@ -316,10 +317,34 @@ Completed:
 - verified standalone dependency bootstrap directly from tag v0.10.15
 - verified self-update from v0.10.14 to v0.10.15, including checksum validation, backup, replacement, restart, and dependency bootstrap
 
+---
+
+## Current 0.10.16 Work
+
+Implemented on `Test`:
+
+- moved the Intune and WinGet update scan into an isolated PowerShell runspace
+- kept the WinForms UI responsive while the scan loads and checks applications
+- changed **Search Updates** into **Cancel Scan** while a scan is active
+- added cooperative cancellation after the current WinGet query
+- discarded partial candidates on cancellation or scan failure
+- kept update and logout actions centrally disabled during the background scan
+- added a dedicated update-scan module and automated positive, fallback, cancellation, missing-version, and error tests
+- added clean update-scan runspace shutdown when the GUI closes
+
+Validation completed:
+
+- PowerShell syntax validation passed for all 16 repository scripts and modules
+- all 47 Pester tests passed
+- a separate PowerShell runspace loaded the installed WinTuner module and completed the update-scan logic
+- cooperative runspace cancellation completed without blocking the caller
+- the tenant-connected GUI remained responsive while moving, resizing, and switching tabs during a scan
+- canceling a tenant scan worked, and a subsequent full update scan completed successfully
+
 Next candidates:
 
 - additional end-to-end automation for tenant-connected workflows
-- further Discovery and Updates refinements based on production feedback
+- further Discovery refinements based on production feedback
 - replace remaining synchronous DoEvents() workflows incrementally with isolated background operations
 - split large GUI event handlers into smaller testable workflow functions as those paths are changed
 
@@ -366,6 +391,6 @@ Latest published stable release:
 
 Current development version:
 
-**0.10.15**
+**0.10.16**
 
 0.10.15 was published on 2026-09-10.

@@ -43,7 +43,8 @@ Existing package folders from earlier GUI sessions are reused only when the sele
 
 ### 🔄 Update management
 
-- Scan WinTuner-managed Intune Win32 applications
+- Scan WinTuner-managed Intune Win32 applications in a background runspace
+- Keep the GUI responsive, show live progress and cancel an active scan safely
 - Compare deployed versions with available WinGet versions
 - Display the number of checked applications and update candidates
 - Select individual or multiple applications
@@ -197,6 +198,7 @@ WinTuner-GUI/
 │   ├── WinTuner.Intune.psm1
 │   ├── WinTuner.Logging.psm1
 │   ├── WinTuner.Settings.psm1
+│   ├── WinTuner.UpdateScan.psm1
 │   └── WinTuner.Winget.psm1
 ├── Workers/
 │   └── WinTuner.DiscoveryWorker.ps1
@@ -222,6 +224,9 @@ Logging and log-management functionality.
 
 **`WinTuner.Settings.psm1`**
 Persistent settings handling.
+
+**`WinTuner.UpdateScan.psm1`**
+Testable update candidate scanning, progress and cooperative cancellation logic.
 
 **`WinTuner.Winget.psm1`**
 WinGet lookup, version and discovery functionality.
@@ -257,14 +262,15 @@ Changing the selected version invalidates the previous Upload state. The new ver
 ### 3. Scan for updates
 
 1. Open **Updates**.
-2. Click **Search Updates**.
-3. Review each candidate's installed and available version.
-4. Filter the results if required; checked candidates remain selected when hidden by the filter.
-5. Select the applications to update.
-6. Review the candidate count and checked count.
-7. Confirm the checked or all-candidates update operation.
+2. Click **Search Updates**. The scan runs in the background and reports the current application and progress.
+3. To stop a running scan, click **Cancel Scan**. The current WinGet query finishes and partial results are discarded.
+4. Review each candidate's installed and available version.
+5. Filter the results if required; checked candidates remain selected when hidden by the filter.
+6. Select the applications to update.
+7. Review the candidate count and checked count.
+8. Confirm the checked or all-candidates update operation.
 
-Update actions remain disabled until their required candidates or checked selections exist. Both update actions use the current verified scan result, and logging out clears the current tenant's candidate list.
+Update actions remain disabled until their required candidates or checked selections exist. Logout is disabled during a scan, both update actions use the current verified scan result, and logging out clears the current tenant's candidate list.
 
 ### 4. Discover Intune applications
 
