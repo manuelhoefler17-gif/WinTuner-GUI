@@ -1067,7 +1067,16 @@ function Update-SingleApp {
     
     $effectiveVersion = if ($resPkg.EffectiveVersion) { $resPkg.EffectiveVersion } else { $LatestVersion }
     $result.EffectiveVersion = $effectiveVersion
-    
+    $artifactValidation = Test-WinTunerPackageArtifact `
+      -RootPackageFolder $RootPackageFolder `
+      -PackageId $wingetId `
+      -Version ([string]$effectiveVersion)
+
+    if (-not $artifactValidation.IsValid) {
+      $result.Message = "Package validation failed for $AppName ($($artifactValidation.ReasonCode)): $($artifactValidation.Reason)"
+      Write-Log $result.Message
+      return $result
+    }
     # 3) Deploy with best available identifier
     Write-Log "Deploying $AppName version $effectiveVersion..."
     $deploySplat = @{ 
@@ -1635,7 +1644,9 @@ $script:isUpdateOperationActive = $false
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "WinTuner GUI"
 $form.Size = New-Object System.Drawing.Size(960, 850)
+$form.MinimumSize = New-Object System.Drawing.Size(800, 700)
 $form.Padding = '5,5,5,5'
+$contentWidth = [Math]::Max(760, $form.ClientSize.Width - 20)
 
 # Header panel – contains all login/top controls so they stay in one row
 $headerPanel = New-Object System.Windows.Forms.Panel
@@ -1725,14 +1736,14 @@ $usernameBox.add_TextChanged({
 $script:statusLabel = New-Object System.Windows.Forms.Label
 $script:statusLabel.Text = ""
 $script:statusLabel.Location = New-Object System.Drawing.Point(10, 745)
-$script:statusLabel.Width = 750
+$script:statusLabel.Width = $contentWidth
 $script:statusLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $form.Controls.Add($script:statusLabel)
 
 # Output textbox (Log area below tabs and progress bar)
 $script:outputBox = New-Object System.Windows.Forms.TextBox
 $script:outputBox.Location = New-Object System.Drawing.Point(10, 620)
-$script:outputBox.Size = New-Object System.Drawing.Size(760, 120)
+$script:outputBox.Size = New-Object System.Drawing.Size($contentWidth, 120)
 $script:outputBox.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $script:outputBox.Multiline = $true
 $script:outputBox.ScrollBars = "Vertical"
@@ -1745,7 +1756,7 @@ Initialize-WinTunerLogging -BasePath $PSScriptRoot -OutputBox $script:outputBox
 # Progress bar (appears between tabs and log when active)
 $script:progressBar = New-Object System.Windows.Forms.ProgressBar
 $script:progressBar.Location = New-Object System.Drawing.Point(10, 595)
-$script:progressBar.Width = 760
+$script:progressBar.Width = $contentWidth
 $script:progressBar.Height = 20
 $script:progressBar.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $script:progressBar.Visible = $false
@@ -1769,7 +1780,7 @@ $headerPanel.Controls.Add($loginInfoLabel)
 # TabControl
 $tabControl = New-Object System.Windows.Forms.TabControl
 $tabControl.Location = New-Object System.Drawing.Point(10, 88)
-$tabControl.Size = New-Object System.Drawing.Size(760, 500)
+$tabControl.Size = New-Object System.Drawing.Size($contentWidth, 500)
 $tabControl.Visible = $true
 $tabControl.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right -bor [System.Windows.Forms.AnchorStyles]::Bottom
 $form.Controls.Add($tabControl)
@@ -1898,17 +1909,25 @@ $tabUpdate.Controls.Add($updateFilterLabel)
 
 $updateFilterBox = New-Object System.Windows.Forms.TextBox
 $updateFilterBox.Location = New-Object System.Drawing.Point(355,50)
-$updateFilterBox.Width = 395
+$updateFilterBox.Width = [Math]::Max(395, $tabUpdate.ClientSize.Width - 365)
 $updateFilterBox.PlaceholderText = "Type to filter apps..."
+$updateFilterBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $tabUpdate.Controls.Add($updateFilterBox)
 
 # CheckedListBox for multi-select updates
 $updateListBox = New-Object System.Windows.Forms.CheckedListBox
 $updateListBox.Location = New-Object System.Drawing.Point(100,85)
-$updateListBox.Width = 650
-$updateListBox.Height = 150
+$updateListBox.Width = [Math]::Max(650, $tabUpdate.ClientSize.Width - 120)
+$updateListBox.Height = 130
 $updateListBox.CheckOnClick = $true
+$updateListBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $tabUpdate.Controls.Add($updateListBox)
+
+$updateSummaryLabel = New-Object System.Windows.Forms.Label
+$updateSummaryLabel.Text = "Candidates: 0 | Checked: 0"
+$updateSummaryLabel.Location = New-Object System.Drawing.Point(100,218)
+$updateSummaryLabel.AutoSize = $true
+$tabUpdate.Controls.Add($updateSummaryLabel)
 
 # Helper buttons for check/uncheck all
 $checkAllButton = New-Object System.Windows.Forms.Button
@@ -2032,49 +2051,58 @@ $uncheckAllDiscoveredButton.Enabled = $false
 $tabDiscovered.Controls.Add($uncheckAllDiscoveredButton)
 
 # --- NEU: Filter & Sortierung ---
+$discoveryFilterLabelX = [Math]::Max(440, $tabDiscovered.ClientSize.Width - 310)
+$discoveryFilterControlX = [Math]::Max(540, $tabDiscovered.ClientSize.Width - 210)
+
 $discoveredAppSearchLabel = New-Object System.Windows.Forms.Label
 $discoveredAppSearchLabel.Text = "Search App:"
-$discoveredAppSearchLabel.Location = New-Object System.Drawing.Point(440, 15)
+$discoveredAppSearchLabel.Location = New-Object System.Drawing.Point($discoveryFilterLabelX, 15)
 $discoveredAppSearchLabel.AutoSize = $true
+$discoveredAppSearchLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
 $tabDiscovered.Controls.Add($discoveredAppSearchLabel)
 
 $discoveredAppSearchBox = New-Object System.Windows.Forms.TextBox
-$discoveredAppSearchBox.Location = New-Object System.Drawing.Point(540, 12)
+$discoveredAppSearchBox.Location = New-Object System.Drawing.Point($discoveryFilterControlX, 12)
 $discoveredAppSearchBox.Width = 150
+$discoveredAppSearchBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
 $tabDiscovered.Controls.Add($discoveredAppSearchBox)
 
 $discoveredPublisherLabel = New-Object System.Windows.Forms.Label
 $discoveredPublisherLabel.Text = "Publisher:"
-$discoveredPublisherLabel.Location = New-Object System.Drawing.Point(440, 42)
+$discoveredPublisherLabel.Location = New-Object System.Drawing.Point($discoveryFilterLabelX, 42)
 $discoveredPublisherLabel.AutoSize = $true
+$discoveredPublisherLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
 $tabDiscovered.Controls.Add($discoveredPublisherLabel)
 
 $discoveredPublisherBox = New-Object System.Windows.Forms.ComboBox
-$discoveredPublisherBox.Location = New-Object System.Drawing.Point(540, 39)
+$discoveredPublisherBox.Location = New-Object System.Drawing.Point($discoveryFilterControlX, 39)
 $discoveredPublisherBox.Width = 150
 $discoveredPublisherBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 [void]$discoveredPublisherBox.Items.Add("<All Publishers>")
 $discoveredPublisherBox.SelectedIndex = 0
+$discoveredPublisherBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
 $tabDiscovered.Controls.Add($discoveredPublisherBox)
 
 $discoveredSortLabel = New-Object System.Windows.Forms.Label
 $discoveredSortLabel.Text = "Sort by:"
-$discoveredSortLabel.Location = New-Object System.Drawing.Point(440, 69)
+$discoveredSortLabel.Location = New-Object System.Drawing.Point($discoveryFilterLabelX, 69)
 $discoveredSortLabel.AutoSize = $true
+$discoveredSortLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
 $tabDiscovered.Controls.Add($discoveredSortLabel)
 
 $discoveredSortBox = New-Object System.Windows.Forms.ComboBox
-$discoveredSortBox.Location = New-Object System.Drawing.Point(540, 66)
+$discoveredSortBox.Location = New-Object System.Drawing.Point($discoveryFilterControlX, 66)
 $discoveredSortBox.Width = 150
 $discoveredSortBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 [void]$discoveredSortBox.Items.Add("Device Count")
 [void]$discoveredSortBox.Items.Add("Alphabetical")
 $discoveredSortBox.SelectedIndex = 0
+$discoveredSortBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
 $tabDiscovered.Controls.Add($discoveredSortBox)
 
 $discoveredListBox = New-Object System.Windows.Forms.CheckedListBox
 $discoveredListBox.Location = New-Object System.Drawing.Point(20,110)
-$discoveredListBox.Width = 710
+$discoveredListBox.Width = [Math]::Max(710, $tabDiscovered.ClientSize.Width - 40)
 $discoveredListBox.Height = 325
 $discoveredListBox.CheckOnClick = $true
 $discoveredListBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right -bor [System.Windows.Forms.AnchorStyles]::Bottom
@@ -2253,6 +2281,48 @@ $script:packageMap = @{}
 # Optional: user-chosen versions per PackageID
 $script:selectedPackageVersions = @{}
 
+function Get-UpdateCandidateDisplayText {
+    param([Parameter(Mandatory)][object]$App)
+
+    $current = if ([string]::IsNullOrWhiteSpace([string]$App.CurrentVersion)) { '?' } else { [string]$App.CurrentVersion }
+    $latest = if ([string]::IsNullOrWhiteSpace([string]$App.LatestVersion)) { '?' } else { [string]$App.LatestVersion }
+    return "$($App.Name) [$current -> $latest]"
+}
+
+function Resolve-WinTunerPackageRootForOperation {
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Path,
+        [switch]$CreateIfMissing
+    )
+
+    $validation = Test-WinTunerPackageRoot -RootPackageFolder $Path
+    if (-not $validation.IsValid) {
+        Update-Status "Invalid package folder: $($validation.Reason)"
+        Write-Log "Package operation blocked ($($validation.ReasonCode)): $($validation.Reason)"
+        [void][System.Windows.Forms.MessageBox]::Show(
+            $validation.Reason,
+            'Invalid Folder',
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning
+        )
+        return $null
+    }
+
+    if ($CreateIfMissing -and -not (Test-Path -LiteralPath $validation.FullPath -PathType Container)) {
+        try {
+            New-Item -ItemType Directory -Path $validation.FullPath -Force -ErrorAction Stop | Out-Null
+        }
+        catch {
+            Update-Status "Cannot create package folder: $($_.Exception.Message)"
+            Write-Log "Package folder creation failed: $($_.Exception.Message)"
+            return $null
+        }
+    }
+
+    return [string]$validation.FullPath
+}
 function Update-PackageActionState {
     $uploadButton.Enabled = $false
 
@@ -2346,6 +2416,9 @@ function Update-UpdateActionState {
         $uncheckAllButton.Enabled = $state.CanUncheckAll
         $updateSelectedButton.Enabled = $state.CanUpdateSelected
         $updateAllButton.Enabled = $state.CanUpdateAll
+        if ($updateSummaryLabel) {
+            $updateSummaryLabel.Text = "Candidates: $($candidates.Count) | Checked: $checkedCount"
+        }
     } catch {
         $updateSearchButton.Enabled = $false
         $checkAllButton.Enabled = $false
@@ -2663,27 +2736,8 @@ $createButton.Add_Click({
   $package  = $script:packageMap[$appName]
   if (-not $package -or -not $package.PackageID) { Update-Status "Selected item is invalid."; return }
   $packageID = $package.PackageID
-  $folder    = [System.IO.Path]::GetFullPath($pathBox.Text.Trim())
-  $forbiddenPaths = @(
-    [Environment]::GetFolderPath('Windows'),
-    [Environment]::GetFolderPath('System'),
-    "$env:SystemRoot\System32",
-    "$env:SystemRoot\SysWOW64",
-    "$env:ProgramFiles",
-    "${env:ProgramFiles(x86)}"
-  )
-  $isForbidden = $forbiddenPaths | Where-Object { $folder -eq $_ -or $folder.StartsWith($_ + '\') }
-  if ($isForbidden) {
-    [System.Windows.Forms.MessageBox]::Show(
-      "The selected folder '$folder' is a protected system directory.`nPlease choose a different folder.",
-      "Invalid Folder",
-      [System.Windows.Forms.MessageBoxButtons]::OK,
-      [System.Windows.Forms.MessageBoxIcon]::Warning
-    )
-    return
-  }
-  if (-not (Test-Path $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
-
+  $folder = Resolve-WinTunerPackageRootForOperation -Path $pathBox.Text -CreateIfMissing
+  if ([string]::IsNullOrWhiteSpace($folder)) { return }
   $desired = $null
   if ($script:selectedPackageVersions.ContainsKey($packageID)) {
     $desired = $script:selectedPackageVersions[$packageID]
@@ -2787,25 +2841,8 @@ $uploadButton.Add_Click({
     }
     if ([string]::IsNullOrWhiteSpace($version))   { Update-Status "Version could not be determined."; return }
     if ([string]::IsNullOrWhiteSpace($packageID)) { Update-Status "Cannot upload: failed to resolve PackageId."; return }
-    $folder = [System.IO.Path]::GetFullPath($pathBox.Text.Trim())
-    $forbiddenPaths = @(
-      [Environment]::GetFolderPath('Windows'),
-      [Environment]::GetFolderPath('System'),
-      "$env:SystemRoot\System32",
-      "$env:SystemRoot\SysWOW64",
-      "$env:ProgramFiles",
-      "${env:ProgramFiles(x86)}"
-    )
-    $isForbidden = $forbiddenPaths | Where-Object { $folder -eq $_ -or $folder.StartsWith($_ + '\') }
-    if ($isForbidden) {
-      [System.Windows.Forms.MessageBox]::Show(
-        "The selected folder '$folder' is a protected system directory.`nPlease choose a different folder.",
-        "Invalid Folder",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Warning
-      )
-      return
-    }
+    $folder = Resolve-WinTunerPackageRootForOperation -Path $pathBox.Text
+    if ([string]::IsNullOrWhiteSpace($folder)) { return }
     $artifactValidation = Test-WinTunerPackageArtifact `
         -RootPackageFolder $folder `
         -PackageId $packageID `
@@ -2926,7 +2963,7 @@ $updateFilterDebounceTimer.Add_Tick({
     # No filter - show all apps
     foreach ($app in @($script:updateApps)) {
       if ($app -and $app.Name) {
-        $idx = $updateListBox.Items.Add($app.Name)
+        $idx = $updateListBox.Items.Add((Get-UpdateCandidateDisplayText -App $app))
         [void]$script:updateVisibleApps.Add($app)
         if ($app.Checked) { $updateListBox.SetItemChecked($idx, $true) }
       }
@@ -2938,7 +2975,7 @@ $updateFilterDebounceTimer.Add_Tick({
     }
     foreach ($app in @($filtered)) {
       if ($app -and $app.Name) {
-        $idx = $updateListBox.Items.Add($app.Name)
+        $idx = $updateListBox.Items.Add((Get-UpdateCandidateDisplayText -App $app))
         [void]$script:updateVisibleApps.Add($app)
         if ($app.Checked) { $updateListBox.SetItemChecked($idx, $true) }
       }
@@ -3066,7 +3103,7 @@ $updateSearchButton.Add_Click({
       if (-not ($app | Get-Member -Name Checked -MemberType NoteProperty)) {
         $app | Add-Member -NotePropertyName Checked -NotePropertyValue $false -Force
       }
-      [void]$updateListBox.Items.Add($app.Name)
+      [void]$updateListBox.Items.Add((Get-UpdateCandidateDisplayText -App $app))
       [void]$script:updateApps.Add($app)
       [void]$script:updateVisibleApps.Add($app)
       $count++
@@ -3109,29 +3146,21 @@ $updateSelectedButton.Add_Click({
 
     Write-Log "Starting update for $($checkedApps.Count) checked candidate(s), including filtered items."
 
-    $rootPackageFolder = [System.IO.Path]::GetFullPath($pathBox.Text.Trim())
-    $forbiddenPaths = @(
-      [Environment]::GetFolderPath('Windows'),
-      [Environment]::GetFolderPath('System'),
-      "$env:SystemRoot\System32",
-      "$env:SystemRoot\SysWOW64",
-      "$env:ProgramFiles",
-      "${env:ProgramFiles(x86)}"
+    $confirmationLines = @($checkedApps | ForEach-Object { Get-UpdateCandidateDisplayText -App $_ })
+    $confirm = [System.Windows.Forms.MessageBox]::Show(
+        "The following checked apps will be updated:$([Environment]::NewLine)$([Environment]::NewLine)$($confirmationLines -join [Environment]::NewLine)",
+        'Confirm checked updates',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question
     )
-    $isForbidden = $forbiddenPaths | Where-Object { $rootPackageFolder -eq $_ -or $rootPackageFolder.StartsWith($_ + '\') }
-    if ($isForbidden) {
-      [System.Windows.Forms.MessageBox]::Show(
-        "The selected folder '$rootPackageFolder' is a protected system directory.`nPlease choose a different folder.",
-        "Invalid Folder",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Warning
-      )
-      return
-    }
-    if (-not (Test-Path $rootPackageFolder)) {
-        New-Item -ItemType Directory -Path $rootPackageFolder -Force | Out-Null
+    if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) {
+        Update-Status 'Checked app update canceled.'
+        Write-Log 'Update checked apps canceled by user.'
+        return
     }
 
+    $rootPackageFolder = Resolve-WinTunerPackageRootForOperation -Path $pathBox.Text -CreateIfMissing
+    if ([string]::IsNullOrWhiteSpace($rootPackageFolder)) { return }
     try {
         Update-Status "Starting update for $($checkedApps.Count) checked apps..."
         $batchResult = Invoke-AppUpdateBatch -Apps $checkedApps -RootPackageFolder $rootPackageFolder
@@ -3147,50 +3176,22 @@ $updateSelectedButton.Add_Click({
 # UPDATED: Update All flow
 # -------------------------
 $updateAllButton.Add_Click({
-    $rootPackageFolder = [System.IO.Path]::GetFullPath($pathBox.Text.Trim())
-    $forbiddenPaths = @(
-      [Environment]::GetFolderPath('Windows'),
-      [Environment]::GetFolderPath('System'),
-      "$env:SystemRoot\System32",
-      "$env:SystemRoot\SysWOW64",
-      "$env:ProgramFiles",
-      "${env:ProgramFiles(x86)}"
-    )
-    $isForbidden = $forbiddenPaths | Where-Object { $rootPackageFolder -eq $_ -or $rootPackageFolder.StartsWith($_ + '\') }
-    if ($isForbidden) {
-      [System.Windows.Forms.MessageBox]::Show(
-        "The selected folder '$rootPackageFolder' is a protected system directory.`nPlease choose a different folder.",
-        "Invalid Folder",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Warning
-      )
-      return
-    }
-    if (-not (Test-Path $rootPackageFolder)) {
-        New-Item -ItemType Directory -Path $rootPackageFolder -Force | Out-Null
-    }
+    $rootPackageFolder = Resolve-WinTunerPackageRootForOperation -Path $pathBox.Text -CreateIfMissing
+    if ([string]::IsNullOrWhiteSpace($rootPackageFolder)) { return }
 
-    # Build candidate list to show in confirmation dialog
-    try {
-        $updatedApps = @(Get-WtWin32Apps -Update $true -Superseded $false)
-    } catch {
-        Write-Log "Get-WtWin32Apps update threw: $($_)"
-        $updatedApps = @()
-    }
-
-    $updatedApps = @(( $updatedApps | Where-Object {
-        $_.LatestVersion -and $_.CurrentVersion -and (Test-IsNewerVersion $_.LatestVersion $_.CurrentVersion)
-    } | Sort-Object Name ))
-
+    $updatedApps = @($script:updateApps | Where-Object {
+        $_ -and $_.LatestVersion -and $_.CurrentVersion -and
+        (Test-IsNewerVersion $_.LatestVersion $_.CurrentVersion)
+    } | Sort-Object Name)
     if (-not $updatedApps -or $updatedApps.Count -eq 0) {
         Update-Status "No update candidates found."
         return
     }
 
     # Show confirmation dialog
-    $appNames = ($updatedApps | Select-Object -ExpandProperty Name) -join "`r`n"
+    $appNames = ($updatedApps | ForEach-Object { Get-UpdateCandidateDisplayText -App $_ }) -join [Environment]::NewLine
     $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "The following apps will be updated:`r`n$appNames",
+        "The following apps will be updated:$([Environment]::NewLine)$([Environment]::NewLine)$appNames",
         "Confirm",
         [System.Windows.Forms.MessageBoxButtons]::YesNo,
         [System.Windows.Forms.MessageBoxIcon]::Question
@@ -3671,8 +3672,9 @@ $scanDiscoveredButton.Add_Click({
                 if ($existingEntry) {
                     # App existiert bereits in der Liste: Wir addieren die Geräteanzahl (DeviceCount)
                     $existingEntry.DeviceCount += $app.deviceCount
+                    $existingEntry.MatchScore = [Math]::Max([double]$existingEntry.MatchScore, [double]$highestScore)
                     # Den Anzeigetext mit der neuen, kombinierten Anzahl aktualisieren
-                    $existingEntry.DisplayText = "[$($existingEntry.DeviceCount) PCs] $($existingEntry.DisplayName) ($($existingEntry.Publisher))  -->  Winget: $($existingEntry.WingetApp.Name) [$($existingEntry.WingetApp.PackageID)]"
+                    $existingEntry.DisplayText = "[$($existingEntry.DeviceCount) PCs] $($existingEntry.DisplayName) ($($existingEntry.Publisher))  -->  Winget: $($existingEntry.WingetApp.Name) [$($existingEntry.WingetApp.PackageID)] | Match: $([Math]::Round($existingEntry.MatchScore))%"
                 } else {
                     # App ist neu: Wir nutzen den sauberen Winget-Namen (ohne Versionsnummern aus Intune)
                     $cleanName = $bestMatch.Name
@@ -3681,8 +3683,9 @@ $scanDiscoveredButton.Add_Click({
                         Publisher   = $app.publisher
                         DeviceCount = $app.deviceCount
                         WingetApp   = $bestMatch
+                        MatchScore  = [double]$highestScore
                         Checked     = $false
-                        DisplayText = "[$($app.deviceCount) PCs] $cleanName ($($app.publisher))  -->  Winget: $($bestMatch.Name) [$($bestMatch.PackageID)]"
+                        DisplayText = "[$($app.deviceCount) PCs] $cleanName ($($app.publisher))  -->  Winget: $($bestMatch.Name) [$($bestMatch.PackageID)] | Match: $([Math]::Round($highestScore))%"
                     }
                     [void]$script:discoveredRaw.Add($itemObj)
                     $discoveredByPackageId[$bestMatch.PackageID] = $itemObj
@@ -3755,9 +3758,9 @@ $deployDiscoveredButton.Add_Click({
     }
 
     $rootFolder = $script:settings.DefaultPackagePath
-    if (-not $rootFolder) { $rootFolder = "C:\Temp" }
-    if (-not (Test-Path $rootFolder)) { New-Item -ItemType Directory -Path $rootFolder -Force | Out-Null }
-
+    if ([string]::IsNullOrWhiteSpace([string]$rootFolder)) { $rootFolder = 'C:\Temp' }
+    $rootFolder = Resolve-WinTunerPackageRootForOperation -Path $rootFolder -CreateIfMissing
+    if ([string]::IsNullOrWhiteSpace($rootFolder)) { return }
     $oldProgress = $ProgressPreference
     $oldInfo = $InformationPreference
     $ProgressPreference = 'SilentlyContinue'
@@ -3796,8 +3799,22 @@ $deployDiscoveredButton.Add_Click({
                     -LatestVersion $version `
                     -ErrorAction Stop
                 
-                $effVersion = if ($pkgRes.EffectiveVersion) { $pkgRes.EffectiveVersion } else { $version }
+                if (-not $pkgRes -or -not $pkgRes.Succeeded) {
+                    $packageError = if ($pkgRes -and $pkgRes.ErrorMessage) { $pkgRes.ErrorMessage } else { 'Unknown package creation error.' }
+                    throw "Package creation failed: $packageError"
+                }
 
+                $effVersion = if ($pkgRes.EffectiveVersion) { $pkgRes.EffectiveVersion } else { $version }
+                $artifactValidation = Test-WinTunerPackageArtifact `
+                    -RootPackageFolder $rootFolder `
+                    -PackageId $packageId `
+                    -Version ([string]$effVersion)
+
+                if (-not $artifactValidation.IsValid) {
+                    throw "Package validation failed ($($artifactValidation.ReasonCode)): $($artifactValidation.Reason)"
+                }
+
+                Write-Log "Validated discovered-app package before upload: $packageId v$effVersion -> $($artifactValidation.IntuneWinPath)"
                 Write-Log "Uploading new app to tenant: $packageId v$effVersion"
                 Deploy-WtWin32App `
                     -PackageId $packageId `
@@ -3863,6 +3880,7 @@ $exportDiscoveredCsvButton.Add_Click({
                 DisplayName   = $_.DisplayName
                 Publisher     = $_.Publisher
                 DeviceCount   = $_.DeviceCount
+                MatchScore    = [Math]::Round([double]$_.MatchScore)
                 WingetName    = $_.WingetApp.Name
                 WingetId      = $_.WingetApp.PackageID
                 WingetVersion = $_.WingetApp.Version

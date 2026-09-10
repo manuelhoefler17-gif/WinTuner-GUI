@@ -57,6 +57,96 @@ function Test-IsNewerVersion {
     }
 }
 
+function Test-WinTunerPackageRoot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$RootPackageFolder
+    )
+
+    $result = [ordered]@{
+        IsValid    = $false
+        ReasonCode = 'Unknown'
+        Reason     = 'Package root validation did not complete.'
+        FullPath   = $null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($RootPackageFolder)) {
+        $result['ReasonCode'] = 'InvalidRoot'
+        $result['Reason'] = 'Package root folder is empty.'
+        return [pscustomobject]$result
+    }
+
+    try {
+        $fullPath = [System.IO.Path]::GetFullPath($RootPackageFolder.Trim())
+    }
+    catch {
+        $result['ReasonCode'] = 'InvalidRoot'
+        $result['Reason'] = "Package root folder is invalid: $($_.Exception.Message)"
+        return [pscustomobject]$result
+    }
+
+    $result['FullPath'] = $fullPath
+
+    if (Test-Path -LiteralPath $fullPath -PathType Leaf) {
+        $result['ReasonCode'] = 'RootIsFile'
+        $result['Reason'] = 'Package root points to a file instead of a directory.'
+        return [pscustomobject]$result
+    }
+
+    $normalizedPath = $fullPath.TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+    $volumeRoot = [System.IO.Path]::GetPathRoot($fullPath).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+
+    if ($normalizedPath.Equals($volumeRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $result['ReasonCode'] = 'ProtectedRoot'
+        $result['Reason'] = 'The selected package root cannot be a drive root.'
+        return [pscustomobject]$result
+    }
+
+    $protectedPaths = @(
+        [Environment]::GetFolderPath('Windows'),
+        [Environment]::GetFolderPath('System'),
+        $env:ProgramFiles,
+        ${env:ProgramFiles(x86)}
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+
+    foreach ($protectedPath in $protectedPaths) {
+        try {
+            $normalizedProtectedPath = [System.IO.Path]::GetFullPath([string]$protectedPath).TrimEnd(
+                [System.IO.Path]::DirectorySeparatorChar,
+                [System.IO.Path]::AltDirectorySeparatorChar
+            )
+        }
+        catch {
+            continue
+        }
+
+        if (
+            $normalizedPath.Equals($normalizedProtectedPath, [System.StringComparison]::OrdinalIgnoreCase) -or
+            $normalizedPath.StartsWith(
+                $normalizedProtectedPath + [System.IO.Path]::DirectorySeparatorChar,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )
+        ) {
+            $result['ReasonCode'] = 'ProtectedRoot'
+            $result['Reason'] = 'The selected package root is a protected system directory.'
+            return [pscustomobject]$result
+        }
+    }
+
+    $result['IsValid'] = $true
+    $result['ReasonCode'] = 'Valid'
+    $result['Reason'] = 'Package root is valid.'
+    return [pscustomobject]$result
+}
+
 function Test-WinTunerPackageArtifact {
     [CmdletBinding()]
     param(
@@ -85,11 +175,6 @@ function Test-WinTunerPackageArtifact {
         DisplayVersion = $null
     }
 
-    if ([string]::IsNullOrWhiteSpace($RootPackageFolder)) {
-        $result['ReasonCode'] = 'InvalidRoot'
-        $result['Reason'] = 'Package root folder is empty.'
-        return [pscustomobject]$result
-    }
 
     foreach ($component in @(
         @{ Name = 'PackageId'; Value = $PackageId },
@@ -109,16 +194,16 @@ function Test-WinTunerPackageArtifact {
         }
     }
 
-    try {
-        $rootPath = [System.IO.Path]::GetFullPath($RootPackageFolder.Trim())
-    }
-    catch {
-        $result['ReasonCode'] = 'InvalidRoot'
-        $result['Reason'] = "Package root folder is invalid: $($_.Exception.Message)"
+    $rootValidation = Test-WinTunerPackageRoot -RootPackageFolder $RootPackageFolder
+    $result['RootPath'] = $rootValidation.FullPath
+
+    if (-not $rootValidation.IsValid) {
+        $result['ReasonCode'] = $rootValidation.ReasonCode
+        $result['Reason'] = $rootValidation.Reason
         return [pscustomobject]$result
     }
 
-    $result['RootPath'] = $rootPath
+    $rootPath = $rootValidation.FullPath
 
     if (-not (Test-Path -LiteralPath $rootPath -PathType Container)) {
         $result['ReasonCode'] = 'RootNotFound'
@@ -331,4 +416,4 @@ function Get-WinTunerDiscoveryActionState {
     }
 }
 
-Export-ModuleMember -Function Test-IsNewerVersion, Test-WinTunerPackageArtifact, Get-WinTunerUpdateActionState, Get-WinTunerDiscoveryActionState
+Export-ModuleMember -Function Test-IsNewerVersion, Test-WinTunerPackageRoot, Test-WinTunerPackageArtifact, Get-WinTunerUpdateActionState, Get-WinTunerDiscoveryActionState
