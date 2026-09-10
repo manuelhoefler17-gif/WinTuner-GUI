@@ -336,16 +336,23 @@ Implemented on `Test`:
 - changed bulk Superseded deletion to use the current verified search result instead of loading a second tenant list
 - added clean Superseded-search runspace shutdown when the GUI closes
 - added automated Superseded action-state and cross-workflow busy-state tests
+- moved the WinGet Apps package search into an isolated PowerShell runspace
+- kept WinGet result ordering and the current query stable while the background search completes
+- centralized package-search controls around active operations, current results, and valid selection
+- disabled tenant workflows while a WinGet package search owns the shared progress UI
+- added clean package-search runspace shutdown when the GUI closes
+- added automated WinGet package-search action-state tests
 
 Validation completed:
 
-- PowerShell syntax validation passed for all 17 repository scripts and modules
-- all 53 Pester tests passed
+- PowerShell syntax validation passed for all 18 repository scripts and modules
+- all 57 Pester tests passed
 - a separate PowerShell runspace loaded the installed WinTuner module and completed the update-scan logic
 - cooperative runspace cancellation completed without blocking the caller
 - the tenant-connected GUI remained responsive while moving, resizing, and switching tabs during a scan
 - canceling a tenant scan worked, and a subsequent full update scan completed successfully
 - the tenant-connected Superseded Apps search kept the GUI responsive and returned its current result list with correct action states
+- the WinGet Apps package search kept the GUI responsive and restored result, version, and package actions after completion
 
 Next candidates:
 
