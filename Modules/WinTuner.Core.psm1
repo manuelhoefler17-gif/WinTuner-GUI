@@ -364,14 +364,24 @@ function Get-WinTunerUpdateActionState {
 
         [Parameter(Mandatory)]
         [ValidateRange(0, [int]::MaxValue)]
-        [int]$CheckedCount
+        [int]$CheckedCount,
+
+        [bool]$IsScanRunning = $false,
+
+        [bool]$CancelRequested = $false
     )
 
     $effectiveCheckedCount = [Math]::Min($CheckedCount, $CandidateCount)
     $canInteract = $Connected -and -not $IsBusy
+    $canCancelScan = $Connected -and $IsBusy -and $IsScanRunning -and -not $CancelRequested
 
     return [pscustomobject]@{
-        CanSearch         = $canInteract
+        CanSearch         = $canInteract -or $canCancelScan
+        SearchButtonText  = if ($IsScanRunning) {
+            if ($CancelRequested) { 'Cancelling...' } else { 'Cancel Scan' }
+        } else {
+            'Search Updates'
+        }
         CanCheckAll       = $canInteract -and $CandidateCount -gt 0 -and $effectiveCheckedCount -lt $CandidateCount
         CanUncheckAll     = $canInteract -and $effectiveCheckedCount -gt 0
         CanUpdateSelected = $canInteract -and $effectiveCheckedCount -gt 0
