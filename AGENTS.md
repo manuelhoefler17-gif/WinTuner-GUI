@@ -234,13 +234,11 @@ Keep click-time validation as a final safety layer even if UI state already indi
 
 ## Package Reuse
 
-Current package reuse is intentionally session-based.
+Package reuse supports GUI restarts only after centralized artifact validation succeeds.
 
-Do not implement cross-session package reuse casually.
+Existing package folders from a previous GUI session must never be trusted solely because they exist.
 
-Existing package folders from a previous GUI session must not be trusted solely because they exist.
-
-Any future cross-session reuse must validate existing build artifacts and metadata before marking a package as reusable.
+Cross-session reuse must validate the selected package ID and version, readable metadata, matching metadata version, a safe .intunewin leaf filename, and the exact non-empty non-reparse-point file before marking a package as reusable.
 
 Refer to `PROJECT_STATUS.md` for current roadmap decisions.
 
