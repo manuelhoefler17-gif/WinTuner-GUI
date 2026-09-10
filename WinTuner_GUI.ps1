@@ -1615,7 +1615,7 @@ function Complete-WinTunerUpdateScan {
 }
 
 function Start-WinTunerUpdateScan {
-  if ($script:updateScanRunning -or $script:isUpdateOperationActive) { return }
+  if ($script:updateScanRunning -or $script:isUpdateOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isSupersededOperationActive -or $script:discoveryScanRunning -or $script:isDiscoveryDeploymentActive) { return }
 
   $scanModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.UpdateScan.psm1'
   if (-not (Test-Path -LiteralPath $scanModulePath -PathType Leaf)) {
@@ -1820,6 +1820,8 @@ function Start-WinTunerSupersededSearch {
   if (
     -not $script:isConnected -or
     $script:isSupersededOperationActive -or
+    $script:isPackageSearchActive -or
+    $script:isVersionLookupActive -or
     $script:isUpdateOperationActive -or
     $script:discoveryScanRunning -or
     $script:isDiscoveryDeploymentActive
@@ -1986,6 +1988,7 @@ function Start-WinTunerPackageSearch {
 
   if (
     $script:isPackageSearchActive -or
+    $script:isVersionLookupActive -or
     $script:isUpdateOperationActive -or
     $script:discoveryScanRunning -or
     $script:isDiscoveryDeploymentActive -or
@@ -2058,6 +2061,171 @@ function Start-WinTunerPackageSearch {
     $script:progressBar.Visible = $false
     Update-Status "WinGet search failed to start: $($_.Exception.Message)"
     Write-Log "WinGet package search failed to start for '$query': $($_.Exception.Message)"
+    Update-PackageActionState
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    Update-SupersededActionState
+    Update-PackageSearchActionState
+  }
+}
+function Complete-WinTunerVersionLookup {
+  param([Parameter(Mandatory=$true)][object]$Context)
+
+  $lookupResult = $null
+  $completionError = $null
+  try {
+    $output = @($Context.PowerShell.EndInvoke($Context.AsyncResult))
+    if ($output.Count -eq 0) {
+      if ($Context.PowerShell.Streams.Error.Count -gt 0) {
+        throw $Context.PowerShell.Streams.Error[0].Exception
+      }
+      throw 'The WinGet version lookup returned no result.'
+    }
+
+    $json = [string]$output[$output.Count - 1]
+    $lookupResult = $json | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    $completionError = $_.Exception.Message
+  } finally {
+    try { $Context.Timer.Stop() } catch {}
+    try { $Context.Timer.Dispose() } catch {}
+    try { $Context.PowerShell.Dispose() } catch {}
+    if ($script:versionLookupContext -eq $Context) {
+      $script:versionLookupContext = $null
+    }
+    try {
+      $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+      $script:progressBar.Value = 0
+      $script:progressBar.Visible = $false
+    } catch {}
+  }
+
+  if ($completionError) {
+    $script:isVersionLookupActive = $false
+    Update-Status "Version lookup failed: $completionError"
+    Write-Log "WinGet version lookup failed for '$($Context.PackageId)': $completionError"
+    Update-PackageActionState
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    Update-SupersededActionState
+    Update-PackageSearchActionState
+    return
+  }
+
+  $versions = @($lookupResult.Versions | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  if ($versions.Count -eq 0) {
+    $script:isVersionLookupActive = $false
+    Update-Status 'No versions found for the selected package.'
+    Write-Log "WinGet version lookup returned no versions for '$($Context.PackageId)'."
+    Update-PackageActionState
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    Update-SupersededActionState
+    Update-PackageSearchActionState
+    return
+  }
+
+  Write-Log "WinGet version lookup completed for '$($Context.PackageId)': $($versions.Count) version(s)."
+  try {
+    $chosen = Show-VersionPickerDialog -Title ("Select version for {0}" -f $Context.PackageId) -Versions $versions
+    if ($chosen) {
+      $script:selectedPackageVersions[$Context.PackageId] = $chosen
+      Update-Status ("Selected version for {0}: {1}" -f $Context.PackageId, $chosen)
+    } else {
+      Update-Status 'Version selection canceled.'
+    }
+  } catch {
+    Update-Status "Version selection failed: $($_.Exception.Message)"
+    Write-Log "Version selection dialog failed for '$($Context.PackageId)': $($_.Exception.Message)"
+  } finally {
+    $script:isVersionLookupActive = $false
+    Update-PackageActionState
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    Update-SupersededActionState
+    Update-PackageSearchActionState
+  }
+}
+
+function Start-WinTunerVersionLookup {
+  $selectedDisplay = [string]$dropdown.SelectedItem
+  if ([string]::IsNullOrWhiteSpace($selectedDisplay)) {
+    Update-Status 'Please select a package first.'
+    return
+  }
+
+  $package = $script:packageMap[$selectedDisplay]
+  if (-not $package -or [string]::IsNullOrWhiteSpace([string]$package.PackageID)) {
+    Update-Status 'Selected item is invalid.'
+    Update-PackageSearchActionState
+    return
+  }
+
+  if (
+    $script:isPackageSearchActive -or
+    $script:isVersionLookupActive -or
+    $script:isUpdateOperationActive -or
+    $script:discoveryScanRunning -or
+    $script:isDiscoveryDeploymentActive -or
+    $script:isSupersededOperationActive
+  ) {
+    Update-PackageSearchActionState
+    return
+  }
+
+  $packageId = [string]$package.PackageID
+  $script:isVersionLookupActive = $true
+  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+  $script:progressBar.MarqueeAnimationSpeed = 30
+  $script:progressBar.Visible = $true
+  Update-Status "Loading versions for '$packageId'..."
+  Write-Log "Starting asynchronous WinGet version lookup for '$packageId'."
+  Update-UpdateActionState
+  Update-DiscoveryActionState
+  Update-SupersededActionState
+  Update-PackageSearchActionState
+
+  $lookupScript = @(
+    'param($RepositoryRoot, $PackageId)'
+    '$ErrorActionPreference = ''Stop'''
+    '$ProgressPreference = ''SilentlyContinue'''
+    'Import-Module (Join-Path $RepositoryRoot ''Modules\WinTuner.Winget.psm1'') -Force -ErrorAction Stop'
+    '$versions = @(Get-WingetVersions -PackageId $PackageId -ErrorAction Stop | ForEach-Object { [string]$_ })'
+    '[pscustomobject]@{ Versions = $versions } | ConvertTo-Json -Depth 3 -Compress'
+  ) -join [Environment]::NewLine
+
+  $powerShell = [System.Management.Automation.PowerShell]::Create()
+  $null = $powerShell.AddScript($lookupScript).AddArgument($PSScriptRoot).AddArgument($packageId)
+  $timer = New-Object System.Windows.Forms.Timer
+  $timer.Interval = 150
+  $context = [pscustomobject]@{
+    PowerShell  = $powerShell
+    AsyncResult = $null
+    Timer       = $timer
+    PackageId   = $packageId
+  }
+  $script:versionLookupContext = $context
+
+  $timer.Add_Tick({
+    $currentContext = $script:versionLookupContext
+    if ($currentContext -and $currentContext.AsyncResult -and $currentContext.AsyncResult.IsCompleted) {
+      Complete-WinTunerVersionLookup -Context $currentContext
+    }
+  })
+
+  try {
+    $context.AsyncResult = $powerShell.BeginInvoke()
+    $timer.Start()
+  } catch {
+    try { $timer.Dispose() } catch {}
+    try { $powerShell.Dispose() } catch {}
+    $script:versionLookupContext = $null
+    $script:isVersionLookupActive = $false
+    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+    $script:progressBar.Value = 0
+    $script:progressBar.Visible = $false
+    Update-Status "Version lookup failed to start: $($_.Exception.Message)"
+    Write-Log "WinGet version lookup failed to start for '$packageId': $($_.Exception.Message)"
     Update-PackageActionState
     Update-UpdateActionState
     Update-DiscoveryActionState
@@ -2849,6 +3017,8 @@ $checkUpdateButton.Add_Click({
 $script:packageMap = @{}
 $script:isPackageSearchActive = $false
 $script:packageSearchContext = $null
+$script:isVersionLookupActive = $false
+$script:versionLookupContext = $null
 
 # Optional: user-chosen versions per PackageID
 $script:selectedPackageVersions = @{}
@@ -2965,6 +3135,7 @@ function Update-PackageSearchActionState {
         $selectedIndex = if ($dropdown) { [int]$dropdown.SelectedIndex } else { -1 }
         $isBusy = (
             [bool]$script:isPackageSearchActive -or
+            [bool]$script:isVersionLookupActive -or
             [bool]$script:isUpdateOperationActive -or
             [bool]$script:discoveryScanRunning -or
             [bool]$script:isDiscoveryDeploymentActive -or
@@ -2978,6 +3149,7 @@ function Update-PackageSearchActionState {
         $searchButton.Enabled = $state.CanSearch
         $appSearchBox.Enabled = $state.CanEditQuery
         $dropdown.Enabled = $state.CanSelectResult
+        $versionsButton.Text = if ($script:isVersionLookupActive) { 'Loading...' } else { 'Versions...' }
         $versionsButton.Enabled = $state.CanSelectVersion
         $createButton.Enabled = $state.CanCreatePackage
     } catch {
@@ -3010,7 +3182,7 @@ function Update-UpdateActionState {
         $checkedCount = @($candidates | Where-Object { $_ -and $_.Checked }).Count
         $state = Get-WinTunerUpdateActionState `
             -Connected ([bool]$script:isConnected) `
-            -IsBusy ([bool]($script:isUpdateOperationActive -or $script:isSupersededOperationActive -or $script:isPackageSearchActive)) `
+            -IsBusy ([bool]($script:isUpdateOperationActive -or $script:isSupersededOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive)) `
             -CandidateCount $candidates.Count `
             -CheckedCount $checkedCount `
             -IsScanRunning ([bool]$script:updateScanRunning) `
@@ -3061,7 +3233,7 @@ function Update-DiscoveryActionState {
             -IsScanning ([bool]$script:discoveryScanRunning) `
             -CancelRequested ([bool]$script:cancelDiscoveryScan) `
             -IsDeploying ([bool]$script:isDiscoveryDeploymentActive) `
-            -IsOtherOperationActive ([bool]($script:isSupersededOperationActive -or $script:isPackageSearchActive)) `
+            -IsOtherOperationActive ([bool]($script:isSupersededOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive)) `
             -ResultCount $results.Count `
             -CheckedCount $checkedCount
 
@@ -3098,7 +3270,8 @@ function Update-SupersededActionState {
             [bool]$script:isUpdateOperationActive -or
             [bool]$script:discoveryScanRunning -or
             [bool]$script:isDiscoveryDeploymentActive -or
-            [bool]$script:isPackageSearchActive
+            [bool]$script:isPackageSearchActive -or
+            [bool]$script:isVersionLookupActive
         )
         $state = Get-WinTunerSupersededActionState `
             -Connected ([bool]$script:isConnected) `
@@ -3338,21 +3511,7 @@ $searchButton.Add_Click({
 })
 
 $versionsButton.Add_Click({
-  if (-not $dropdown.SelectedItem) { Update-Status "Please select a package first."; return }
-  $appName  = $dropdown.SelectedItem
-  $package  = $script:packageMap[$appName]
-  if (-not $package -or -not $package.PackageID) { Update-Status "Selected item is invalid."; return }
-  $packageID = $package.PackageID
-  $versions = @(Get-WingetVersions -PackageId $packageID)
-  if (-not $versions -or $versions.Count -eq 0) { Update-Status "No versions found for the selected package."; return }
-  $chosen = Show-VersionPickerDialog -Title ("Select version for {0}" -f $packageID) -Versions $versions
-  if ($chosen) {
-    $script:selectedPackageVersions[$packageID] = $chosen
-    Update-PackageActionState
-    Update-Status ("Selected version for {0}: {1}" -f $packageID, $chosen)
-  } else {
-    Update-Status "Version selection canceled."
-  }
+  Start-WinTunerVersionLookup
 })
 
 $createButton.Add_Click({
@@ -4531,7 +4690,7 @@ $toolTip.ReshowDelay  = 500
 $toolTip.ShowAlways   = $true
 
 $toolTip.SetToolTip($searchButton,          "Search the WinGet repository without blocking the window")
-$toolTip.SetToolTip($versionsButton,        "Select a specific version for the selected app")
+$toolTip.SetToolTip($versionsButton,        "Load and select a specific version without blocking the window")
 $toolTip.SetToolTip($browseButton,          "Choose the local folder to store package files")
 if ($createButton)          { $toolTip.SetToolTip($createButton,          "Create the .wtpackage file locally") }
 if ($uploadButton)          { $toolTip.SetToolTip($uploadButton,          "Upload and deploy the package to Microsoft Intune") }
@@ -4608,5 +4767,14 @@ try {
         try { $activePackageSearch.PowerShell.Dispose() } catch {}
         try { $activePackageSearch.Timer.Dispose() } catch {}
         $script:packageSearchContext = $null
+    }
+
+    $activeVersionLookup = $script:versionLookupContext
+    if ($activeVersionLookup) {
+        try { $activeVersionLookup.Timer.Stop() } catch {}
+        try { $activeVersionLookup.PowerShell.Stop() } catch {}
+        try { $activeVersionLookup.PowerShell.Dispose() } catch {}
+        try { $activeVersionLookup.Timer.Dispose() } catch {}
+        $script:versionLookupContext = $null
     }
 }

@@ -343,6 +343,9 @@ Implemented on `Test`:
 - added clean package-search runspace shutdown when the GUI closes
 - added automated WinGet package-search action-state tests
 - upgraded GitHub Actions checkout from v4 to v7 for the native Node.js 24 runtime
+- moved WinGet version-list retrieval into an isolated PowerShell runspace
+- kept the cached version ordering and modal version picker behavior while preventing concurrent workflows
+- added clean version-lookup runspace shutdown when the GUI closes
 
 Validation completed:
 
@@ -354,6 +357,7 @@ Validation completed:
 - canceling a tenant scan worked, and a subsequent full update scan completed successfully
 - the tenant-connected Superseded Apps search kept the GUI responsive and returned its current result list with correct action states
 - the WinGet Apps package search kept the GUI responsive and restored result, version, and package actions after completion
+- the WinGet version list loaded without blocking the GUI, and the modal picker restored the expected package actions after selection or cancellation
 
 Next candidates:
 

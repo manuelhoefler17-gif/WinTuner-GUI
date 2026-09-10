@@ -14,6 +14,7 @@ All notable changes to WinTuner GUI are documented here.
 - Update scans now run in an isolated PowerShell runspace so Intune and WinGet checks no longer block the WinForms UI.
 - Canceling an update scan finishes the current lookup safely and discards partial candidates before update actions are re-enabled.
 - WinGet package searches now run in an isolated PowerShell runspace and keep the WinForms UI responsive.
+- WinGet version lists now load in the background before the version picker opens.
 - GitHub Actions validation now uses `actions/checkout@v7` with its native Node.js 24 runtime.
 - Superseded-app searches now run in an isolated PowerShell runspace and keep the WinForms UI responsive.
 - Superseded deletion actions now require a valid current result, and **Delete all Superseded Apps** uses the verified search results instead of fetching a second list.
