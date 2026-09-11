@@ -4,7 +4,7 @@
 
 Development version: **0.10.17**
 
-Latest published stable release: **v0.10.16**
+Latest published stable release: **v0.10.17**
 
 Repository:
 `manuelhoefler17-gif/WinTuner-GUI`
@@ -408,9 +408,11 @@ Next candidates:
 
 ---
 
-## Current 0.10.17 Work
+## 0.10.17 Release Status
 
-Implemented and manually validated:
+Released: **2026-09-11**
+
+Completed:
 
 - restore the Login button immediately after logout when the retained username is valid
 - establish the Microsoft Graph context during the initial tenant login and reuse it across background runspaces
@@ -423,9 +425,14 @@ Automated validation:
 - PowerShell syntax validation passed for all 34 repository scripts and modules
 - all 98 Pester tests passed
 
-The 0.10.17 implementation was merged through Pull Request #125. Tag and release remain pending separate authorization.
+- merged the implementation through Pull Request #125 and the validation status through Pull Request #126
+- finalized the 0.10.17 changelog and release version references
+- created and pushed annotated tag v0.10.17 from synchronized main and Test
+- published the GitHub release with WinTuner_GUI.ps1 and its SHA256 checksum
+- independently verified the published assets, checksum, syntax, and standalone dependency bootstrap
 
 ---
+
 ## Testing Expectations
 
 Before committing significant changes:
@@ -463,10 +470,10 @@ For significant function changes, prefer replacing a complete known block rather
 
 Latest published stable release:
 
-**v0.10.16**
+**v0.10.17**
 
 Current development version:
 
 **0.10.17**
 
-0.10.16 was published on 2026-09-11.
+0.10.17 was published on 2026-09-11.
