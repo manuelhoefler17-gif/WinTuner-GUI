@@ -4,7 +4,7 @@
 
 Development version: **0.10.16**
 
-Latest published stable release: **v0.10.15**
+Latest published stable release: **v0.10.16**
 
 Repository:
 `manuelhoefler17-gif/WinTuner-GUI`
@@ -326,9 +326,11 @@ Completed:
 
 ---
 
-## Current 0.10.16 Work
+## 0.10.16 Release Status
 
-Implemented on `Test`:
+Released: **2026-09-11**
+
+Completed:
 
 - moved the Intune and WinGet update scan into an isolated PowerShell runspace
 - kept the WinForms UI responsive while the scan loads and checks applications
@@ -393,12 +395,17 @@ Validation completed:
 - the update-deployment module revalidated the exact 7zip.7zip 26.03 artifact in an isolated runspace before a non-writing Graph-ID deployment callback
 - a real tenant app update completed through the background worker while the GUI remained responsive and the successful candidate was removed from the current update list
 - the real tenant upload of 7zip.7zip 26.03 completed successfully in the background while the GUI remained responsive and cleared the package selection afterward
+- finalized `CHANGELOG.md` for 0.10.16
+- created and pushed annotated tag `v0.10.16` from the synchronized `main` and `Test` commit
+- verified standalone dependency bootstrap directly from tag `v0.10.16`, including all 14 runtime files and the release marker
+- published the GitHub release with `WinTuner_GUI.ps1` and its SHA256 checksum
+- independently downloaded both release assets and verified version, syntax, and SHA256 integrity
 
 Next candidates:
 
 - tenant-connected end-to-end automation where credentials and a safe test tenant can be provided
 - further Discovery refinements based on production feedback
-- final 0.10.16 release checks, standalone bootstrap validation, tag, and release
+
 ---
 
 ## Testing Expectations
@@ -438,10 +445,10 @@ For significant function changes, prefer replacing a complete known block rather
 
 Latest published stable release:
 
-**v0.10.15**
+**v0.10.16**
 
 Current development version:
 
 **0.10.16**
 
-0.10.15 was published on 2026-09-10.
+0.10.16 was published on 2026-09-11.
