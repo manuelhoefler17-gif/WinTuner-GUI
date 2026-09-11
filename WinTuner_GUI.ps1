@@ -55,7 +55,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.18"
+$script:appVersion  = "0.10.19"
 
 # Bootstrap release dependencies and keep them synchronized with the GUI release.
 $requiredReleaseFiles = @(
@@ -1573,6 +1573,7 @@ function Complete-WinTunerAppUpdateBatch {
     } catch {}
   }
   if ($completionError) {
+    $script:lastUpdateResultSummary = 'Last update: failed before item results were returned'
     Update-Status "App update failed: $completionError"
     Write-Log "Background app update failed: $completionError"
     Update-UpdateActionState
@@ -1609,8 +1610,10 @@ function Complete-WinTunerAppUpdateBatch {
   }
   $successCount = [int]$batchResult.SuccessCount
   $failureCount = [int]$batchResult.FailureCount
+  $script:lastUpdateResultSummary = "Last update: $successCount successful, $failureCount failed"
   $statusPrefix = if ($Context.Mode -eq 'Checked') { 'Checked apps updated' } else { 'All updates completed' }
-  Update-Status ("{0}: {1} successful, {2} failed" -f $statusPrefix, $successCount, $failureCount)
+  $retryHint = if ($failureCount -gt 0) { ' Failed candidates remain available for retry.' } else { '' }
+  Update-Status ("{0}: {1} successful, {2} failed.{3}" -f $statusPrefix, $successCount, $failureCount, $retryHint)
   Write-Log "Background update summary -> Mode: $($Context.Mode), Successful: $successCount, Failed: $failureCount"
   Update-UpdateActionState
   Update-DiscoveryActionState
@@ -1657,6 +1660,7 @@ function Start-WinTunerAppUpdateBatch {
   $script:progressBar.Maximum = [Math]::Max(1, $workerApps.Count)
   $script:progressBar.Value = 0
   $script:progressBar.Visible = $true
+  $script:lastUpdateResultSummary = "Last update: running ($($workerApps.Count) app(s))"
   Update-Status "Starting background update for $($workerApps.Count) app(s)..."
   Write-Log "Starting background app update -> Mode: $Mode, Apps: $($workerApps.Count)"
   Update-UpdateActionState
@@ -2125,8 +2129,11 @@ function Complete-WinTunerDiscoveryScan {
   }
   if ($scanResult.ErrorMessage) {
     Clear-DiscoveryCandidateState
-    Update-Status "Discovery scan failed: $($scanResult.ErrorMessage)"
-    Write-Log "Background Discovery scan failed: $($scanResult.ErrorMessage); partial results discarded."
+    $failureStage = [string]$scanResult.FailureStage
+    $failureContext = if ([string]::IsNullOrWhiteSpace($failureStage)) { '' } else { " during $failureStage" }
+    $failureMessage = "Discovery scan failed{0}: {1}" -f $failureContext, $scanResult.ErrorMessage
+    Update-Status $failureMessage
+    Write-Log "$failureMessage; partial results discarded."
     Update-DiscoveryActionState
     return
   }
@@ -2160,8 +2167,19 @@ function Complete-WinTunerDiscoveryScan {
   Update-DiscoveredListUI
 
   $lastDiscoveryTime = Get-Date
-  $lastDiscoveryLabel.Text = "Last discovery: $($lastDiscoveryTime.ToString('HH:mm:ss'))"
-  $graphSource = if ($scanResult.GraphFromCache) { 'Cached' } else { 'Fresh' }
+  $graphAgeMinutes = [math]::Max(0, [double]$scanResult.GraphDataAgeMinutes)
+  $graphSource = if ($scanResult.GraphFromCache) {
+    $ageText = if ($graphAgeMinutes -lt 1) { '<1 min' } elseif ($graphAgeMinutes -lt 60) { "{0} min" -f [math]::Round($graphAgeMinutes) } else { "{0:N1} h" -f ($graphAgeMinutes / 60) }
+    "Cached ($ageText old)"
+  } else {
+    'Fresh'
+  }
+  $graphSourceShort = if ($scanResult.GraphFromCache) {
+    if ($graphAgeMinutes -lt 1) { 'Cached <1m' } elseif ($graphAgeMinutes -lt 60) { "Cached $([math]::Round($graphAgeMinutes))m" } else { "Cached $([math]::Round($graphAgeMinutes / 60, 1))h" }
+  } else {
+    'Fresh'
+  }
+  $lastDiscoveryLabel.Text = "Last: $($lastDiscoveryTime.ToString('HH:mm')) | $graphSourceShort"
   $wingetCacheSummary = "$($scanResult.CacheHits)/$($scanResult.TotalQueries) cached"
   if ($scanResult.GraphLimitReached) {
     Write-Log "Warning: Graph API pagination limit reached after $($scanResult.GraphPageCount) page(s). Some apps may not be shown."
@@ -3487,6 +3505,7 @@ function Set-ConnectedUIState {
   if (-not $Connected) {
     $script:updateApps = [System.Collections.Generic.List[object]]::new()
     $script:updateVisibleApps = [System.Collections.Generic.List[object]]::new()
+    $script:lastUpdateResultSummary = ''
     if ($updateListBox) { $updateListBox.Items.Clear() }
     if ($updateFilterBox) { $updateFilterBox.Text = '' }
     Clear-DiscoveryCandidateState
@@ -3508,6 +3527,7 @@ $script:currentUserUpn = ""
 
 # Cache effective builds and package versions validated from disk
 $script:builtVersions = @{}
+$script:lastUpdateResultSummary = ''
 $script:updateApps = [System.Collections.Generic.List[object]]::new()
 $script:updateVisibleApps = [System.Collections.Generic.List[object]]::new()
 $script:isUpdateOperationActive = $false
@@ -3901,7 +3921,7 @@ $discoveredHeaderLabel.Font = New-Object System.Drawing.Font("Segoe UI", 12, [Sy
 $tabDiscovered.Controls.Add($discoveredHeaderLabel)
 
 $lastDiscoveryLabel = New-Object System.Windows.Forms.Label
-$lastDiscoveryLabel.Text = "Last discovery: Never"
+$lastDiscoveryLabel.Text = "Last: Never"
 $lastDiscoveryLabel.Location = New-Object System.Drawing.Point(250,24)
 $lastDiscoveryLabel.AutoSize = $true
 $tabDiscovered.Controls.Add($lastDiscoveryLabel)
@@ -4444,7 +4464,8 @@ function Update-UpdateActionState {
         $updateSelectedButton.Enabled = $state.CanUpdateSelected
         $updateAllButton.Enabled = $state.CanUpdateAll
         if ($updateSummaryLabel) {
-            $updateSummaryLabel.Text = "Candidates: $($candidates.Count) | Checked: $checkedCount"
+            $baseSummary = "Candidates: $($candidates.Count) | Checked: $checkedCount"
+            $updateSummaryLabel.Text = if ([string]::IsNullOrWhiteSpace($script:lastUpdateResultSummary)) { $baseSummary } else { "$baseSummary | $($script:lastUpdateResultSummary)" }
         }
     } catch {
         $updateSearchButton.Enabled = $false
@@ -4470,7 +4491,7 @@ function Clear-DiscoveryCandidateState {
     [void]$discoveredPublisherBox.Items.Add('<All Publishers>')
     $discoveredPublisherBox.SelectedIndex = 0
     $discoveredPublisherBox.EndUpdate()
-    $lastDiscoveryLabel.Text = 'Last discovery: Never'
+    $lastDiscoveryLabel.Text = 'Last: Never'
 }
 
 function Update-DiscoveryActionState {

@@ -317,7 +317,7 @@ Changing the selected version invalidates the previous Upload state. The new ver
 7. Review the candidate count and checked count.
 8. Confirm the checked or all-candidates update operation.
 
-Update actions remain disabled until their required candidates or checked selections exist. Logout is disabled during scans and deployments. Both update actions use the current verified scan result, then build, validate, and deploy each app in an isolated background runspace. Successful apps are removed from the list while failed apps remain available for retry.
+Update actions remain disabled until their required candidates or checked selections exist. Logout is disabled during scans and deployments. Both update actions use the current verified scan result, then build, validate, and deploy each app in an isolated background runspace. Successful apps are removed from the list while failed apps remain available for retry. The candidate summary keeps the latest batch result visible, including successful and failed counts.
 
 ### 4. Find superseded Intune applications
 
@@ -338,7 +338,7 @@ Deletion actions remain disabled until the current tenant search returns valid r
 
 Deployment remains disabled until at least one result is checked. Filtering and sorting preserve the checked objects. Each selected app is built, exactly validated and deployed outside the UI thread. Successful apps leave the candidate list; failed apps remain available for retry. Canceled or failed scans discard partial results, and logging out clears the current tenant's Discovery results.
 
-The status indicates whether Graph data was fresh or cached and how many WinGet discovery queries came from cache.
+The Discovery header, status, and log summary indicate whether Graph data was fresh or cached. Cached results include their age so the operator can decide whether to force a fresh request. The status also reports how many WinGet discovery queries came from cache.
 
 ---
 
@@ -516,7 +516,11 @@ For an interactive, read-only tenant check, use:
 
     pwsh.exe -NoProfile -File ./Tests/Run-TenantE2E.ps1 -UserPrincipalName admin@contoso.com
 
-Add -ForceFreshDiscovery to validate an uncached detected-app request. This runner authenticates WinTuner and Microsoft Graph, reads managed and detected application inventories, reports counts and cache source, performs no tenant writes, and disconnects both sessions when finished.
+Add `-ForceFreshDiscovery` to validate one uncached detected-app request. Use the two-pass cache check before a release:
+
+    pwsh.exe -NoProfile -File ./Tests/Run-TenantE2E.ps1 -UserPrincipalName admin@contoso.com -ValidateDiscoveryCache
+
+The cache check first requests fresh Graph data, then verifies that an immediate second request uses the persistent detected-app cache and returns the same application count. The runner authenticates WinTuner and Microsoft Graph, reads managed and detected application inventories, performs no tenant writes, and disconnects both sessions when finished.
 
 A development checkout intentionally uses its local dependency files and is therefore not a substitute for testing the standalone release bootstrap.
 
@@ -536,6 +540,7 @@ Potential future improvements include:
 
 - Further Discovery and Updates UX improvements
 - Expand read-only tenant end-to-end coverage as safe test-tenant scenarios become available
+- Add app-only authentication with a customer-owned Microsoft Entra App Registration using either a client secret or certificate
 
 ---
 

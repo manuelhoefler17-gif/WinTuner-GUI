@@ -16,7 +16,7 @@ Describe 'Invoke-WinTunerDiscoveryScan' {
             param($App)
             $App.PackageId
         } -GetDetectedApps {
-            [pscustomobject]@{ Apps = $detected; FromCache = $true; PageCount = 2; LimitReached = $false }
+            [pscustomobject]@{ Apps = $detected; FromCache = $true; PageCount = 2; LimitReached = $false; RetrievedAt = [datetime]'2026-09-11T08:00:00Z'; AgeMinutes = 12.4 }
         }.GetNewClosure() -SearchPackages {
             param($Queries)
             [pscustomobject]@{
@@ -42,6 +42,8 @@ Describe 'Invoke-WinTunerDiscoveryScan' {
         $result.Apps[0].WingetApp.PackageID | Should -Be 'Contoso.Tool'
         $result.Apps[0].DeviceCount | Should -Be 5
         $result.GraphFromCache | Should -BeTrue
+        $result.GraphRetrievedAt | Should -Be ([datetime]'2026-09-11T08:00:00Z')
+        $result.GraphDataAgeMinutes | Should -Be 12.4
         $result.CacheHits | Should -Be 2
         $result.WorkerQueries | Should -Be 1
     }
@@ -64,6 +66,7 @@ Describe 'Invoke-WinTunerDiscoveryScan' {
 
         $result.Canceled | Should -BeFalse
         $result.ErrorMessage | Should -Be 'Graph paging failed'
+        $result.FailureStage | Should -Be 'detected app retrieval'
         $result.Apps | Should -HaveCount 0
     }
 

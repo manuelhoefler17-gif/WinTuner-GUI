@@ -154,3 +154,22 @@ Describe 'GUI Discovery force-refresh wiring' {
         $script:forceRefreshGuiText.Contains('Force fresh Graph data (ignore detected-app cache)') | Should -BeTrue
     }
 }
+
+Describe 'GUI Discovery result metadata wiring' {
+    BeforeAll {
+        $guiPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinTuner_GUI.ps1'
+        $script:discoveryMetadataGuiText = [System.IO.File]::ReadAllText($guiPath)
+    }
+
+    It 'shows whether Graph data is fresh or cached and includes cache age' {
+        $script:discoveryMetadataGuiText | Should -Match '\$scanResult\.GraphDataAgeMinutes'
+        $script:discoveryMetadataGuiText.Contains('Cached ($ageText old)') | Should -BeTrue
+        $script:discoveryMetadataGuiText | Should -Match 'Last: \$\(\$lastDiscoveryTime\.ToString'
+        $script:discoveryMetadataGuiText | Should -Match '\| \$graphSourceShort'
+    }
+
+    It 'includes the failed Discovery stage in user-visible errors' {
+        $script:discoveryMetadataGuiText | Should -Match '\$scanResult\.FailureStage'
+        $script:discoveryMetadataGuiText.Contains('$failureMessage = "Discovery scan failed{0}: {1}"') | Should -BeTrue
+    }
+}
