@@ -526,7 +526,7 @@ A development checkout intentionally uses its local dependency files and is ther
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete version history.
 
-Current stable release: **v0.10.17**.
+Current stable release: **v0.10.18**.
 
 ---
 
