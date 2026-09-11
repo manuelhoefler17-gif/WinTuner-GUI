@@ -447,7 +447,7 @@ Merged through Pull Request #128 and manually validated:
 - documented the complete delegated Microsoft Graph permission set requested during login, including its source, purpose, admin-consent requirement, and separate Intune-role requirement
 - manually confirmed the forced-fresh Discovery scan returns current tenant results
 
-Additional work implemented and manually validated on Test:
+Additional work merged through Pull Request #129 and manually validated:
 
 - added a Settings dialog that exposes all required delegated Microsoft Graph permissions before sign-in
 - manually confirmed the dialog opens before sign-in and displays correctly
@@ -457,7 +457,7 @@ Automated validation:
 - PowerShell syntax validation passed for all 37 repository scripts and modules
 - all 107 Pester tests passed, including focused Discovery, E2E safety, and permission-documentation tests
 
-Pull Request #128 was merged and main/Test were synchronized at bdb49da. The manually validated Settings permission dialog is ready for the Test -> Pull Request -> main workflow. No tag or release has been created.
+Pull Requests #128 and #129 were merged and main/Test were synchronized at bb523a3. No tag or release has been created.
 
 ---
 ## Testing Expectations
