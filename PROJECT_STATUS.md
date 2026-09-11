@@ -410,7 +410,7 @@ Next candidates:
 
 ## Current 0.10.17 Work
 
-Implemented on Test and awaiting manual GUI validation:
+Implemented and manually validated:
 
 - restore the Login button immediately after logout when the retained username is valid
 - establish the Microsoft Graph context during the initial tenant login and reuse it across background runspaces
@@ -423,7 +423,7 @@ Automated validation:
 - PowerShell syntax validation passed for all 34 repository scripts and modules
 - all 98 Pester tests passed
 
-No 0.10.17 commit, push, Pull Request, tag, or release has been created yet.
+The 0.10.17 implementation was merged through Pull Request #125. Tag and release remain pending separate authorization.
 
 ---
 ## Testing Expectations
