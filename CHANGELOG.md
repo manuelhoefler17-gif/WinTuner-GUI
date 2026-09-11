@@ -2,7 +2,7 @@
 
 All notable changes to WinTuner GUI are documented here.
 
-## [Unreleased]
+## [0.10.17] – 2026-09-11
 
 ### Changed
 - Microsoft Graph authentication now completes during the initial tenant login and its process-wide context is reused by background Discovery scans.
@@ -11,6 +11,7 @@ All notable changes to WinTuner GUI are documented here.
 - Restored the **Login to Tenant** button immediately after logout when the retained username is valid.
 - Normalized fresh Microsoft Graph dictionary responses correctly so an uncached Discovery scan no longer produces an empty result set.
 - Retried the narrow transient Intune error "Collection was modified; enumeration operation may not execute" while loading existing managed apps instead of discarding the entire Discovery scan.
+
 ## [0.10.16] – 2026-09-11
 
 ### Added
