@@ -33,3 +33,40 @@ Describe 'Invoke-WinTunerConnectionVerification' {
         $result.ErrorMessage | Should -Be 'authentication expired'
     }
 }
+
+Describe 'GUI connection state integration' {
+    BeforeAll {
+        $guiPath = Join-Path $PSScriptRoot '..\WinTuner_GUI.ps1'
+        $tokens = $null
+        $parseErrors = $null
+        $script:guiAst = [System.Management.Automation.Language.Parser]::ParseFile($guiPath, [ref]$tokens, [ref]$parseErrors)
+        $parseErrors | Should -HaveCount 0
+        $script:intuneModuleText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\Modules\WinTuner.Intune.psm1') -Raw
+    }
+
+    It 'recomputes the Login button state when connection state changes' {
+        $function = @($script:guiAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Set-ConnectedUIState'
+        }, $true))
+        $function | Should -HaveCount 1
+        $function[0].Extent.Text | Should -Match '\$loginButton\.Enabled\s*=\s*\(-not \$Connected'
+        $function[0].Extent.Text | Should -Match 'Test-ValidM365UserName'
+    }
+
+    It 'connects Microsoft Graph during the initial login workflow' {
+        $function = @($script:guiAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Start-WinTunerLogin'
+        }, $true))
+        $function | Should -HaveCount 1
+        $function[0].Extent.Text | Should -Match 'Connect-WinTunerGraph\s+-UserPrincipalName\s+\$UserPrincipalName'
+        $function[0].Extent.Text | Should -Match 'AddArgument\(\$upn\)'
+    }
+
+    It 'stores the Microsoft Graph context for reuse across runspaces' {
+        $script:intuneModuleText | Should -Match 'Connect-MgGraph(?s).*?-ContextScope\s+Process'
+    }
+}

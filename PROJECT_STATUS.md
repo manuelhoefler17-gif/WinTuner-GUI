@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Development version: **0.10.16**
+Development version: **0.10.17**
 
 Latest published stable release: **v0.10.16**
 
@@ -408,6 +408,24 @@ Next candidates:
 
 ---
 
+## Current 0.10.17 Work
+
+Implemented on Test and awaiting manual GUI validation:
+
+- restore the Login button immediately after logout when the retained username is valid
+- establish the Microsoft Graph context during the initial tenant login and reuse it across background runspaces
+- handle fresh Graph dictionary responses in Discovery normalization
+- retry the narrow transient Intune collection-enumeration failure while loading existing managed apps
+- add regression coverage for fresh Graph data, the transient enumeration retry, logout state, initial Graph authentication, and process-wide context reuse
+
+Automated validation:
+
+- PowerShell syntax validation passed for all 34 repository scripts and modules
+- all 98 Pester tests passed
+
+No 0.10.17 commit, push, Pull Request, tag, or release has been created yet.
+
+---
 ## Testing Expectations
 
 Before committing significant changes:
@@ -449,6 +467,6 @@ Latest published stable release:
 
 Current development version:
 
-**0.10.16**
+**0.10.17**
 
 0.10.16 was published on 2026-09-11.

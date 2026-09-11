@@ -55,6 +55,7 @@ function Connect-WinTunerGraph {
         $null = Connect-MgGraph `
             -TenantId $tenantDomain `
             -Scopes $Scopes `
+            -ContextScope Process `
             -NoWelcome `
             -ErrorAction Stop *>&1
 
