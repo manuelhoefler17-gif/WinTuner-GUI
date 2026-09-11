@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Development version: **0.10.18**
+Development version: **0.10.19**
 
 Latest published stable release: **v0.10.18**
 
@@ -473,6 +473,44 @@ Release completed:
 - verified WinTuner_GUI.ps1 SHA256: E1B0ADD03A4D242625D9AA3F1DB21B0578F668D8111698087BC26CB5E61BD1C1
 
 ---
+
+## 0.10.19 Release Candidate Status
+
+Implementation and final manual validation are complete on `Test`. Git integration and release publication are in progress.
+
+Current scope:
+
+- return Graph retrieval time and cache age with detected-app results
+- propagate Graph source metadata through the isolated Discovery pipeline
+- show fresh/cached Graph source and cached-data age in the Discovery header, status, and logs
+- report the exact Discovery processing stage on failure
+- retain the latest Update batch success/failure summary in the Updates tab
+- explain that failed Update candidates remain available for retry
+- provide a read-only two-pass tenant E2E mode for fresh Graph retrieval followed by verified persistent cache reuse
+- add focused automated regression coverage for these behaviors
+
+Validation completed:
+
+- PowerShell syntax validation passed for all 38 repository scripts and modules
+- all 117 Pester tests passed
+- manually confirmed fresh and cached Discovery source/age display
+- manually confirmed the persistent Updates result summary and retry behavior
+- manually confirmed the two-pass read-only tenant cache validation
+
+---
+## Planned Authentication Options
+
+Support for app-only authentication using a Microsoft Entra application is planned for a future release.
+
+The goal is to allow WinTuner GUI to authenticate using a customer-owned Entra App Registration with either:
+
+- a client secret
+- a certificate
+
+This will provide an alternative to interactive user sign-in and make the authentication model more suitable for enterprise environments with stricter security and access requirements.
+
+---
+
 ## Testing Expectations
 
 Before committing significant changes:
@@ -514,6 +552,6 @@ Latest published stable release:
 
 Current development version:
 
-**0.10.18**
+**0.10.19**
 
-0.10.18 was published on 2026-09-11.
+0.10.19 is in development. The latest published stable release remains v0.10.18.

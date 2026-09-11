@@ -2,6 +2,17 @@
 
 All notable changes to WinTuner GUI are documented here.
 
+## [0.10.19] – 2026-09-11
+
+### Added
+- Added Graph retrieval time and cache-age metadata to Discovery scan results.
+- Added a read-only two-pass tenant E2E mode that verifies a fresh Microsoft Graph request is reused from the persistent detected-app cache.
+
+### Changed
+- Discovery now shows whether the latest Graph inventory was fresh or cached, including the age of cached data in the tab header, status, and log summary.
+- The Updates tab now keeps the latest batch result visible after completion and explicitly states when failed candidates remain available for retry.
+- Discovery failures now identify the processing stage that failed.
+
 ## [0.10.18] – 2026-09-11
 
 ### Added

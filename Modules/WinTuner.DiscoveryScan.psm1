@@ -56,6 +56,9 @@ function New-WinTunerDiscoveryScanResult {
         [bool]$GraphFromCache = $false,
         [int]$GraphPageCount = 0,
         [bool]$GraphLimitReached = $false,
+        [Nullable[datetime]]$GraphRetrievedAt,
+        [double]$GraphDataAgeMinutes = 0,
+        [AllowNull()][string]$FailureStage,
         [int]$TotalQueries = 0,
         [int]$CacheHits = 0,
         [int]$WorkerQueries = 0,
@@ -74,6 +77,9 @@ function New-WinTunerDiscoveryScanResult {
         GraphFromCache = $GraphFromCache
         GraphPageCount = $GraphPageCount
         GraphLimitReached = $GraphLimitReached
+        GraphRetrievedAt = $GraphRetrievedAt
+        GraphDataAgeMinutes = $GraphDataAgeMinutes
+        FailureStage = $FailureStage
         TotalQueries = $TotalQueries
         CacheHits = $CacheHits
         WorkerQueries = $WorkerQueries
@@ -103,6 +109,9 @@ function Invoke-WinTunerDiscoveryScan {
     $graphFromCache = $false
     $graphPageCount = 0
     $graphLimitReached = $false
+    $graphRetrievedAt = $null
+    $graphDataAgeMinutes = 0
+    $failureStage = 'Starting'
     $totalQueries = 0
     $cacheHits = 0
     $workerQueries = 0
@@ -112,10 +121,12 @@ function Invoke-WinTunerDiscoveryScan {
         if (& $ShouldCancel) { return New-WinTunerDiscoveryScanResult -Canceled $true -Apps @() }
 
         try { & $ReportProgress ([pscustomobject]@{ Stage = 'Connecting'; Processed = 0; Total = 1; AppName = '' }) } catch {}
+        $failureStage = 'Graph authentication'
         $null = & $ConnectGraph
         if (& $ShouldCancel) { return New-WinTunerDiscoveryScanResult -Canceled $true -Apps @() }
 
         try { & $ReportProgress ([pscustomobject]@{ Stage = 'LoadingExisting'; Processed = 0; Total = 1; AppName = '' }) } catch {}
+        $failureStage = 'managed app inventory'
         $existingPackageIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         $existingApps = @()
         for ($existingAttempt = 1; $existingAttempt -le 3; $existingAttempt++) {
@@ -147,15 +158,21 @@ function Invoke-WinTunerDiscoveryScan {
         }
 
         try { & $ReportProgress ([pscustomobject]@{ Stage = 'FetchingDetected'; Processed = 0; Total = 1; AppName = '' }) } catch {}
+        $failureStage = 'detected app retrieval'
         $detectedResult = & $GetDetectedApps
         $detectedApps = @(Get-WinTunerDiscoveryValue -InputObject $detectedResult -Name 'Apps')
         $detectedCount = $detectedApps.Count
         $graphFromCache = [bool](Get-WinTunerDiscoveryValue -InputObject $detectedResult -Name 'FromCache')
         $graphPageCount = [int](Get-WinTunerDiscoveryValue -InputObject $detectedResult -Name 'PageCount')
         $graphLimitReached = [bool](Get-WinTunerDiscoveryValue -InputObject $detectedResult -Name 'LimitReached')
+        $graphDataAgeMinutes = [double](Get-WinTunerDiscoveryValue -InputObject $detectedResult -Name 'AgeMinutes')
+        $retrievedAtValue = Get-WinTunerDiscoveryValue -InputObject $detectedResult -Name 'RetrievedAt'
+        if ($retrievedAtValue) {
+            try { $graphRetrievedAt = [datetime]$retrievedAtValue } catch { $graphRetrievedAt = $null }
+        }
 
         if (& $ShouldCancel) {
-            return New-WinTunerDiscoveryScanResult -Canceled $true -Apps @() -DetectedCount $detectedCount -GraphFromCache $graphFromCache -GraphPageCount $graphPageCount -GraphLimitReached $graphLimitReached
+            return New-WinTunerDiscoveryScanResult -Canceled $true -Apps @() -DetectedCount $detectedCount -GraphFromCache $graphFromCache -GraphPageCount $graphPageCount -GraphLimitReached $graphLimitReached -GraphRetrievedAt $graphRetrievedAt -GraphDataAgeMinutes $graphDataAgeMinutes
         }
 
         $filteredApps = @($detectedApps | Where-Object {
@@ -168,7 +185,7 @@ function Invoke-WinTunerDiscoveryScan {
 
         foreach ($app in $filteredApps) {
             if (& $ShouldCancel) {
-                return New-WinTunerDiscoveryScanResult -Canceled $true -Apps @() -DetectedCount $detectedCount -FilteredCount $filteredCount -NormalizedCount $normalizedApps.Count -SkippedNonCandidateCount $skippedCount -GraphFromCache $graphFromCache -GraphPageCount $graphPageCount -GraphLimitReached $graphLimitReached
+                return New-WinTunerDiscoveryScanResult -Canceled $true -Apps @() -DetectedCount $detectedCount -FilteredCount $filteredCount -NormalizedCount $normalizedApps.Count -SkippedNonCandidateCount $skippedCount -GraphFromCache $graphFromCache -GraphPageCount $graphPageCount -GraphLimitReached $graphLimitReached -GraphRetrievedAt $graphRetrievedAt -GraphDataAgeMinutes $graphDataAgeMinutes
             }
             $searchName = [string](Get-WinTunerDiscoveryValue -InputObject $app -Name 'displayName')
             $searchName = ($searchName -replace '\s*\([^)]*\)', '' -replace '\s+[\d\.]+', '').Trim()
@@ -182,19 +199,21 @@ function Invoke-WinTunerDiscoveryScan {
         }
         $normalizedCount = $normalizedApps.Count
         if ($uniqueQueries.Count -eq 0) {
-            return New-WinTunerDiscoveryScanResult -Canceled $false -Apps @() -DetectedCount $detectedCount -FilteredCount $filteredCount -NormalizedCount $normalizedCount -SkippedNonCandidateCount $skippedCount -GraphFromCache $graphFromCache -GraphPageCount $graphPageCount -GraphLimitReached $graphLimitReached
+            return New-WinTunerDiscoveryScanResult -Canceled $false -Apps @() -DetectedCount $detectedCount -FilteredCount $filteredCount -NormalizedCount $normalizedCount -SkippedNonCandidateCount $skippedCount -GraphFromCache $graphFromCache -GraphPageCount $graphPageCount -GraphLimitReached $graphLimitReached -GraphRetrievedAt $graphRetrievedAt -GraphDataAgeMinutes $graphDataAgeMinutes
         }
 
         try { & $ReportProgress ([pscustomobject]@{ Stage = 'Searching'; Processed = 0; Total = $uniqueQueries.Count; AppName = '' }) } catch {}
+        $failureStage = 'WinGet package search'
         $batchResult = & $SearchPackages @($uniqueQueries) $ShouldCancel
         $totalQueries = [int](Get-WinTunerDiscoveryValue -InputObject $batchResult -Name 'TotalQueries')
         $cacheHits = [int](Get-WinTunerDiscoveryValue -InputObject $batchResult -Name 'CacheHits')
         $workerQueries = [int](Get-WinTunerDiscoveryValue -InputObject $batchResult -Name 'WorkerQueries')
         $workerCount = [int](Get-WinTunerDiscoveryValue -InputObject $batchResult -Name 'WorkerCount')
         if ([bool](Get-WinTunerDiscoveryValue -InputObject $batchResult -Name 'Canceled') -or (& $ShouldCancel)) {
-            return New-WinTunerDiscoveryScanResult -Canceled $true -Apps @() -DetectedCount $detectedCount -FilteredCount $filteredCount -NormalizedCount $normalizedCount -SkippedNonCandidateCount $skippedCount -GraphFromCache $graphFromCache -GraphPageCount $graphPageCount -GraphLimitReached $graphLimitReached -TotalQueries $totalQueries -CacheHits $cacheHits -WorkerQueries $workerQueries -WorkerCount $workerCount
+            return New-WinTunerDiscoveryScanResult -Canceled $true -Apps @() -DetectedCount $detectedCount -FilteredCount $filteredCount -NormalizedCount $normalizedCount -SkippedNonCandidateCount $skippedCount -GraphFromCache $graphFromCache -GraphPageCount $graphPageCount -GraphLimitReached $graphLimitReached -TotalQueries $totalQueries -CacheHits $cacheHits -WorkerQueries $workerQueries -WorkerCount $workerCount -GraphRetrievedAt $graphRetrievedAt -GraphDataAgeMinutes $graphDataAgeMinutes
         }
 
+        $failureStage = 'Discovery matching'
         $searchResultCache = @{}
         foreach ($searchResult in @(Get-WinTunerDiscoveryValue -InputObject $batchResult -Name 'Results')) {
             $query = [string](Get-WinTunerDiscoveryValue -InputObject $searchResult -Name 'Query')
@@ -208,7 +227,7 @@ function Invoke-WinTunerDiscoveryScan {
         $processed = 0
         foreach ($entry in $normalizedApps) {
             if (& $ShouldCancel) {
-                return New-WinTunerDiscoveryScanResult -Canceled $true -Apps @() -DetectedCount $detectedCount -FilteredCount $filteredCount -NormalizedCount $normalizedCount -MatchedRawCount $matchedRawCount -SkippedNonCandidateCount $skippedCount -GraphFromCache $graphFromCache -GraphPageCount $graphPageCount -GraphLimitReached $graphLimitReached -TotalQueries $totalQueries -CacheHits $cacheHits -WorkerQueries $workerQueries -WorkerCount $workerCount
+                return New-WinTunerDiscoveryScanResult -Canceled $true -Apps @() -DetectedCount $detectedCount -FilteredCount $filteredCount -NormalizedCount $normalizedCount -MatchedRawCount $matchedRawCount -SkippedNonCandidateCount $skippedCount -GraphFromCache $graphFromCache -GraphPageCount $graphPageCount -GraphLimitReached $graphLimitReached -TotalQueries $totalQueries -CacheHits $cacheHits -WorkerQueries $workerQueries -WorkerCount $workerCount -GraphRetrievedAt $graphRetrievedAt -GraphDataAgeMinutes $graphDataAgeMinutes
             }
 
             $processed++
@@ -253,9 +272,9 @@ function Invoke-WinTunerDiscoveryScan {
             }
         }
 
-        return New-WinTunerDiscoveryScanResult -Canceled $false -Apps @($results) -DetectedCount $detectedCount -FilteredCount $filteredCount -NormalizedCount $normalizedCount -MatchedRawCount $matchedRawCount -SkippedNonCandidateCount $skippedCount -GraphFromCache $graphFromCache -GraphPageCount $graphPageCount -GraphLimitReached $graphLimitReached -TotalQueries $totalQueries -CacheHits $cacheHits -WorkerQueries $workerQueries -WorkerCount $workerCount
+        return New-WinTunerDiscoveryScanResult -Canceled $false -Apps @($results) -DetectedCount $detectedCount -FilteredCount $filteredCount -NormalizedCount $normalizedCount -MatchedRawCount $matchedRawCount -SkippedNonCandidateCount $skippedCount -GraphFromCache $graphFromCache -GraphPageCount $graphPageCount -GraphLimitReached $graphLimitReached -TotalQueries $totalQueries -CacheHits $cacheHits -WorkerQueries $workerQueries -WorkerCount $workerCount -GraphRetrievedAt $graphRetrievedAt -GraphDataAgeMinutes $graphDataAgeMinutes
     } catch {
-        return New-WinTunerDiscoveryScanResult -Canceled $false -ErrorMessage $_.Exception.Message -Apps @() -DetectedCount $detectedCount -FilteredCount $filteredCount -NormalizedCount $normalizedCount -MatchedRawCount $matchedRawCount -SkippedNonCandidateCount $skippedCount -GraphFromCache $graphFromCache -GraphPageCount $graphPageCount -GraphLimitReached $graphLimitReached -TotalQueries $totalQueries -CacheHits $cacheHits -WorkerQueries $workerQueries -WorkerCount $workerCount
+        return New-WinTunerDiscoveryScanResult -Canceled $false -ErrorMessage $_.Exception.Message -Apps @() -DetectedCount $detectedCount -FilteredCount $filteredCount -NormalizedCount $normalizedCount -MatchedRawCount $matchedRawCount -SkippedNonCandidateCount $skippedCount -GraphFromCache $graphFromCache -GraphPageCount $graphPageCount -GraphLimitReached $graphLimitReached -TotalQueries $totalQueries -CacheHits $cacheHits -WorkerQueries $workerQueries -WorkerCount $workerCount -GraphRetrievedAt $graphRetrievedAt -GraphDataAgeMinutes $graphDataAgeMinutes -FailureStage $failureStage
     }
 }
 

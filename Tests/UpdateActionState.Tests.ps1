@@ -81,3 +81,24 @@ Describe 'Get-WinTunerUpdateActionState' {
         $state.SearchButtonText | Should -Be 'Cancelling...'
     }
 }
+
+Describe 'GUI update result summary wiring' {
+    BeforeAll {
+        $guiPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinTuner_GUI.ps1'
+        $script:updateSummaryGuiText = [System.IO.File]::ReadAllText($guiPath)
+    }
+
+    It 'keeps the latest batch result visible in the update summary' {
+        $script:updateSummaryGuiText | Should -Match '\$script:lastUpdateResultSummary'
+        $script:updateSummaryGuiText | Should -Match 'Last update: \$successCount successful, \$failureCount failed'
+        $script:updateSummaryGuiText | Should -Match '\$updateSummaryLabel\.Text = if'
+    }
+
+    It 'keeps failed candidates available and explains that they can be retried' {
+        $script:updateSummaryGuiText | Should -Match 'Failed candidates remain available for retry\.'
+    }
+
+    It 'clears the previous update result when the tenant session ends' {
+        @([regex]::Matches($script:updateSummaryGuiText, '\$script:lastUpdateResultSummary = ''''')).Count | Should -BeGreaterOrEqual 2
+    }
+}

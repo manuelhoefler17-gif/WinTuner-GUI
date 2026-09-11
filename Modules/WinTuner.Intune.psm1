@@ -118,6 +118,7 @@ function Get-WinTunerDetectedAppsCache {
             Apps      = @($cache.Apps)
             PageCount = [int]$cache.PageCount
             Timestamp = $timestamp
+            AgeMinutes = [math]::Max(0, $ageMinutes)
         }
     }
     catch {
@@ -223,6 +224,8 @@ function Get-WinTunerDetectedApps {
                 PageCount    = $cachedResult.PageCount
                 LimitReached = $false
                 FromCache    = $true
+                RetrievedAt = $cachedResult.Timestamp
+                AgeMinutes = [math]::Round([double]$cachedResult.AgeMinutes, 1)
             }
         }
     }
@@ -301,6 +304,7 @@ function Get-WinTunerDetectedApps {
 
     } while ($uri)
 
+    $retrievedAt = [datetime]::UtcNow
     if (-not $limitReached -and $tenantId) {
         Save-WinTunerDetectedAppsCache `
             -TenantId $tenantId `
@@ -313,6 +317,8 @@ function Get-WinTunerDetectedApps {
         PageCount    = $pageCount
         LimitReached = $limitReached
         FromCache    = $false
+        RetrievedAt = $retrievedAt
+        AgeMinutes = 0
     }
 }
 
