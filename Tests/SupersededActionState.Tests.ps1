@@ -46,3 +46,21 @@ Describe 'Get-WinTunerSupersededActionState' {
         $state.CanLogout | Should -BeFalse
     }
 }
+Describe 'GUI superseded action wiring' {
+    It 'applies the centralized search state to the search button' {
+        $guiPath = Join-Path $PSScriptRoot '..\WinTuner_GUI.ps1'
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($guiPath, [ref]$tokens, [ref]$parseErrors)
+        $parseErrors.Count | Should -Be 0
+
+        $functions = @($ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Update-SupersededActionState'
+        }, $true))
+
+        $functions.Count | Should -Be 1
+        $functions[0].Extent.Text | Should -Match '\$supersededSearchButton\.Enabled\s*=\s*\$state\.CanSearch'
+    }
+}

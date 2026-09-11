@@ -91,3 +91,25 @@ Describe 'Get-WinTunerDiscoveryActionState' {
         $state.CanUncheckAll | Should -BeFalse
     }
 }
+Describe 'GUI Discovery filter layout wiring' {
+    It 'repositions the filter controls whenever the Discovery tab is resized' {
+        $guiPath = Join-Path $PSScriptRoot '..\WinTuner_GUI.ps1'
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($guiPath, [ref]$tokens, [ref]$parseErrors)
+        $parseErrors.Count | Should -Be 0
+
+        $functions = @($ast.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Update-WinTunerDiscoveryFilterLayout'
+        }, $true))
+
+        $functions.Count | Should -Be 1
+        $layoutText = $functions[0].Extent.Text
+        $layoutText | Should -Match '\$discoveredAppSearchBox\.Location\s*='
+        $layoutText | Should -Match '\$discoveredPublisherBox\.Location\s*='
+        $layoutText | Should -Match '\$discoveredSortBox\.Location\s*='
+        [System.IO.File]::ReadAllText($guiPath) | Should -Match '\$tabDiscovered\.Add_Resize\(\{\s*Update-WinTunerDiscoveryFilterLayout\s*\}\)'
+    }
+}

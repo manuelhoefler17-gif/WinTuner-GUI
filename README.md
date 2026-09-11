@@ -20,7 +20,7 @@ It simplifies common Microsoft Intune Win32 application tasks:
 - Discover applications reported by Intune and match them to WinGet
 - Bulk-package and update multiple applications
 - Cache expensive WinGet and Microsoft Graph lookups
-- Keep long-running discovery operations responsive and cancellable
+- Keep long-running tenant and WinGet operations responsive, with safe cancellation where supported
 
 WinTuner GUI requires **PowerShell 7**.
 
@@ -64,7 +64,8 @@ The discovery pipeline includes:
 - Persistent WinGet discovery cache
 - Application-name normalization and fuzzy matching
 - Duplicate search-term handling
-- Isolated PowerShell worker processes
+- Entire Graph retrieval, normalization and matching orchestration in a background runspace
+- Isolated PowerShell worker processes for scalable WinGet queries
 - Batched WinGet queries
 - Cancellation support with partial-result cleanup
 - Action-state validation based on connection, scan, deployment, results, and checked selections
@@ -126,6 +127,7 @@ The self-update process includes:
 - Persistent application settings
 - Remembered username support
 - Recent-user history
+- Background tenant-connection verification with bounded retries
 - Configurable package output folder
 - Dark and light themes
 - Search and filtering
@@ -195,12 +197,16 @@ WinTuner-GUI/
 ├── WinTuner_GUI.ps1
 ├── Modules/
 │   ├── WinTuner.AppUpdate.psm1
+│   ├── WinTuner.Connection.psm1
 │   ├── WinTuner.Core.psm1
+│   ├── WinTuner.DiscoveryDeployment.psm1
+│   ├── WinTuner.DiscoveryScan.psm1
 │   ├── WinTuner.Intune.psm1
 │   ├── WinTuner.Logging.psm1
 │   ├── WinTuner.PackageBuild.psm1
 │   ├── WinTuner.PackageUpload.psm1
 │   ├── WinTuner.Settings.psm1
+│   ├── WinTuner.SupersededRemoval.psm1
 │   ├── WinTuner.UpdateScan.psm1
 │   └── WinTuner.Winget.psm1
 ├── Workers/
@@ -219,8 +225,17 @@ WinForms user interface, application orchestration, authentication workflow, pac
 **`WinTuner.AppUpdate.psm1`**
 Testable background package-build, exact artifact validation and tenant-deployment batching for existing apps.
 
+**`WinTuner.Connection.psm1`**
+Bounded, testable tenant-connection verification used after interactive authentication.
+
 **`WinTuner.Core.psm1`**
 Shared core functionality.
+
+**`WinTuner.DiscoveryDeployment.psm1`**
+Background package build, exact artifact validation and tenant deployment for checked Discovery results.
+
+**`WinTuner.DiscoveryScan.psm1`**
+Testable Discovery orchestration for Graph inventory, normalization, cached WinGet matching, deduplication and cancellation.
 
 **`WinTuner.Intune.psm1`**
 Microsoft Intune and detected-app integration.
@@ -236,6 +251,9 @@ Exact artifact revalidation and tenant deployment used by the background upload 
 
 **`WinTuner.Settings.psm1`**
 Persistent settings handling.
+
+**`WinTuner.SupersededRemoval.psm1`**
+Background deletion batching with per-app results and safe handling of already absent apps.
 
 **`WinTuner.UpdateScan.psm1`**
 Testable update candidate scanning, progress and cooperative cancellation logic.
@@ -257,7 +275,7 @@ Isolated worker used for scalable WinGet discovery queries.
 3. Click **Login**.
 4. Complete interactive authentication.
 
-WinTuner GUI verifies the tenant connection before enabling tenant-dependent actions.
+WinTuner GUI verifies the tenant connection with bounded retries in a background runspace before enabling tenant-dependent actions.
 
 ### 2. Create and deploy a WinGet application
 
@@ -290,18 +308,18 @@ Update actions remain disabled until their required candidates or checked select
 2. Click **Search Superseded Apps**. The tenant query runs in the background so the window remains responsive.
 3. Select one result for individual deletion, or review the full result list before using **Delete all Superseded Apps**.
 
-Deletion actions remain disabled until the current tenant search returns valid results. **Delete all Superseded Apps** uses that displayed result set and does not silently fetch a different list before confirmation.
+Deletion actions remain disabled until the current tenant search returns valid results. Individual and bulk deletion run in a background runspace against that displayed result set. Successful or already absent apps are removed from the list, while failures remain available for retry.
 
 ### 5. Discover Intune applications
 
 1. Open **Discovered Apps**.
-2. Start Discovery.
+2. Start Discovery. Graph retrieval, normalization and WinGet matching run in the background; use **Cancel Scan** to stop safely.
 3. Intune detected applications are collected.
 4. Search terms are generated and matched against WinGet.
 5. Review the matched packages and their displayed match confidence.
-6. Select applications for packaging and deployment.
+6. Select applications for packaging and background deployment.
 
-Deployment remains disabled until at least one result is checked. Filtering and sorting preserve the checked objects. Every newly built package is validated before upload. Canceled or failed scans discard partial results, and logging out clears the current tenant's Discovery results.
+Deployment remains disabled until at least one result is checked. Filtering and sorting preserve the checked objects. Each selected app is built, exactly validated and deployed outside the UI thread. Successful apps leave the candidate list; failed apps remain available for retry. Canceled or failed scans discard partial results, and logging out clears the current tenant's Discovery results.
 
 The status indicates whether Graph data was fresh or cached and how many WinGet discovery queries came from cache.
 
