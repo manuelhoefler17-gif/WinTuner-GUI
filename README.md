@@ -403,19 +403,19 @@ winget --version
 
 ### WinGet Apps
 
-<img width="886" height="843" alt="WinGet Apps" src="https://github.com/user-attachments/assets/990f0de4-a5d3-4462-851d-686618faa02f" />
+<img width="946" height="843" alt="image" src="https://github.com/user-attachments/assets/5472167b-a669-4127-8d2f-744e7d54a352" />
 
 ### Updates
 
-<img width="886" height="843" alt="Updates" src="https://github.com/user-attachments/assets/ef03ac45-d9ac-49eb-84b6-e1abc4265c96" />
+<img width="946" height="843" alt="image" src="https://github.com/user-attachments/assets/152d089b-ca6b-4c8b-9c6f-afff1f442f8a" />
 
 ### Discovered Apps
 
-<img width="886" height="843" alt="Discovered Apps" src="https://github.com/user-attachments/assets/c8bdb7ec-476b-465d-83ab-4fa369120a91" />
+<img width="946" height="843" alt="image" src="https://github.com/user-attachments/assets/702db6b7-0f8f-4ff8-98e0-752213baa21b" />
 
 ### Settings
 
-<img width="886" height="843" alt="Settings" src="https://github.com/user-attachments/assets/ad101628-3a72-4b5e-b550-0e531e0e983a" />
+<img width="946" height="843" alt="image" src="https://github.com/user-attachments/assets/924f05c8-dfaa-4e59-93df-a33ed18f7b59" />
 
 ---
 
