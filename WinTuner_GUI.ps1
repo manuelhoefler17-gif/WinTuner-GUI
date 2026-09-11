@@ -55,7 +55,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.16"
+$script:appVersion  = "0.10.17"
 
 # Bootstrap release dependencies and keep them synchronized with the GUI release.
 $requiredReleaseFiles = @(
@@ -2281,6 +2281,10 @@ $result | ConvertTo-Json -Depth 8 -Compress
           switch ([string]$progressInfo.Stage) {
             'Connecting' { Update-Status 'Checking Microsoft Graph session...' }
             'LoadingExisting' { Update-Status 'Loading existing managed apps...' }
+            'LoadingExistingRetry' {
+              Update-Status ("Existing app inventory changed; retrying ({0}/{1})..." -f $progressInfo.Processed, $progressInfo.Total)
+              Write-Log ("Discovery: existing app inventory changed during enumeration; retry {0} of {1}." -f $progressInfo.Processed, $progressInfo.Total)
+            }
             'FetchingDetected' { Update-Status 'Fetching all detected apps from Intune...' }
             'Searching' { Update-Status ("Searching WinGet for {0} unique app name(s)..." -f $progressInfo.Total) }
             'Matching' {
@@ -2528,6 +2532,7 @@ function Complete-WinTunerLoginVerification {
 
   if ($errorMessage) {
     try { Disconnect-WtWinTuner -ErrorAction SilentlyContinue } catch {}
+    Disconnect-WinTunerGraph
     $script:isConnected = $false
     $script:currentUserUpn = ''
     Show-WinTunerLoginError -Message $errorMessage
@@ -2611,13 +2616,15 @@ function Start-WinTunerLogin {
     return
   }
 
-  Update-Status 'Tenant authentication completed; verifying connection...'
+  Update-Status 'Tenant authentication completed; connecting Microsoft Graph and verifying tenant...'
   $workerScript = @'
-param($RepositoryRoot)
+param($RepositoryRoot, $UserPrincipalName)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 Import-Module WinTuner -ErrorAction Stop
 Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Connection.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Intune.psm1') -Force -ErrorAction Stop
+$null = Connect-WinTunerGraph -UserPrincipalName $UserPrincipalName
 $result = Invoke-WinTunerConnectionVerification -GetApps {
   @(Get-WtWin32Apps -Update:$false -Superseded:$false -ErrorAction Stop)
 } -MaxAttempts 4 -RetryDelayMilliseconds 500
@@ -2625,7 +2632,7 @@ $result | ConvertTo-Json -Depth 4 -Compress
 '@
 
   $powerShell = [System.Management.Automation.PowerShell]::Create()
-  $null = $powerShell.AddScript($workerScript).AddArgument($PSScriptRoot)
+  $null = $powerShell.AddScript($workerScript).AddArgument($PSScriptRoot).AddArgument($upn)
   $timer = New-Object System.Windows.Forms.Timer
   $timer.Interval = 150
   $context = [pscustomobject]@{ PowerShell = $powerShell; AsyncResult = $null; Timer = $timer; Upn = $upn }
@@ -3467,6 +3474,10 @@ function Set-ConnectedUIState {
     if ($clearHistoryButton) { $clearHistoryButton.Visible = $true }
   }
   if ($rememberCheckBox) { $rememberCheckBox.Visible = -not $Connected }
+  if ($loginButton) {
+    $loginButton.Text = 'Login to Tenant'
+    $loginButton.Enabled = (-not $Connected -and -not [bool]$script:isLoginOperationActive -and (Test-ValidM365UserName -UserName $usernameBox.Text))
+  }
   if (-not $Connected) {
     $script:updateApps = [System.Collections.Generic.List[object]]::new()
     $script:updateVisibleApps = [System.Collections.Generic.List[object]]::new()

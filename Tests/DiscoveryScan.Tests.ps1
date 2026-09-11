@@ -81,4 +81,66 @@ Describe 'Invoke-WinTunerDiscoveryScan' {
         $result.NormalizedCount | Should -Be 0
         $queryState.Called | Should -BeFalse
     }
+
+    It 'normalizes fresh Graph dictionaries as well as cached objects' {
+        $result = Invoke-WinTunerDiscoveryScan -ConnectGraph { $true } -GetExistingApps { @() } -ResolvePackageId { '' } -GetDetectedApps {
+            [ordered]@{
+                Apps = @([ordered]@{ displayName = 'Contoso Tool'; publisher = 'Contoso'; deviceCount = 2 })
+                FromCache = $false
+                PageCount = 1
+                LimitReached = $false
+            }
+        } -SearchPackages {
+            param($Queries)
+            [pscustomobject]@{
+                Canceled = $false
+                TotalQueries = @($Queries).Count
+                CacheHits = 0
+                WorkerQueries = 1
+                WorkerCount = 1
+                Results = @([ordered]@{
+                    Query = 'Contoso Tool'
+                    Success = $true
+                    Results = @([ordered]@{ Name = 'Contoso Tool'; PackageID = 'Contoso.Tool'; Version = '1.0' })
+                })
+            }
+        }
+
+        $result.ErrorMessage | Should -BeNullOrEmpty
+        $result.NormalizedCount | Should -Be 1
+        $result.Apps | Should -HaveCount 1
+        $result.Apps[0].WingetApp.PackageID | Should -Be 'Contoso.Tool'
+        $result.GraphFromCache | Should -BeFalse
+    }
+
+    It 'retries a transient existing-app enumeration failure' {
+        $state = [pscustomobject]@{ ExistingCalls = 0 }
+        $result = Invoke-WinTunerDiscoveryScan -ConnectGraph { $true } -GetExistingApps {
+            $state.ExistingCalls++
+            if ($state.ExistingCalls -eq 1) { throw 'Collection was modified; enumeration operation may not execute.' }
+            @([pscustomobject]@{ PackageId = 'Contoso.Tool' })
+        }.GetNewClosure() -ResolvePackageId {
+            param($App)
+            $App.PackageId
+        } -GetDetectedApps {
+            [pscustomobject]@{ Apps = @([pscustomobject]@{ displayName = 'Contoso Tool'; publisher = 'Contoso'; deviceCount = 1 }) }
+        } -SearchPackages {
+            [pscustomobject]@{
+                Canceled = $false
+                TotalQueries = 1
+                CacheHits = 0
+                WorkerQueries = 1
+                WorkerCount = 1
+                Results = @([pscustomobject]@{
+                    Query = 'Contoso Tool'
+                    Success = $true
+                    Results = @([pscustomobject]@{ Name = 'Contoso Tool'; PackageID = 'Contoso.Tool'; Version = '1.0' })
+                })
+            }
+        } -ExistingAppsRetryDelayMilliseconds 0
+
+        $state.ExistingCalls | Should -Be 2
+        $result.ErrorMessage | Should -BeNullOrEmpty
+        $result.Apps | Should -HaveCount 0
+    }
 }

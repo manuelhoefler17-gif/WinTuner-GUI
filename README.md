@@ -4,7 +4,7 @@
 
 [![PowerShell Version](https://img.shields.io/badge/PowerShell-7.0%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.10.15-orange.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.16-orange.svg)](CHANGELOG.md)
 
 ## 🎯 Overview
 

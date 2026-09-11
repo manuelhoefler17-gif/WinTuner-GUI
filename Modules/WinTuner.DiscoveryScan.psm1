@@ -3,6 +3,15 @@ Set-StrictMode -Version Latest
 function Get-WinTunerDiscoveryValue {
     param([AllowNull()][object]$InputObject, [Parameter(Mandatory)][string]$Name)
     if ($null -eq $InputObject) { return $null }
+
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        foreach ($key in $InputObject.Keys) {
+            if ([string]::Equals([string]$key, $Name, [System.StringComparison]::OrdinalIgnoreCase)) {
+                return $InputObject[$key]
+            }
+        }
+    }
+
     $property = $InputObject.PSObject.Properties[$Name]
     if ($property) { return $property.Value }
     return $null
@@ -82,7 +91,8 @@ function Invoke-WinTunerDiscoveryScan {
         [Parameter(Mandatory)][scriptblock]$SearchPackages,
         [scriptblock]$ShouldCancel = { $false },
         [scriptblock]$ReportProgress = { param($ProgressInfo) },
-        [bool]$SkipLowValueCandidates = $false
+        [bool]$SkipLowValueCandidates = $false,
+        [ValidateRange(0, 5000)][int]$ExistingAppsRetryDelayMilliseconds = 150
     )
 
     $detectedCount = 0
@@ -107,7 +117,30 @@ function Invoke-WinTunerDiscoveryScan {
 
         try { & $ReportProgress ([pscustomobject]@{ Stage = 'LoadingExisting'; Processed = 0; Total = 1; AppName = '' }) } catch {}
         $existingPackageIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-        foreach ($existingApp in @(& $GetExistingApps)) {
+        $existingApps = @()
+        for ($existingAttempt = 1; $existingAttempt -le 3; $existingAttempt++) {
+            try {
+                $existingApps = @(& $GetExistingApps)
+                break
+            } catch {
+                $isTransientEnumerationFailure = $_.Exception.Message -match '(?i)collection was modified|enumeration operation may not execute'
+                if (-not $isTransientEnumerationFailure -or $existingAttempt -ge 3) { throw }
+
+                try {
+                    & $ReportProgress ([pscustomobject]@{
+                        Stage = 'LoadingExistingRetry'
+                        Processed = $existingAttempt
+                        Total = 3
+                        AppName = ''
+                    })
+                } catch {}
+                if ($ExistingAppsRetryDelayMilliseconds -gt 0) {
+                    Start-Sleep -Milliseconds $ExistingAppsRetryDelayMilliseconds
+                }
+            }
+        }
+
+        foreach ($existingApp in $existingApps) {
             if (& $ShouldCancel) { return New-WinTunerDiscoveryScanResult -Canceled $true -Apps @() }
             $packageId = [string](& $ResolvePackageId $existingApp)
             if (-not [string]::IsNullOrWhiteSpace($packageId)) { $null = $existingPackageIds.Add($packageId) }
