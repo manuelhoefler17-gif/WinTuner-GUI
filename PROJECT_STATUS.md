@@ -4,7 +4,7 @@
 
 Development version: **0.10.18**
 
-Latest published stable release: **v0.10.17**
+Latest published stable release: **v0.10.18**
 
 Repository:
 `manuelhoefler17-gif/WinTuner-GUI`
@@ -433,7 +433,9 @@ Automated validation:
 
 ---
 
-## 0.10.18 Release Candidate Status
+## 0.10.18 Release Status
+
+Released: **2026-09-11**
 
 Merged through Pull Request #128 and manually validated:
 
@@ -457,20 +459,18 @@ Automated validation:
 - PowerShell syntax validation passed for all 37 repository scripts and modules
 - all 107 Pester tests passed, including focused Discovery, E2E safety, and permission-documentation tests
 
-Pull Requests #128, #129, and #130 were merged. The implementation, permission dialog, and validation status are present on main and Test.
+Pull Requests #128, #129, #130, and #131 were merged. The release commit is present on main and Test.
 
-Release preparation completed:
+Release completed:
 
-- finalized the 0.10.18 changelog
-- verified the application version is 0.10.18
-- verified README and project status still identify v0.10.17 as the latest published release
-- calculated the release-candidate WinTuner_GUI.ps1 SHA256: E1B0ADD03A4D242625D9AA3F1DB21B0578F668D8111698087BC26CB5E61BD1C1
-
-Remaining release-only actions:
-
-- create and push the annotated v0.10.18 tag after separate authorization
-- publish the GitHub release and checksum asset after separate authorization
-- verify standalone dependency bootstrap and independently validate the published assets from the tag
+- finalized the 0.10.18 changelog and verified the application version
+- created and pushed annotated tag v0.10.18 from synchronized main and Test commit e6d4de4
+- published the GitHub release with WinTuner_GUI.ps1 and its SHA256 checksum
+- independently downloaded both assets and verified the declared and actual SHA256
+- verified the downloaded script reports version 0.10.18 and has no PowerShell syntax errors
+- verified standalone dependency bootstrap directly from tag v0.10.18
+- verified all 14 runtime files match the release content, the release marker is 0.10.18, and no temporary downloads remain
+- verified WinTuner_GUI.ps1 SHA256: E1B0ADD03A4D242625D9AA3F1DB21B0578F668D8111698087BC26CB5E61BD1C1
 
 ---
 ## Testing Expectations
@@ -510,10 +510,10 @@ For significant function changes, prefer replacing a complete known block rather
 
 Latest published stable release:
 
-**v0.10.17**
+**v0.10.18**
 
 Current development version:
 
 **0.10.18**
 
-0.10.17 was published on 2026-09-11.
+0.10.18 was published on 2026-09-11.
