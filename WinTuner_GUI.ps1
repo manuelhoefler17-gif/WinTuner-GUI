@@ -60,7 +60,10 @@ $script:appVersion  = "0.10.16"
 # Bootstrap release dependencies and keep them synchronized with the GUI release.
 $requiredReleaseFiles = @(
   'Modules/WinTuner.AppUpdate.psm1',
+  'Modules/WinTuner.Connection.psm1',
   'Modules/WinTuner.Core.psm1',
+  'Modules/WinTuner.DiscoveryDeployment.psm1',
+  'Modules/WinTuner.DiscoveryScan.psm1',
   'Modules/WinTuner.PackageBuild.psm1',
   'Modules/WinTuner.PackageUpload.psm1',
   'Modules/WinTuner.Winget.psm1',
@@ -68,6 +71,7 @@ $requiredReleaseFiles = @(
   'Modules/WinTuner.Settings.psm1',
   'Modules/WinTuner.Logging.psm1',
   'Modules/WinTuner.Intune.psm1',
+  'Modules/WinTuner.SupersededRemoval.psm1',
   'Workers/WinTuner.DiscoveryWorker.ps1'
 )
 

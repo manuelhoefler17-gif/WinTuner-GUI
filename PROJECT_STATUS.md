@@ -378,8 +378,8 @@ Implemented on `Test`:
 
 Validation completed:
 
-- PowerShell syntax validation passed for all 33 repository scripts and modules
-- all 92 Pester tests passed
+- PowerShell syntax validation passed for all 34 repository scripts and modules
+- all 93 Pester tests passed
 - a separate PowerShell runspace loaded the installed WinTuner module and completed the update-scan logic
 - cooperative runspace cancellation completed without blocking the caller
 - the tenant-connected GUI remained responsive while moving, resizing, and switching tabs during a scan

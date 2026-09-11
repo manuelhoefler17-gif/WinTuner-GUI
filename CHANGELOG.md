@@ -2,7 +2,7 @@
 
 All notable changes to WinTuner GUI are documented here.
 
-## [Unreleased]
+## [0.10.16] – 2026-09-11
 
 ### Added
 - Added a dedicated, testable update-scan module with automated coverage for verified versions, tenant-version fallback, cancellation, missing versions, and load failures.
@@ -33,6 +33,7 @@ All notable changes to WinTuner GUI are documented here.
 ### Fixed
 - Restored **Search Superseded Apps** after a tenant connection is verified.
 - Kept the Discovery search, publisher, and sort controls visible when the window is resized or maximized.
+- Included every 0.10.16 runtime module in the standalone dependency bootstrap manifest.
 
 ## [0.10.15] – 2026-09-10
 
