@@ -2,7 +2,7 @@
 
 All notable changes to WinTuner GUI are documented here.
 
-## [Unreleased]
+## [0.10.18] – 2026-09-11
 
 ### Added
 - Added a Discovery option to bypass the detected-app cache and request fresh Microsoft Graph data for the current scan.
