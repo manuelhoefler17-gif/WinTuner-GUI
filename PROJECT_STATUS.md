@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Development version: **0.10.17**
+Development version: **0.10.18**
 
 Latest published stable release: **v0.10.17**
 
@@ -433,6 +433,28 @@ Automated validation:
 
 ---
 
+## Current 0.10.18 Work
+
+Implemented and manually validated on Test:
+
+- added a Discovery checkbox that bypasses the detected-app cache for a deliberately fresh Graph scan
+- passed the force-refresh choice explicitly into the isolated Discovery runspace
+- kept the refresh choice disabled while a scan or conflicting workflow is active
+- added clear status and log reporting for cached-allowed versus forced-fresh scans
+- added an interactive read-only tenant E2E runner covering WinTuner authentication, bounded tenant verification, Graph authentication, and detected-app retrieval
+- ensured the E2E runner contains no package deployment, creation, or tenant-removal commands and always disconnects both sessions
+- updated README test instructions, cache guidance, roadmap, and the previously stale stable-release text
+- documented the complete delegated Microsoft Graph permission set requested during login, including its source, purpose, admin-consent requirement, and separate Intune-role requirement
+- manually confirmed the forced-fresh Discovery scan returns current tenant results
+
+Automated validation:
+
+- PowerShell syntax validation passed for all 37 repository scripts and modules
+- all 105 Pester tests passed, including focused Discovery, E2E safety, and permission-documentation tests
+
+The 0.10.18 implementation is ready for the Test -> Pull Request -> main workflow. No tag or release has been created.
+
+---
 ## Testing Expectations
 
 Before committing significant changes:
@@ -474,6 +496,6 @@ Latest published stable release:
 
 Current development version:
 
-**0.10.17**
+**0.10.18**
 
 0.10.17 was published on 2026-09-11.

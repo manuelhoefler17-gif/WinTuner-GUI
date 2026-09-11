@@ -156,6 +156,21 @@ Manual installation:
 Install-Module -Name WinTuner -Scope CurrentUser
 ```
 
+### Microsoft Graph permissions
+
+WinTuner GUI signs in interactively with delegated Microsoft Graph permissions. The effective permission set currently requested during login is:
+
+| Delegated permission | Requested by | Purpose in the current sign-in flow |
+| --- | --- | --- |
+| `DeviceManagementApps.ReadWrite.All` | WinTuner and WinTuner GUI | Read and manage Intune applications, including Win32 app uploads and updates. |
+| `DeviceManagementConfiguration.ReadWrite.All` | WinTuner 1.3.2 default login | Default upstream WinTuner scope for reading and managing Intune configuration and policy data. |
+| `DeviceManagementManagedDevices.Read.All` | WinTuner GUI Discovery | Read managed-device inventory and detected applications used by Discovery. |
+| `Directory.Read.All` | WinTuner GUI Graph session | Read directory data available to the current Graph integration. |
+
+These are **delegated permissions**, not application permissions. A tenant administrator must grant consent for all four permissions. The signed-in account also needs an appropriate Intune role for the operations it performs; Graph consent alone does not grant Intune administrative access.
+
+`DeviceManagementConfiguration.ReadWrite.All` is included because WinTuner 1.3.2 requests it by default even though WinTuner GUI does not add that scope itself. The other three permissions are explicitly requested by the GUI's Microsoft Graph connection. Review the [Microsoft Graph permissions reference](https://learn.microsoft.com/en-us/graph/permissions-reference) and [Microsoft Intune Graph access setup](https://learn.microsoft.com/en-us/intune/developer/configure-graph-api-access) before approving access in a restricted tenant.
+
 ---
 
 ## 🚀 Installation
@@ -313,7 +328,7 @@ Deletion actions remain disabled until the current tenant search returns valid r
 ### 5. Discover Intune applications
 
 1. Open **Discovered Apps**.
-2. Start Discovery. Graph retrieval, normalization and WinGet matching run in the background; use **Cancel Scan** to stop safely.
+2. Optionally enable **Force fresh Graph data** to bypass the detected-app cache, then start Discovery. Graph retrieval, normalization and WinGet matching run in the background; use **Cancel Scan** to stop safely.
 3. Intune detected applications are collected.
 4. Search terms are generated and matched against WinGet.
 5. Review the matched packages and their displayed match confidence.
@@ -465,7 +480,7 @@ If the selected application or version changed, create or reuse the matching pac
 
 This is expected when Graph or WinGet results can be served from cache.
 
-Use **Clear All Caches** if a completely fresh scan is required.
+Enable **Force fresh Graph data** before scanning to bypass only the detected-app cache. Use **Clear All Caches** when the WinGet caches must also be cleared.
 
 ### Development checkout reports missing files
 
@@ -491,6 +506,16 @@ main
 
 Changes should be tested on `Test` before being merged into `main`.
 
+Run the complete local syntax and Pester suite with:
+
+    pwsh.exe -NoProfile -File ./Tests/Run-Tests.ps1
+
+For an interactive, read-only tenant check, use:
+
+    pwsh.exe -NoProfile -File ./Tests/Run-TenantE2E.ps1 -UserPrincipalName admin@contoso.com
+
+Add -ForceFreshDiscovery to validate an uncached detected-app request. This runner authenticates WinTuner and Microsoft Graph, reads managed and detected application inventories, reports counts and cache source, performs no tenant writes, and disconnects both sessions when finished.
+
 A development checkout intentionally uses its local dependency files and is therefore not a substitute for testing the standalone release bootstrap.
 
 ---
@@ -499,7 +524,7 @@ A development checkout intentionally uses its local dependency files and is ther
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete version history.
 
-Current stable release: **v0.10.15**.
+Current stable release: **v0.10.17**.
 
 ---
 
@@ -508,7 +533,7 @@ Current stable release: **v0.10.15**.
 Potential future improvements include:
 
 - Further Discovery and Updates UX improvements
-- Additional end-to-end and negative-path automation
+- Expand read-only tenant end-to-end coverage as safe test-tenant scenarios become available
 
 ---
 

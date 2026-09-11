@@ -55,7 +55,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.17"
+$script:appVersion  = "0.10.18"
 
 # Bootstrap release dependencies and keep them synchronized with the GUI release.
 $requiredReleaseFiles = @(
@@ -2199,6 +2199,7 @@ function Start-WinTunerDiscoveryScan {
     return
   }
 
+  $forceGraphRefresh = [bool]$forceFreshDiscoveryCheckBox.Checked
   $operationId = [guid]::NewGuid().ToString('N')
   $progressPath = Join-Path ([System.IO.Path]::GetTempPath()) "wintuner-discovery-scan-$operationId.progress.json"
   $cancelPath = Join-Path ([System.IO.Path]::GetTempPath()) "wintuner-discovery-scan-$operationId.cancel"
@@ -2208,13 +2209,14 @@ function Start-WinTunerDiscoveryScan {
   $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
   $script:progressBar.MarqueeAnimationSpeed = 25
   $script:progressBar.Visible = $true
-  Update-Status 'Starting background Discovery scan...'
-  Write-Log 'Starting fully asynchronous Discovery scan.'
+  $graphMode = if ($forceGraphRefresh) { 'fresh Graph data requested' } else { 'cached Graph data allowed' }
+  Update-Status "Starting background Discovery scan ($graphMode)..."
+  Write-Log "Starting fully asynchronous Discovery scan. Force Graph refresh: $forceGraphRefresh."
   Update-DiscoveryActionState
   Update-UpdateActionState
 
   $workerScript = @'
-param($RepositoryRoot, $ProgressPath, $CancelPath, $UserPrincipalName, $SkipLowValueCandidates)
+param($RepositoryRoot, $ProgressPath, $CancelPath, $UserPrincipalName, $SkipLowValueCandidates, $ForceGraphRefresh)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $InformationPreference = 'SilentlyContinue'
@@ -2246,7 +2248,11 @@ try {
     }
     return ''
   } -GetDetectedApps {
-    Get-WinTunerDetectedApps -PageSize 500 -MaxPages 1000
+    if ([bool]$ForceGraphRefresh) {
+      Get-WinTunerDetectedApps -PageSize 500 -MaxPages 1000 -ForceRefresh
+    } else {
+      Get-WinTunerDetectedApps -PageSize 500 -MaxPages 1000
+    }
   } -SearchPackages {
     param($Queries, $CancelCheck)
     Search-WinTunerDiscoveryPackagesBatchCached -SearchQueries @($Queries) -BatchSize 25 -QueryTimeoutSeconds 12 -CacheTtlHours 24 -OnWait {} -ShouldCancel $CancelCheck
@@ -2263,7 +2269,7 @@ $result | ConvertTo-Json -Depth 8 -Compress
 '@
 
   $powerShell = [System.Management.Automation.PowerShell]::Create()
-  $null = $powerShell.AddScript($workerScript).AddArgument($PSScriptRoot).AddArgument($progressPath).AddArgument($cancelPath).AddArgument($script:currentUserUpn).AddArgument([bool]$script:skipLowValueWingetCandidates)
+  $null = $powerShell.AddScript($workerScript).AddArgument($PSScriptRoot).AddArgument($progressPath).AddArgument($cancelPath).AddArgument($script:currentUserUpn).AddArgument([bool]$script:skipLowValueWingetCandidates).AddArgument($forceGraphRefresh)
   $timer = New-Object System.Windows.Forms.Timer
   $timer.Interval = 150
   $context = [pscustomobject]@{ PowerShell = $powerShell; AsyncResult = $null; Timer = $timer; ProgressPath = $progressPath; CancelPath = $cancelPath; LastProgress = $null }
@@ -3935,6 +3941,13 @@ $uncheckAllDiscoveredButton.Width = 110
 $uncheckAllDiscoveredButton.Enabled = $false
 $tabDiscovered.Controls.Add($uncheckAllDiscoveredButton)
 
+$forceFreshDiscoveryCheckBox = New-Object System.Windows.Forms.CheckBox
+$forceFreshDiscoveryCheckBox.Text = "Force fresh Graph data (ignore detected-app cache)"
+$forceFreshDiscoveryCheckBox.Location = New-Object System.Drawing.Point(20,101)
+$forceFreshDiscoveryCheckBox.AutoSize = $true
+$forceFreshDiscoveryCheckBox.Enabled = $false
+$tabDiscovered.Controls.Add($forceFreshDiscoveryCheckBox)
+
 # --- NEU: Filter & Sortierung ---
 $discoveryFilterLabelX = [Math]::Max(440, $tabDiscovered.ClientSize.Width - 310)
 $discoveryFilterControlX = [Math]::Max(540, $tabDiscovered.ClientSize.Width - 210)
@@ -4023,9 +4036,9 @@ function Update-WinTunerDiscoveryFilterLayout {
 $tabDiscovered.Add_Resize({ Update-WinTunerDiscoveryFilterLayout })
 Update-WinTunerDiscoveryFilterLayout
 $discoveredListBox = New-Object System.Windows.Forms.CheckedListBox
-$discoveredListBox.Location = New-Object System.Drawing.Point(20,110)
+$discoveredListBox.Location = New-Object System.Drawing.Point(20,130)
 $discoveredListBox.Width = [Math]::Max(710, $tabDiscovered.ClientSize.Width - 40)
-$discoveredListBox.Height = 325
+$discoveredListBox.Height = 305
 $discoveredListBox.CheckOnClick = $true
 $discoveredListBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right -bor [System.Windows.Forms.AnchorStyles]::Bottom
 $tabDiscovered.Controls.Add($discoveredListBox)
@@ -4447,6 +4460,7 @@ function Update-DiscoveryActionState {
             '1. Scan Discovered Apps'
         }
         $scanDiscoveredButton.Enabled = $state.CanScan
+        $forceFreshDiscoveryCheckBox.Enabled = ($state.CanScan -and -not $script:discoveryScanRunning)
         $deployDiscoveredButton.Text = if ($script:isDiscoveryDeploymentActive) { 'Deploying...' } else { '2. Deploy Checked Apps' }
         $deployDiscoveredButton.Enabled = $state.CanDeploy
         $exportDiscoveredCsvButton.Enabled = $state.CanExport
@@ -4454,6 +4468,7 @@ function Update-DiscoveryActionState {
         $uncheckAllDiscoveredButton.Enabled = $state.CanUncheckAll
     } catch {
         $scanDiscoveredButton.Enabled = $false
+        if ($forceFreshDiscoveryCheckBox) { $forceFreshDiscoveryCheckBox.Enabled = $false }
         $deployDiscoveredButton.Enabled = $false
         $exportDiscoveredCsvButton.Enabled = $false
         $checkAllDiscoveredButton.Enabled = $false
@@ -5279,6 +5294,7 @@ if ($clearHistoryButton)    { $toolTip.SetToolTip($clearHistoryButton,    "Clear
 # Header / Login area
 if ($loginButton)           { $toolTip.SetToolTip($loginButton,           "Sign in to your Microsoft 365 tenant") }
 if ($rememberCheckBox)      { $toolTip.SetToolTip($rememberCheckBox,      "Save your username so it is pre-filled on the next launch") }
+if ($forceFreshDiscoveryCheckBox) { $toolTip.SetToolTip($forceFreshDiscoveryCheckBox, "Bypass the detected-app cache for the next Discovery scan") }
 
 # tabUpdate
 if ($checkAllButton)        { $toolTip.SetToolTip($checkAllButton,        "Check all apps in the update list") }
