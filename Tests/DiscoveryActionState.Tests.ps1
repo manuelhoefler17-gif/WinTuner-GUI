@@ -113,3 +113,44 @@ Describe 'GUI Discovery filter layout wiring' {
         [System.IO.File]::ReadAllText($guiPath) | Should -Match '\$tabDiscovered\.Add_Resize\(\{\s*Update-WinTunerDiscoveryFilterLayout\s*\}\)'
     }
 }
+
+Describe 'GUI Discovery force-refresh wiring' {
+    BeforeAll {
+        $guiPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinTuner_GUI.ps1'
+        $tokens = $null
+        $parseErrors = $null
+        $script:forceRefreshGuiAst = [System.Management.Automation.Language.Parser]::ParseFile(
+            $guiPath,
+            [ref]$tokens,
+            [ref]$parseErrors
+        )
+        $parseErrors | Should -HaveCount 0
+        $script:forceRefreshGuiText = [System.IO.File]::ReadAllText($guiPath)
+    }
+
+    It 'forwards the selected refresh mode into the Discovery worker' {
+        $functions = @($script:forceRefreshGuiAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Start-WinTunerDiscoveryScan'
+        }, $true))
+
+        $functions | Should -HaveCount 1
+        $functionText = $functions[0].Extent.Text
+        $functionText.Contains('$forceGraphRefresh = [bool]$forceFreshDiscoveryCheckBox.Checked') | Should -BeTrue
+        $functionText.Contains('Get-WinTunerDetectedApps -PageSize 500 -MaxPages 1000 -ForceRefresh') | Should -BeTrue
+        $functionText.Contains('.AddArgument($forceGraphRefresh)') | Should -BeTrue
+    }
+
+    It 'disables the refresh option while a Discovery scan is active' {
+        $functions = @($script:forceRefreshGuiAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Update-DiscoveryActionState'
+        }, $true))
+
+        $functions | Should -HaveCount 1
+        $functions[0].Extent.Text.Contains('$forceFreshDiscoveryCheckBox.Enabled = ($state.CanScan -and -not $script:discoveryScanRunning)') | Should -BeTrue
+        $script:forceRefreshGuiText.Contains('Force fresh Graph data (ignore detected-app cache)') | Should -BeTrue
+    }
+}

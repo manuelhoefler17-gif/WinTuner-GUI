@@ -2,6 +2,13 @@
 
 All notable changes to WinTuner GUI are documented here.
 
+## [Unreleased]
+
+### Added
+- Added a Discovery option to bypass the detected-app cache and request fresh Microsoft Graph data for the current scan.
+- Added an explicit read-only tenant end-to-end runner for interactive WinTuner and Microsoft Graph validation without package deployment or tenant removal.
+- Documented the complete delegated Microsoft Graph permission set requested by WinTuner GUI and WinTuner 1.3.2, including admin-consent and Intune-role requirements.
+
 ## [0.10.17] – 2026-09-11
 
 ### Changed
