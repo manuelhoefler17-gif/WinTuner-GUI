@@ -10,6 +10,8 @@ All notable changes to WinTuner GUI are documented here.
 - Added automated action-state coverage for Superseded search results, stale selections, disconnected tenants, and active operations.
 - Added automated action-state coverage for WinGet package search results, stale selections, and active operations.
 - Added a dedicated update-deployment module with automated success, missing-ID, invalid-artifact, and partial-failure coverage.
+- Added dedicated modules for Discovery scanning, Discovery deployment, Superseded removal, and bounded tenant-connection verification.
+- Added isolated-runspace integration coverage for Discovery matching, non-writing deployment/removal callbacks, and connection retries.
 
 ### Changed
 - Update scans now run in an isolated PowerShell runspace so Intune and WinGet checks no longer block the WinForms UI.
@@ -22,6 +24,15 @@ All notable changes to WinTuner GUI are documented here.
 - GitHub Actions validation now uses `actions/checkout@v7` with its native Node.js 24 runtime.
 - Superseded-app searches now run in an isolated PowerShell runspace and keep the WinForms UI responsive.
 - Superseded deletion actions now require a valid current result, and **Delete all Superseded Apps** uses the verified search results instead of fetching a second list.
+- Superseded deletions now run in the background with per-app results; successful or already absent apps leave the list while failures remain available for retry.
+- The complete Discovery scan now runs outside the WinForms thread, retains cache and pagination behavior, supports cooperative cancellation, and discards partial results on failure.
+- Discovery packaging and tenant deployment now run in a background worker with exact artifact validation immediately before each upload.
+- Post-authentication tenant verification now retries in a background runspace, and all remaining `DoEvents()` re-entrancy points were removed.
+- Large Login, Superseded and Discovery event handlers now delegate to smaller workflow functions.
+
+### Fixed
+- Restored **Search Superseded Apps** after a tenant connection is verified.
+- Kept the Discovery search, publisher, and sort controls visible when the window is resized or maximized.
 
 ## [0.10.15] – 2026-09-10
 

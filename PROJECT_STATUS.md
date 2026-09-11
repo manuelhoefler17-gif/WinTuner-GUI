@@ -53,12 +53,16 @@ Main application:
 Modules:
 
 - `Modules/WinTuner.AppUpdate.psm1`
+- `Modules/WinTuner.Connection.psm1`
 - `Modules/WinTuner.Core.psm1`
+- `Modules/WinTuner.DiscoveryDeployment.psm1`
+- `Modules/WinTuner.DiscoveryScan.psm1`
 - `Modules/WinTuner.Intune.psm1`
 - `Modules/WinTuner.Logging.psm1`
 - `Modules/WinTuner.PackageBuild.psm1`
 - `Modules/WinTuner.PackageUpload.psm1`
 - `Modules/WinTuner.Settings.psm1`
+- `Modules/WinTuner.SupersededRemoval.psm1`
 - `Modules/WinTuner.UpdateScan.psm1`
 - `Modules/WinTuner.Winget.psm1`
 
@@ -364,16 +368,24 @@ Implemented on `Test`:
 - removed only successful updates from the current candidate list while preserving failed candidates for retry
 - added clean update-deployment runspace shutdown when the GUI closes
 - added automated update-deployment success, missing-ID, invalid-artifact, partial-failure, and workflow-routing tests
+- moved individual and bulk Superseded deletion into an isolated runspace with per-app results and failure-preserving retry behavior
+- moved the full Discovery Graph, normalization, cached WinGet matching, deduplication, and cancellation pipeline into an isolated runspace
+- moved checked Discovery package creation, exact artifact validation, and tenant deployment into an isolated runspace
+- moved post-authentication tenant verification retries out of the WinForms thread
+- removed all remaining `DoEvents()` re-entrancy points
+- reduced Login, Superseded, and Discovery event handlers to focused workflow entry points
+- added module-level negative-path tests and isolated-runspace integration tests for the new workflows
 
 Validation completed:
 
-- PowerShell syntax validation passed for all 24 repository scripts and modules
-- all 71 Pester tests passed
+- PowerShell syntax validation passed for all 33 repository scripts and modules
+- all 92 Pester tests passed
 - a separate PowerShell runspace loaded the installed WinTuner module and completed the update-scan logic
 - cooperative runspace cancellation completed without blocking the caller
 - the tenant-connected GUI remained responsive while moving, resizing, and switching tabs during a scan
 - canceling a tenant scan worked, and a subsequent full update scan completed successfully
 - the tenant-connected Superseded Apps search kept the GUI responsive and returned its current result list with correct action states
+- the Superseded search action was enabled after tenant verification, and Discovery search, publisher, and sort controls remained visible through resize and maximization
 - the WinGet Apps package search kept the GUI responsive and restored result, version, and package actions after completion
 - the WinGet version list loaded without blocking the GUI, and the modal picker restored the expected package actions after selection or cancellation
 - package creation completed without blocking window movement, resizing, or tab changes; the exact 7zip.7zip 26.03 artifact passed validation and was safely reused on the second request
@@ -384,11 +396,9 @@ Validation completed:
 
 Next candidates:
 
-- additional end-to-end automation for tenant-connected workflows
+- tenant-connected end-to-end automation where credentials and a safe test tenant can be provided
 - further Discovery refinements based on production feedback
-- replace remaining synchronous DoEvents() workflows incrementally with isolated background operations
-- split large GUI event handlers into smaller testable workflow functions as those paths are changed
-
+- final 0.10.16 release checks, standalone bootstrap validation, tag, and release
 ---
 
 ## Testing Expectations

@@ -761,7 +761,6 @@ function Invoke-UpdateCheckFeedback {
 
         if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
           & $setStatus "Downloading update..."
-          [System.Windows.Forms.Application]::DoEvents()
 
           $success = Invoke-AppSelfUpdate -DownloadUrl $UpdateResult.DownloadUrl -HashUrl $UpdateResult.HashUrl
 
@@ -895,20 +894,7 @@ function Resolve-WingetIdForApp {
 
 
 
-function Get-StringSimilarity {
-  param($str1, $str2)
-  if (-not $str1 -or -not $str2) { return 0 }
-  $clean1 = $str1.ToLower() -replace '[^\w\s]', ' '
-  $clean2 = $str2.ToLower() -replace '[^\w\s]', ' '
-  $words1 = @($clean1 -split '\s+' | Where-Object { $_.Trim() -ne '' })
-  $words2 = @($clean2 -split '\s+' | Where-Object { $_.Trim() -ne '' })
-  if ($words1.Count -eq 0 -or $words2.Count -eq 0) { return 0 }
 
-  $matchCount = 0
-  foreach ($w in $words1) { if ($words2 -contains $w) { $matchCount++ } }
-  $minWords = [math]::Min($words1.Count, $words2.Count)
-  return [math]::Round(($matchCount / $minWords) * 100)
-}
 
 
 function Show-VersionPickerDialog {
@@ -1884,6 +1870,793 @@ function Start-WinTunerSupersededSearch {
     Update-SupersededActionState
   }
 }
+function Set-WinTunerSupersededResults {
+  param([AllowNull()][object[]]$Apps)
+
+  $script:supersededApps = @($Apps | Where-Object {
+    $_ -and
+    -not [string]::IsNullOrWhiteSpace([string]$_.Name) -and
+    -not [string]::IsNullOrWhiteSpace([string]$_.GraphId)
+  } | Sort-Object Name, CurrentVersion)
+
+  $supersededDropdown.BeginUpdate()
+  try {
+    $supersededDropdown.Items.Clear()
+    foreach ($app in $script:supersededApps) {
+      [void]$supersededDropdown.Items.Add("$($app.Name) — $($app.CurrentVersion)")
+    }
+    if ($supersededDropdown.Items.Count -gt 0) { $supersededDropdown.SelectedIndex = 0 }
+  } finally {
+    $supersededDropdown.EndUpdate()
+  }
+}
+
+function Complete-WinTunerSupersededRemoval {
+  param([Parameter(Mandatory=$true)][object]$Context)
+
+  $removalResult = $null
+  $completionError = $null
+  try {
+    $output = @($Context.PowerShell.EndInvoke($Context.AsyncResult))
+    if ($output.Count -eq 0) {
+      if ($Context.PowerShell.Streams.Error.Count -gt 0) { throw $Context.PowerShell.Streams.Error[0].Exception }
+      throw 'The superseded-app removal returned no result.'
+    }
+    $removalResult = ([string]$output[$output.Count - 1]) | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    $completionError = $_.Exception.Message
+  } finally {
+    try { $Context.Timer.Stop() } catch {}
+    try { $Context.Timer.Dispose() } catch {}
+    try { $Context.PowerShell.Dispose() } catch {}
+    Remove-Item -LiteralPath $Context.ProgressPath -Force -ErrorAction SilentlyContinue
+    if ($script:supersededRemovalContext -eq $Context) { $script:supersededRemovalContext = $null }
+    $script:isSupersededOperationActive = $false
+    try {
+      $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+      $script:progressBar.Value = 0
+      $script:progressBar.Visible = $false
+    } catch {}
+  }
+
+  if ($completionError) {
+    Update-Status "Superseded-app removal failed: $completionError"
+    Write-Log "Background superseded-app removal failed: $completionError"
+  } else {
+    $successfulIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $failedItems = [System.Collections.Generic.List[object]]::new()
+    foreach ($itemResult in @($removalResult.Results)) {
+      if ($itemResult.Succeeded) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$itemResult.GraphId)) { $null = $successfulIds.Add([string]$itemResult.GraphId) }
+        if ($itemResult.AlreadyAbsent) {
+          Write-Log "Superseded app already absent: $($itemResult.Name)"
+        } else {
+          Write-Log "Removed superseded app in background: $($itemResult.Name)"
+        }
+      } else {
+        $failedItems.Add($itemResult)
+        Write-Log "Superseded removal failed for $($itemResult.Name) ($($itemResult.ReasonCode)): $($itemResult.Message)"
+      }
+    }
+
+    $remainingApps = @($script:supersededApps | Where-Object { -not $successfulIds.Contains([string]$_.GraphId) })
+    Set-WinTunerSupersededResults -Apps $remainingApps
+    Update-Status ("Superseded removal complete: {0} removed, {1} failed." -f $removalResult.SuccessCount, $removalResult.FailureCount)
+    Write-Log "Background superseded removal summary -> Mode: $($Context.Mode), Removed: $($removalResult.SuccessCount), Failed: $($removalResult.FailureCount)"
+
+    if ($failedItems.Count -gt 0) {
+      $summary = "The following $($failedItems.Count) app(s) could not be removed:$([Environment]::NewLine)$([Environment]::NewLine)"
+      $summary += ($failedItems | ForEach-Object { "• $($_.Name): $($_.Message)" }) -join [Environment]::NewLine
+      [void][System.Windows.Forms.MessageBox]::Show($summary, "Removal Summary – $($failedItems.Count) Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+    }
+  }
+
+  Update-UpdateActionState
+  Update-DiscoveryActionState
+  Update-SupersededActionState
+}
+
+function Start-WinTunerSupersededRemoval {
+  param(
+    [Parameter(Mandatory=$true)][object[]]$Apps,
+    [ValidateSet('Selected','All')][string]$Mode
+  )
+
+  if (-not $script:isConnected -or $script:isSupersededOperationActive) {
+    Update-SupersededActionState
+    return
+  }
+  $items = @($Apps)
+  if ($items.Count -eq 0) {
+    Update-Status 'No superseded apps were provided.'
+    return
+  }
+
+  $modulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.SupersededRemoval.psm1'
+  if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
+    Update-Status 'Superseded-app removal failed: removal module is missing.'
+    Write-Log "Superseded removal module missing: $modulePath"
+    return
+  }
+
+  $workerItems = @($items | ForEach-Object {
+    [pscustomobject]@{
+      Name = [string]$_.Name
+      CurrentVersion = [string]$_.CurrentVersion
+      GraphId = [string]$_.GraphId
+    }
+  })
+  $itemsJson = $workerItems | ConvertTo-Json -Depth 4 -Compress
+  $operationId = [guid]::NewGuid().ToString('N')
+  $progressPath = Join-Path ([System.IO.Path]::GetTempPath()) "wintuner-superseded-removal-$operationId.progress.json"
+
+  $script:isSupersededOperationActive = $true
+  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+  $script:progressBar.Minimum = 0
+  $script:progressBar.Maximum = [Math]::Max(1, $workerItems.Count)
+  $script:progressBar.Value = 0
+  $script:progressBar.Visible = $true
+  Update-Status "Starting background removal for $($workerItems.Count) superseded app(s)..."
+  Write-Log "Starting background superseded removal -> Mode: $Mode, Apps: $($workerItems.Count)"
+  Update-UpdateActionState
+  Update-DiscoveryActionState
+  Update-SupersededActionState
+
+  $workerScript = @'
+param($RepositoryRoot, $ItemsJson, $ProgressPath)
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+Import-Module WinTuner -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.SupersededRemoval.psm1') -Force -ErrorAction Stop
+function Write-SupersededRemovalProgress {
+  param([object]$ProgressInfo)
+  $tempPath = "$ProgressPath.$([guid]::NewGuid().ToString('N')).tmp"
+  try {
+    [System.IO.File]::WriteAllText($tempPath, ($ProgressInfo | ConvertTo-Json -Depth 4 -Compress), [System.Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $tempPath -Destination $ProgressPath -Force
+  } finally { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue }
+}
+$items = @($ItemsJson | ConvertFrom-Json -ErrorAction Stop)
+$result = Invoke-WinTunerSupersededRemoval -Apps $items -ReportProgress {
+  param($progressInfo)
+  Write-SupersededRemovalProgress -ProgressInfo $progressInfo
+}
+$result | ConvertTo-Json -Depth 6 -Compress
+'@
+
+  $powerShell = [System.Management.Automation.PowerShell]::Create()
+  $null = $powerShell.AddScript($workerScript).AddArgument($PSScriptRoot).AddArgument($itemsJson).AddArgument($progressPath)
+  $timer = New-Object System.Windows.Forms.Timer
+  $timer.Interval = 150
+  $context = [pscustomobject]@{ PowerShell = $powerShell; AsyncResult = $null; Timer = $timer; ProgressPath = $progressPath; LastProgress = $null; Mode = $Mode }
+  $script:supersededRemovalContext = $context
+
+  $timer.Add_Tick({
+    $currentContext = $script:supersededRemovalContext
+    if (-not $currentContext) { return }
+    if (Test-Path -LiteralPath $currentContext.ProgressPath -PathType Leaf) {
+      try {
+        $progressJson = Get-Content -LiteralPath $currentContext.ProgressPath -Raw -ErrorAction Stop
+        if ($progressJson -and $progressJson -ne $currentContext.LastProgress) {
+          $currentContext.LastProgress = $progressJson
+          $progressInfo = $progressJson | ConvertFrom-Json -ErrorAction Stop
+          $maximum = [Math]::Max(1, [int]$progressInfo.Total)
+          $script:progressBar.Maximum = $maximum
+          $script:progressBar.Value = [Math]::Min([int]$progressInfo.Processed, $maximum)
+          Update-Status ("Removing ({0}/{1}): {2}" -f $progressInfo.Processed, $progressInfo.Total, $progressInfo.AppName)
+        }
+      } catch {}
+    }
+    if ($currentContext.AsyncResult -and $currentContext.AsyncResult.IsCompleted) { Complete-WinTunerSupersededRemoval -Context $currentContext }
+  })
+
+  try {
+    $context.AsyncResult = $powerShell.BeginInvoke()
+    $timer.Start()
+  } catch {
+    try { $timer.Dispose() } catch {}
+    try { $powerShell.Dispose() } catch {}
+    Remove-Item -LiteralPath $progressPath -Force -ErrorAction SilentlyContinue
+    $script:supersededRemovalContext = $null
+    $script:isSupersededOperationActive = $false
+    $script:progressBar.Visible = $false
+    Update-Status "Superseded-app removal failed to start: $($_.Exception.Message)"
+    Write-Log "Background superseded-app removal failed to start: $($_.Exception.Message)"
+    Update-UpdateActionState
+    Update-DiscoveryActionState
+    Update-SupersededActionState
+  }
+}
+
+function Request-WinTunerDiscoveryScanCancellation {
+  if (-not $script:discoveryScanRunning -or -not $script:discoveryScanContext -or $script:cancelDiscoveryScan) { return }
+  $script:cancelDiscoveryScan = $true
+  try {
+    [System.IO.File]::WriteAllText($script:discoveryScanContext.CancelPath, (Get-Date).ToString('O'), [System.Text.UTF8Encoding]::new($false))
+  } catch {
+    Write-Log "Discovery cancellation signal failed: $($_.Exception.Message)"
+  }
+  Update-Status 'Cancel requested - finishing current Discovery step...'
+  Write-Log 'Discovery scan cancellation requested.'
+  Update-DiscoveryActionState
+}
+
+function Complete-WinTunerDiscoveryScan {
+  param([Parameter(Mandatory=$true)][object]$Context)
+
+  $scanResult = $null
+  $completionError = $null
+  try {
+    $output = @($Context.PowerShell.EndInvoke($Context.AsyncResult))
+    if ($output.Count -eq 0) {
+      if ($Context.PowerShell.Streams.Error.Count -gt 0) { throw $Context.PowerShell.Streams.Error[0].Exception }
+      throw 'The Discovery scan returned no result.'
+    }
+    $scanResult = ([string]$output[$output.Count - 1]) | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    $completionError = $_.Exception.Message
+  } finally {
+    try { $Context.Timer.Stop() } catch {}
+    try { $Context.Timer.Dispose() } catch {}
+    try { $Context.PowerShell.Dispose() } catch {}
+    Remove-Item -LiteralPath $Context.ProgressPath, $Context.CancelPath -Force -ErrorAction SilentlyContinue
+    if ($script:discoveryScanContext -eq $Context) { $script:discoveryScanContext = $null }
+    $script:discoveryScanRunning = $false
+    $script:cancelDiscoveryScan = $false
+    try {
+      $script:progressBar.MarqueeAnimationSpeed = 0
+      $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+      $script:progressBar.Maximum = 100
+      $script:progressBar.Value = 0
+      $script:progressBar.Visible = $false
+    } catch {}
+  }
+
+  if ($completionError) {
+    Clear-DiscoveryCandidateState
+    Update-Status "Discovery scan failed: $completionError"
+    Write-Log "Background Discovery scan failed: $completionError; partial results discarded."
+    Update-DiscoveryActionState
+    return
+  }
+  if ($scanResult.ErrorMessage) {
+    Clear-DiscoveryCandidateState
+    Update-Status "Discovery scan failed: $($scanResult.ErrorMessage)"
+    Write-Log "Background Discovery scan failed: $($scanResult.ErrorMessage); partial results discarded."
+    Update-DiscoveryActionState
+    return
+  }
+  if ($scanResult.Canceled) {
+    Clear-DiscoveryCandidateState
+    Update-Status 'Discovery scan canceled; partial results discarded.'
+    Write-Log 'Background Discovery scan canceled; partial results discarded.'
+    Update-DiscoveryActionState
+    return
+  }
+
+  $script:discoveredRaw = [System.Collections.Generic.List[object]]::new()
+  foreach ($app in @($scanResult.Apps | Sort-Object DisplayName)) {
+    if (-not $app -or -not $app.WingetApp -or [string]::IsNullOrWhiteSpace([string]$app.WingetApp.PackageID)) { continue }
+    $app.Checked = $false
+    [void]$script:discoveredRaw.Add($app)
+  }
+
+  $publishers = @($script:discoveredRaw | Select-Object -ExpandProperty Publisher -Unique | Sort-Object)
+  $discoveredPublisherBox.BeginUpdate()
+  try {
+    $discoveredPublisherBox.Items.Clear()
+    [void]$discoveredPublisherBox.Items.Add('<All Publishers>')
+    foreach ($publisher in $publishers) {
+      if (-not [string]::IsNullOrWhiteSpace([string]$publisher)) { [void]$discoveredPublisherBox.Items.Add($publisher) }
+    }
+    $discoveredPublisherBox.SelectedIndex = 0
+  } finally {
+    $discoveredPublisherBox.EndUpdate()
+  }
+  Update-DiscoveredListUI
+
+  $lastDiscoveryTime = Get-Date
+  $lastDiscoveryLabel.Text = "Last discovery: $($lastDiscoveryTime.ToString('HH:mm:ss'))"
+  $graphSource = if ($scanResult.GraphFromCache) { 'Cached' } else { 'Fresh' }
+  $wingetCacheSummary = "$($scanResult.CacheHits)/$($scanResult.TotalQueries) cached"
+  if ($scanResult.GraphLimitReached) {
+    Write-Log "Warning: Graph API pagination limit reached after $($scanResult.GraphPageCount) page(s). Some apps may not be shown."
+  }
+
+  if ($script:discoveredRaw.Count -gt 0) {
+    Update-Status "Scanned: $($scanResult.DetectedCount) | Filtered: $($scanResult.FilteredCount) | Matched apps: $($scanResult.MatchedRawCount) | Unique packages: $($script:discoveredRaw.Count) | Graph: $graphSource | WinGet: $wingetCacheSummary"
+  } else {
+    Update-Status "No WinGet matches found (or all are already managed). | Graph: $graphSource | WinGet: $wingetCacheSummary"
+  }
+  Write-Log "Discovery summary -> Scanned: $($scanResult.DetectedCount), Filtered: $($scanResult.FilteredCount), Normalized: $($scanResult.NormalizedCount), Matched apps: $($scanResult.MatchedRawCount), Unique packages: $($script:discoveredRaw.Count), Skipped: $($scanResult.SkippedNonCandidateCount), Graph: $graphSource, WinGet cache: $wingetCacheSummary, Workers: $($scanResult.WorkerCount)"
+  Update-DiscoveryActionState
+}
+
+function Start-WinTunerDiscoveryScan {
+  if (
+    -not $script:isConnected -or
+    $script:discoveryScanRunning -or
+    $script:isDiscoveryDeploymentActive -or
+    $script:isUpdateOperationActive -or
+    $script:isSupersededOperationActive -or
+    $script:isPackageSearchActive -or
+    $script:isVersionLookupActive -or
+    $script:isPackageBuildActive -or
+    $script:isPackageUploadActive
+  ) {
+    Update-DiscoveryActionState
+    return
+  }
+
+  $modulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.DiscoveryScan.psm1'
+  if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
+    Update-Status 'Discovery scan failed: scan module is missing.'
+    Write-Log "Discovery scan module missing: $modulePath"
+    return
+  }
+
+  $operationId = [guid]::NewGuid().ToString('N')
+  $progressPath = Join-Path ([System.IO.Path]::GetTempPath()) "wintuner-discovery-scan-$operationId.progress.json"
+  $cancelPath = Join-Path ([System.IO.Path]::GetTempPath()) "wintuner-discovery-scan-$operationId.cancel"
+  Clear-DiscoveryCandidateState
+  $script:discoveryScanRunning = $true
+  $script:cancelDiscoveryScan = $false
+  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
+  $script:progressBar.MarqueeAnimationSpeed = 25
+  $script:progressBar.Visible = $true
+  Update-Status 'Starting background Discovery scan...'
+  Write-Log 'Starting fully asynchronous Discovery scan.'
+  Update-DiscoveryActionState
+  Update-UpdateActionState
+
+  $workerScript = @'
+param($RepositoryRoot, $ProgressPath, $CancelPath, $UserPrincipalName, $SkipLowValueCandidates)
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$InformationPreference = 'SilentlyContinue'
+Import-Module WinTuner -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Core.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Intune.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Winget.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.DiscoveryScan.psm1') -Force -ErrorAction Stop
+
+function Write-DiscoveryScanProgress {
+  param([object]$ProgressInfo)
+  $tempPath = "$ProgressPath.$([guid]::NewGuid().ToString('N')).tmp"
+  try {
+    [System.IO.File]::WriteAllText($tempPath, ($ProgressInfo | ConvertTo-Json -Depth 4 -Compress), [System.Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $tempPath -Destination $ProgressPath -Force
+  } finally { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue }
+}
+
+try {
+  $result = Invoke-WinTunerDiscoveryScan -ConnectGraph {
+    Connect-WinTunerGraph -UserPrincipalName $UserPrincipalName
+  } -GetExistingApps {
+    @(Get-WtWin32Apps -Superseded:$false -ErrorAction Stop)
+  } -ResolvePackageId {
+    param($App)
+    foreach ($propertyName in 'PackageId','PackageID','WingetId','PackageIdentifier') {
+      $property = $App.PSObject.Properties[$propertyName]
+      if ($property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) { return [string]$property.Value }
+    }
+    return ''
+  } -GetDetectedApps {
+    Get-WinTunerDetectedApps -PageSize 500 -MaxPages 1000
+  } -SearchPackages {
+    param($Queries, $CancelCheck)
+    Search-WinTunerDiscoveryPackagesBatchCached -SearchQueries @($Queries) -BatchSize 25 -QueryTimeoutSeconds 12 -CacheTtlHours 24 -OnWait {} -ShouldCancel $CancelCheck
+  } -ShouldCancel {
+    Test-Path -LiteralPath $CancelPath
+  } -ReportProgress {
+    param($ProgressInfo)
+    Write-DiscoveryScanProgress -ProgressInfo $ProgressInfo
+  } -SkipLowValueCandidates ([bool]$SkipLowValueCandidates)
+} finally {
+  try { Save-WinTunerDiscoveryCache } catch {}
+}
+$result | ConvertTo-Json -Depth 8 -Compress
+'@
+
+  $powerShell = [System.Management.Automation.PowerShell]::Create()
+  $null = $powerShell.AddScript($workerScript).AddArgument($PSScriptRoot).AddArgument($progressPath).AddArgument($cancelPath).AddArgument($script:currentUserUpn).AddArgument([bool]$script:skipLowValueWingetCandidates)
+  $timer = New-Object System.Windows.Forms.Timer
+  $timer.Interval = 150
+  $context = [pscustomobject]@{ PowerShell = $powerShell; AsyncResult = $null; Timer = $timer; ProgressPath = $progressPath; CancelPath = $cancelPath; LastProgress = $null }
+  $script:discoveryScanContext = $context
+
+  $timer.Add_Tick({
+    $currentContext = $script:discoveryScanContext
+    if (-not $currentContext) { return }
+    if (Test-Path -LiteralPath $currentContext.ProgressPath -PathType Leaf) {
+      try {
+        $progressJson = Get-Content -LiteralPath $currentContext.ProgressPath -Raw -ErrorAction Stop
+        if ($progressJson -and $progressJson -ne $currentContext.LastProgress) {
+          $currentContext.LastProgress = $progressJson
+          $progressInfo = $progressJson | ConvertFrom-Json -ErrorAction Stop
+          switch ([string]$progressInfo.Stage) {
+            'Connecting' { Update-Status 'Checking Microsoft Graph session...' }
+            'LoadingExisting' { Update-Status 'Loading existing managed apps...' }
+            'FetchingDetected' { Update-Status 'Fetching all detected apps from Intune...' }
+            'Searching' { Update-Status ("Searching WinGet for {0} unique app name(s)..." -f $progressInfo.Total) }
+            'Matching' {
+              $script:progressBar.MarqueeAnimationSpeed = 0
+              $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+              $maximum = [Math]::Max(1, [int]$progressInfo.Total)
+              $script:progressBar.Maximum = $maximum
+              $script:progressBar.Value = [Math]::Min([int]$progressInfo.Processed, $maximum)
+              Update-Status ("Matching ({0}/{1}): {2}" -f $progressInfo.Processed, $progressInfo.Total, $progressInfo.AppName)
+            }
+          }
+        }
+      } catch {}
+    }
+    if ($currentContext.AsyncResult -and $currentContext.AsyncResult.IsCompleted) { Complete-WinTunerDiscoveryScan -Context $currentContext }
+  })
+
+  try {
+    $context.AsyncResult = $powerShell.BeginInvoke()
+    $timer.Start()
+  } catch {
+    try { $timer.Dispose() } catch {}
+    try { $powerShell.Dispose() } catch {}
+    Remove-Item -LiteralPath $progressPath, $cancelPath -Force -ErrorAction SilentlyContinue
+    $script:discoveryScanContext = $null
+    $script:discoveryScanRunning = $false
+    $script:cancelDiscoveryScan = $false
+    $script:progressBar.Visible = $false
+    Update-Status "Discovery scan failed to start: $($_.Exception.Message)"
+    Write-Log "Background Discovery scan failed to start: $($_.Exception.Message)"
+    Update-DiscoveryActionState
+  }
+}
+
+function Complete-WinTunerDiscoveryDeployment {
+  param([Parameter(Mandatory=$true)][object]$Context)
+
+  $deploymentResult = $null
+  $completionError = $null
+  try {
+    $output = @($Context.PowerShell.EndInvoke($Context.AsyncResult))
+    if ($output.Count -eq 0) {
+      if ($Context.PowerShell.Streams.Error.Count -gt 0) { throw $Context.PowerShell.Streams.Error[0].Exception }
+      throw 'The Discovery deployment returned no result.'
+    }
+    $deploymentResult = ([string]$output[$output.Count - 1]) | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    $completionError = $_.Exception.Message
+  } finally {
+    try { $Context.Timer.Stop() } catch {}
+    try { $Context.Timer.Dispose() } catch {}
+    try { $Context.PowerShell.Dispose() } catch {}
+    Remove-Item -LiteralPath $Context.ProgressPath -Force -ErrorAction SilentlyContinue
+    if ($script:discoveryDeploymentContext -eq $Context) { $script:discoveryDeploymentContext = $null }
+    $script:isDiscoveryDeploymentActive = $false
+    try {
+      $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+      $script:progressBar.Maximum = 100
+      $script:progressBar.Value = 0
+      $script:progressBar.Visible = $false
+    } catch {}
+  }
+
+  if ($completionError) {
+    Update-Status "Discovery deployment failed: $completionError"
+    Write-Log "Background Discovery deployment failed: $completionError"
+  } else {
+    $successfulIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $failedItems = [System.Collections.Generic.List[object]]::new()
+    foreach ($itemResult in @($deploymentResult.Results)) {
+      if ($itemResult.Succeeded) {
+        $null = $successfulIds.Add([string]$itemResult.PackageId)
+        Write-Log "Successfully deployed discovered app in background: $($itemResult.PackageId) v$($itemResult.EffectiveVersion)"
+      } else {
+        $failedItems.Add($itemResult)
+        Write-Log "Discovery deployment failed for $($itemResult.Name) ($($itemResult.ReasonCode)): $($itemResult.Message)"
+      }
+    }
+
+    $remaining = @($script:discoveredRaw | Where-Object { -not $successfulIds.Contains([string]$_.WingetApp.PackageID) })
+    $script:discoveredRaw = [System.Collections.Generic.List[object]]::new()
+    foreach ($item in $remaining) { [void]$script:discoveredRaw.Add($item) }
+    Update-DiscoveredListUI
+    Update-Status ("Deployment complete: {0} successful, {1} failed." -f $deploymentResult.SuccessCount, $deploymentResult.FailureCount)
+
+    if ($failedItems.Count -gt 0) {
+      $summary = "The following $($failedItems.Count) app(s) could not be deployed:$([Environment]::NewLine)$([Environment]::NewLine)"
+      $summary += ($failedItems | ForEach-Object { "• $($_.Name): $($_.Message)" }) -join [Environment]::NewLine
+      [void][System.Windows.Forms.MessageBox]::Show($summary, "Deployment Summary – $($failedItems.Count) Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+    } else {
+      [void][System.Windows.Forms.MessageBox]::Show("Deployment finished successfully for $($deploymentResult.SuccessCount) app(s).", 'Deploy Complete', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    }
+  }
+
+  Update-DiscoveryActionState
+  Update-UpdateActionState
+  Update-SupersededActionState
+}
+
+function Start-WinTunerDiscoveryDeployment {
+  param([Parameter(Mandatory=$true)][object[]]$Apps, [Parameter(Mandatory=$true)][string]$RootPackageFolder)
+
+  if (-not $script:isConnected -or $script:isDiscoveryDeploymentActive -or $script:discoveryScanRunning) {
+    Update-DiscoveryActionState
+    return
+  }
+  $items = @($Apps)
+  if ($items.Count -eq 0) {
+    Update-Status 'No discovered apps were provided.'
+    return
+  }
+
+  $modulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.DiscoveryDeployment.psm1'
+  if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
+    Update-Status 'Discovery deployment failed: deployment module is missing.'
+    Write-Log "Discovery deployment module missing: $modulePath"
+    return
+  }
+
+  $itemsJson = $items | ConvertTo-Json -Depth 6 -Compress
+  $operationId = [guid]::NewGuid().ToString('N')
+  $progressPath = Join-Path ([System.IO.Path]::GetTempPath()) "wintuner-discovery-deployment-$operationId.progress.json"
+  $script:isDiscoveryDeploymentActive = $true
+  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+  $script:progressBar.Minimum = 0
+  $script:progressBar.Maximum = [Math]::Max(1, $items.Count)
+  $script:progressBar.Value = 0
+  $script:progressBar.Visible = $true
+  Update-Status "Starting background deployment for $($items.Count) discovered app(s)..."
+  Write-Log "Starting background Discovery deployment -> Apps: $($items.Count)"
+  Update-DiscoveryActionState
+  Update-UpdateActionState
+  Update-SupersededActionState
+
+  $workerScript = @'
+param($RepositoryRoot, $ItemsJson, $RootPackageFolder, $ProgressPath)
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+Import-Module WinTuner -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Core.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Winget.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.PackageBuild.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.DiscoveryDeployment.psm1') -Force -ErrorAction Stop
+function Write-DiscoveryDeploymentProgress {
+  param([object]$ProgressInfo)
+  $tempPath = "$ProgressPath.$([guid]::NewGuid().ToString('N')).tmp"
+  try {
+    [System.IO.File]::WriteAllText($tempPath, ($ProgressInfo | ConvertTo-Json -Depth 4 -Compress), [System.Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $tempPath -Destination $ProgressPath -Force
+  } finally { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue }
+}
+$items = @($ItemsJson | ConvertFrom-Json -ErrorAction Stop)
+$result = Invoke-WinTunerDiscoveryDeployment -Apps $items -RootPackageFolder $RootPackageFolder -ReportProgress {
+  param($ProgressInfo)
+  Write-DiscoveryDeploymentProgress -ProgressInfo $ProgressInfo
+}
+$result | ConvertTo-Json -Depth 7 -Compress
+'@
+
+  $powerShell = [System.Management.Automation.PowerShell]::Create()
+  $null = $powerShell.AddScript($workerScript).AddArgument($PSScriptRoot).AddArgument($itemsJson).AddArgument($RootPackageFolder).AddArgument($progressPath)
+  $timer = New-Object System.Windows.Forms.Timer
+  $timer.Interval = 150
+  $context = [pscustomobject]@{ PowerShell = $powerShell; AsyncResult = $null; Timer = $timer; ProgressPath = $progressPath; LastProgress = $null }
+  $script:discoveryDeploymentContext = $context
+
+  $timer.Add_Tick({
+    $currentContext = $script:discoveryDeploymentContext
+    if (-not $currentContext) { return }
+    if (Test-Path -LiteralPath $currentContext.ProgressPath -PathType Leaf) {
+      try {
+        $progressJson = Get-Content -LiteralPath $currentContext.ProgressPath -Raw -ErrorAction Stop
+        if ($progressJson -and $progressJson -ne $currentContext.LastProgress) {
+          $currentContext.LastProgress = $progressJson
+          $progressInfo = $progressJson | ConvertFrom-Json -ErrorAction Stop
+          $maximum = [Math]::Max(1, [int]$progressInfo.Total)
+          $script:progressBar.Maximum = $maximum
+          $script:progressBar.Value = [Math]::Min([int]$progressInfo.Processed, $maximum)
+          Update-Status ("Packaging and deploying ({0}/{1}): {2}" -f $progressInfo.Processed, $progressInfo.Total, $progressInfo.AppName)
+        }
+      } catch {}
+    }
+    if ($currentContext.AsyncResult -and $currentContext.AsyncResult.IsCompleted) { Complete-WinTunerDiscoveryDeployment -Context $currentContext }
+  })
+
+  try {
+    $context.AsyncResult = $powerShell.BeginInvoke()
+    $timer.Start()
+  } catch {
+    try { $timer.Dispose() } catch {}
+    try { $powerShell.Dispose() } catch {}
+    Remove-Item -LiteralPath $progressPath -Force -ErrorAction SilentlyContinue
+    $script:discoveryDeploymentContext = $null
+    $script:isDiscoveryDeploymentActive = $false
+    $script:progressBar.Visible = $false
+    Update-Status "Discovery deployment failed to start: $($_.Exception.Message)"
+    Write-Log "Background Discovery deployment failed to start: $($_.Exception.Message)"
+    Update-DiscoveryActionState
+    Update-UpdateActionState
+    Update-SupersededActionState
+  }
+}
+
+function Show-WinTunerLoginError {
+  param([Parameter(Mandatory=$true)][string]$Message)
+
+  if ($Message -imatch 'network|connection|timeout|unreachable') {
+    [void][System.Windows.Forms.MessageBox]::Show("Network error: Please check your internet connection.$([Environment]::NewLine)$([Environment]::NewLine)Details: $Message", 'Network Error', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+  } elseif ($Message -imatch 'unauthorized|authentication|credential|access') {
+    [void][System.Windows.Forms.MessageBox]::Show("Authentication failed: Please check your credentials.$([Environment]::NewLine)$([Environment]::NewLine)Details: $Message", 'Authentication Error', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+  } else {
+    [void][System.Windows.Forms.MessageBox]::Show("Login failed: $Message", 'Login Error', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+  }
+}
+
+function Complete-WinTunerLoginVerification {
+  param([Parameter(Mandatory=$true)][object]$Context)
+
+  $verificationResult = $null
+  $completionError = $null
+  try {
+    $output = @($Context.PowerShell.EndInvoke($Context.AsyncResult))
+    if ($output.Count -eq 0) {
+      if ($Context.PowerShell.Streams.Error.Count -gt 0) { throw $Context.PowerShell.Streams.Error[0].Exception }
+      throw 'The connection verification returned no result.'
+    }
+    $verificationResult = ([string]$output[$output.Count - 1]) | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    $completionError = $_.Exception.Message
+  } finally {
+    try { $Context.Timer.Stop() } catch {}
+    try { $Context.Timer.Dispose() } catch {}
+    try { $Context.PowerShell.Dispose() } catch {}
+    if ($script:loginVerificationContext -eq $Context) { $script:loginVerificationContext = $null }
+    $script:isLoginOperationActive = $false
+  }
+
+  $errorMessage = if ($completionError) {
+    $completionError
+  } elseif (-not $verificationResult.Succeeded) {
+    if ($verificationResult.ErrorMessage) { [string]$verificationResult.ErrorMessage } else { 'Authentication error or connection verification failed.' }
+  } else {
+    ''
+  }
+
+  if ($errorMessage) {
+    try { Disconnect-WtWinTuner -ErrorAction SilentlyContinue } catch {}
+    $script:isConnected = $false
+    $script:currentUserUpn = ''
+    Show-WinTunerLoginError -Message $errorMessage
+    Update-Status ("Login canceled/failed: {0}" -f $errorMessage)
+    $attemptCount = if ($verificationResult) { [int]$verificationResult.Attempts } else { 0 }
+    Write-Log "Login verification failed after $attemptCount attempt(s): $errorMessage"
+    Set-ConnectedUIState -Connected $false
+    $loginButton.Text = 'Login to Tenant'
+    $loginButton.Enabled = (Test-ValidM365UserName -UserName $usernameBox.Text)
+    Update-PackageSearchActionState
+    return
+  }
+
+  $script:isConnected = $true
+  $script:currentUserUpn = $Context.Upn
+  Update-Status "Login success; connection verified after $($verificationResult.Attempts) attempt(s)."
+  Write-Log "Login connection verified after $($verificationResult.Attempts) attempt(s)."
+  if ($rememberCheckBox) { $script:settings.RememberMe = [bool]$rememberCheckBox.Checked }
+  if ($script:settings.RememberMe) { $script:settings.LastUser = $Context.Upn } else { $script:settings.LastUser = '' }
+  Add-RecentUser -Upn $Context.Upn
+  $usernameBox.Items.Clear()
+  foreach ($user in @($script:settings.RecentUsers)) {
+    if ($user) { [void]$usernameBox.Items.Add($user) }
+  }
+  [void](Export-WinTunerSettings -Settings $script:settings -Path $script:settingsPath)
+  $loginButton.Text = 'Login to Tenant'
+  Set-ConnectedUIState -Connected $true
+  Update-PackageActionState
+  Update-PackageSearchActionState
+
+  if ($script:settings.AutoCheckUpdates) {
+    Write-Log 'Auto-check for updates enabled - triggering update search'
+    Update-Status 'Auto-checking for updates...'
+    try {
+      $tabControl.SelectedTab = $tabUpdate
+      $updateSearchButton.PerformClick()
+    } catch {
+      Write-Log "Auto-check for updates failed: $($_.Exception.Message)"
+    }
+  }
+}
+
+function Start-WinTunerLogin {
+  if ($script:isLoginOperationActive -or $script:isConnected) { return }
+  $upn = [string]$usernameBox.Text
+  if (-not (Test-ValidM365UserName -UserName $upn)) {
+    [void][System.Windows.Forms.MessageBox]::Show('Please enter a valid M365 UPN.', 'Invalid Username', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+    return
+  }
+
+  $modulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Connection.psm1'
+  if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
+    Update-Status 'Login failed: connection verification module is missing.'
+    Write-Log "Connection verification module missing: $modulePath"
+    return
+  }
+
+  $script:isLoginOperationActive = $true
+  $script:isConnected = $false
+  $loginButton.Enabled = $false
+  $loginButton.Text = 'Connecting...'
+  $usernameBox.Enabled = $false
+  $clearHistoryButton.Enabled = $false
+  Update-Status 'Connecting to tenant...'
+  Update-PackageSearchActionState
+
+  try {
+    $null = Connect-WtWinTuner -Username $upn -ErrorAction Stop
+  } catch {
+    $message = $_.Exception.Message
+    $script:isLoginOperationActive = $false
+    $usernameBox.Enabled = $true
+    $clearHistoryButton.Enabled = $true
+    $loginButton.Text = 'Login to Tenant'
+    $loginButton.Enabled = (Test-ValidM365UserName -UserName $usernameBox.Text)
+    Show-WinTunerLoginError -Message $message
+    Update-Status ("Login canceled/failed: {0}" -f $message)
+    Write-Log "Login connection failed: $message"
+    Set-ConnectedUIState -Connected $false
+    Update-PackageSearchActionState
+    return
+  }
+
+  Update-Status 'Tenant authentication completed; verifying connection...'
+  $workerScript = @'
+param($RepositoryRoot)
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+Import-Module WinTuner -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Connection.psm1') -Force -ErrorAction Stop
+$result = Invoke-WinTunerConnectionVerification -GetApps {
+  @(Get-WtWin32Apps -Update:$false -Superseded:$false -ErrorAction Stop)
+} -MaxAttempts 4 -RetryDelayMilliseconds 500
+$result | ConvertTo-Json -Depth 4 -Compress
+'@
+
+  $powerShell = [System.Management.Automation.PowerShell]::Create()
+  $null = $powerShell.AddScript($workerScript).AddArgument($PSScriptRoot)
+  $timer = New-Object System.Windows.Forms.Timer
+  $timer.Interval = 150
+  $context = [pscustomobject]@{ PowerShell = $powerShell; AsyncResult = $null; Timer = $timer; Upn = $upn }
+  $script:loginVerificationContext = $context
+  $timer.Add_Tick({
+    $currentContext = $script:loginVerificationContext
+    if ($currentContext -and $currentContext.AsyncResult -and $currentContext.AsyncResult.IsCompleted) {
+      $usernameBox.Enabled = $true
+      $clearHistoryButton.Enabled = $true
+      Complete-WinTunerLoginVerification -Context $currentContext
+    }
+  })
+
+  try {
+    $context.AsyncResult = $powerShell.BeginInvoke()
+    $timer.Start()
+  } catch {
+    try { $timer.Dispose() } catch {}
+    try { $powerShell.Dispose() } catch {}
+    $script:loginVerificationContext = $null
+    $script:isLoginOperationActive = $false
+    $usernameBox.Enabled = $true
+    $clearHistoryButton.Enabled = $true
+    $loginButton.Text = 'Login to Tenant'
+    $loginButton.Enabled = (Test-ValidM365UserName -UserName $usernameBox.Text)
+    try { Disconnect-WtWinTuner -ErrorAction SilentlyContinue } catch {}
+    $message = $_.Exception.Message
+    Show-WinTunerLoginError -Message $message
+    Update-Status "Login verification failed to start: $message"
+    Write-Log "Login verification failed to start: $message"
+    Set-ConnectedUIState -Connected $false
+    Update-PackageSearchActionState
+  }
+}
+
 function Complete-WinTunerPackageSearch {
   param([Parameter(Mandatory=$true)][object]$Context)
 
@@ -2664,56 +3437,10 @@ function Clear-RecentUsers {
 }
 
 # Helper: check if WinTuner is connected (simple smoke test)
-function Test-WtConnected {
-  param(
-    [int]$MaxAttempts = 4,
-    [int]$RetryDelayMs = 500
-  )
 
-  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-    try {
-      # Avoid Select-Object -First 1 to prevent WinForms pipeline crash during login
-      $apps = Get-WtWin32Apps -Update:$false -Superseded:$false -ErrorAction Stop
-
-      foreach ($app in $apps) {
-        return $true # Exit safely on first found element
-      }
-
-      return $true # No apps found but no error either
-    } catch {
-      if ($attempt -ge $MaxAttempts) {
-        Write-Log "Connection verification failed after $MaxAttempts attempts: $($_.Exception.Message)"
-        return $false
-      }
-
-      Write-Log "Connection verification attempt $attempt failed; retrying in ${RetryDelayMs}ms..."
-      Start-Sleep -Milliseconds $RetryDelayMs
-      [System.Windows.Forms.Application]::DoEvents()
-    }
-  }
-
-  return $false
-}
 
 # Heuristic filter to avoid very slow/low-value WinGet queries (mainly mobile/system artifacts)
-function Test-WingetSearchCandidate {
-  param(
-    [string]$DisplayName
-  )
 
-  if ([string]::IsNullOrWhiteSpace($DisplayName)) { return $false }
-  $name = $DisplayName.Trim()
-  if ($name.Length -lt 3) { return $false }
-
-  # Android-style package ids and similar technical identifiers are typically not useful for WinGet search
-  if ($name -match '^[a-z0-9]+(\.[a-z0-9_]+){2,}$') { return $false }
-  if ($name -match '(?i)^com\.') { return $false }
-
-  # Skip common mobile/system terms that frequently stall searches and rarely map to WinGet packages
-  if ($name -match '(?i)\b(apn|provisioner|sim toolkit|sim card|carrier services|system ui|one ui home|setup wizard)\b') { return $false }
-
-  return $true
-}
 
 # Helper: toggle UI based on connection state
 function Set-ConnectedUIState {
@@ -2770,6 +3497,13 @@ $script:updateDeploymentContext = $null
 $script:supersededApps = @()
 $script:isSupersededOperationActive = $false
 $script:supersededSearchContext = $null
+$script:supersededRemovalContext = $null
+$script:discoveryScanRunning = $false
+$script:cancelDiscoveryScan = $false
+$script:discoveryScanContext = $null
+$script:discoveryDeploymentContext = $null
+$script:isLoginOperationActive = $false
+$script:loginVerificationContext = $null
 # Cache for winget version lookups (speeds up repeated searches)
 # Disk cache loaded once at first use (Fix 1)
 # Create form
@@ -2857,7 +3591,7 @@ $headerPanel.Controls.Add($usernameError)
 $usernameBox.add_TextChanged({
   if (Test-ValidM365UserName -UserName $usernameBox.Text) {
     $usernameError.Text = ""
-    if ($loginButton) { $loginButton.Enabled = $true }
+    if ($loginButton) { $loginButton.Enabled = -not [bool]$script:isLoginOperationActive }
   } else {
     $usernameError.Text = "Please enter a valid M365 UPN, e.g. name@firma.de"
     if ($loginButton) { $loginButton.Enabled = $false }
@@ -3236,6 +3970,43 @@ $discoveredSortBox.SelectedIndex = 0
 $discoveredSortBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
 $tabDiscovered.Controls.Add($discoveredSortBox)
 
+function Update-WinTunerDiscoveryFilterLayout {
+    $clientWidth = [Math]::Max(760, $tabDiscovered.ClientSize.Width)
+    $rightMargin = 20
+    $controlWidth = [Math]::Min(260, [Math]::Max(150, [int]($clientWidth * 0.22)))
+    $controlX = $clientWidth - $rightMargin - $controlWidth
+    $labelX = $controlX - 100
+
+    if ($labelX -lt 440) {
+        $labelX = 440
+        $controlX = 540
+        $controlWidth = [Math]::Max(150, $clientWidth - $controlX - $rightMargin)
+    }
+
+    foreach ($control in @(
+        $discoveredAppSearchLabel,
+        $discoveredAppSearchBox,
+        $discoveredPublisherLabel,
+        $discoveredPublisherBox,
+        $discoveredSortLabel,
+        $discoveredSortBox
+    )) {
+        $control.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
+    }
+
+    $discoveredAppSearchLabel.Location = New-Object System.Drawing.Point($labelX, 15)
+    $discoveredAppSearchBox.Location = New-Object System.Drawing.Point($controlX, 12)
+    $discoveredAppSearchBox.Width = $controlWidth
+    $discoveredPublisherLabel.Location = New-Object System.Drawing.Point($labelX, 42)
+    $discoveredPublisherBox.Location = New-Object System.Drawing.Point($controlX, 39)
+    $discoveredPublisherBox.Width = $controlWidth
+    $discoveredSortLabel.Location = New-Object System.Drawing.Point($labelX, 69)
+    $discoveredSortBox.Location = New-Object System.Drawing.Point($controlX, 66)
+    $discoveredSortBox.Width = $controlWidth
+}
+
+$tabDiscovered.Add_Resize({ Update-WinTunerDiscoveryFilterLayout })
+Update-WinTunerDiscoveryFilterLayout
 $discoveredListBox = New-Object System.Windows.Forms.CheckedListBox
 $discoveredListBox.Location = New-Object System.Drawing.Point(20,110)
 $discoveredListBox.Width = [Math]::Max(710, $tabDiscovered.ClientSize.Width - 40)
@@ -3471,7 +4242,7 @@ function Update-PackageActionState {
     $uploadButton.Enabled = $false
     $uploadButton.Text = if ($script:isPackageUploadActive) { 'Uploading...' } else { 'Upload to Tenant' }
 
-    if ($script:isPackageBuildActive -or $script:isPackageUploadActive) {
+    if ($script:isLoginOperationActive -or $script:isPackageBuildActive -or $script:isPackageUploadActive) {
         return
     }
 
@@ -3541,6 +4312,7 @@ function Update-PackageSearchActionState {
         $resultCount = if ($dropdown) { [int]$dropdown.Items.Count } else { 0 }
         $selectedIndex = if ($dropdown) { [int]$dropdown.SelectedIndex } else { -1 }
         $isBusy = (
+            [bool]$script:isLoginOperationActive -or
             [bool]$script:isPackageSearchActive -or
             [bool]$script:isVersionLookupActive -or
             [bool]$script:isPackageBuildActive -or
@@ -3599,7 +4371,7 @@ function Update-UpdateActionState {
         $checkedCount = @($candidates | Where-Object { $_ -and $_.Checked }).Count
         $state = Get-WinTunerUpdateActionState `
             -Connected ([bool]$script:isConnected) `
-            -IsBusy ([bool]($script:isUpdateOperationActive -or $script:isSupersededOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive -or $script:isPackageUploadActive)) `
+            -IsBusy ([bool]($script:isLoginOperationActive -or $script:isUpdateOperationActive -or $script:isSupersededOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive -or $script:isPackageUploadActive)) `
             -CandidateCount $candidates.Count `
             -CheckedCount $checkedCount `
             -IsScanRunning ([bool]$script:updateScanRunning) `
@@ -3650,7 +4422,7 @@ function Update-DiscoveryActionState {
             -IsScanning ([bool]$script:discoveryScanRunning) `
             -CancelRequested ([bool]$script:cancelDiscoveryScan) `
             -IsDeploying ([bool]$script:isDiscoveryDeploymentActive) `
-            -IsOtherOperationActive ([bool]($script:isUpdateOperationActive -or $script:isSupersededOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive -or $script:isPackageUploadActive)) `
+            -IsOtherOperationActive ([bool]($script:isLoginOperationActive -or $script:isUpdateOperationActive -or $script:isSupersededOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive -or $script:isPackageUploadActive)) `
             -ResultCount $results.Count `
             -CheckedCount $checkedCount
 
@@ -3660,6 +4432,7 @@ function Update-DiscoveryActionState {
             '1. Scan Discovered Apps'
         }
         $scanDiscoveredButton.Enabled = $state.CanScan
+        $deployDiscoveredButton.Text = if ($script:isDiscoveryDeploymentActive) { 'Deploying...' } else { '2. Deploy Checked Apps' }
         $deployDiscoveredButton.Enabled = $state.CanDeploy
         $exportDiscoveredCsvButton.Enabled = $state.CanExport
         $checkAllDiscoveredButton.Enabled = $state.CanCheckAll
@@ -3683,6 +4456,7 @@ function Update-SupersededActionState {
         $results = @($script:supersededApps)
         $selectedIndex = if ($supersededDropdown) { [int]$supersededDropdown.SelectedIndex } else { -1 }
         $isBusy = (
+            [bool]$script:isLoginOperationActive -or
             [bool]$script:isSupersededOperationActive -or
             [bool]$script:isUpdateOperationActive -or
             [bool]$script:discoveryScanRunning -or
@@ -3698,6 +4472,9 @@ function Update-SupersededActionState {
             -ResultCount $results.Count `
             -SelectedIndex $selectedIndex
 
+        $supersededSearchButton.Text = if ($script:supersededSearchContext) { 'Searching...' } else { 'Search Superseded Apps' }
+        $deleteSelectedAppButton.Text = if ($script:supersededRemovalContext) { 'Deleting...' } else { 'Delete Selected App' }
+        $removeOldAppsButton.Text = if ($script:supersededRemovalContext) { 'Deleting...' } else { 'Delete all Superseded Apps' }
         $supersededSearchButton.Enabled = $state.CanSearch
         $deleteSelectedAppButton.Enabled = $state.CanDeleteSelected
         $removeOldAppsButton.Enabled = $state.CanDeleteAll
@@ -3847,84 +4624,8 @@ $rememberCheckBox.Add_CheckedChanged({
 })
 
 $loginButton.Add_Click({
-  if (-not (Test-ValidM365UserName -UserName $usernameBox.Text)) {
-    [void][System.Windows.Forms.MessageBox]::Show(
-      "Please enter a valid M365 UPN.",
-      "Invalid Username",
-      [System.Windows.Forms.MessageBoxButtons]::OK,
-      [System.Windows.Forms.MessageBoxIcon]::Warning
-    )
-    return
-  }
-  $loginButton.Enabled = $false
-  $loginButton.Text = "Connecting..."
-  [System.Windows.Forms.Application]::DoEvents()
-  try {
-    Update-Status "Connecting to tenant..."
-    $script:isConnected = $false
-    $null = Connect-WtWinTuner -Username $usernameBox.Text -ErrorAction Stop
-    if (-not (Test-WtConnected)) { throw "Authentication error or failed." }
-    $script:isConnected = $true
-    Update-Status "Login success."
-    $script:currentUserUpn = $usernameBox.Text
-    Update-PackageActionState
-    if ($loginInfoLabel) { $loginInfoLabel.Text = "Logged in as: $($script:currentUserUpn)" }
-    if ($rememberCheckBox) { $script:settings.RememberMe = [bool]$rememberCheckBox.Checked }
-    if ($script:settings.RememberMe) { $script:settings.LastUser = $usernameBox.Text } else { $script:settings.LastUser = "" }
-    Add-RecentUser -Upn $usernameBox.Text
-    # Update dropdown list
-    $usernameBox.Items.Clear()
-    foreach ($u in @($script:settings.RecentUsers)) {
-      if ($u) { [void]$usernameBox.Items.Add($u) }
-    }
-    [void](Export-WinTunerSettings -Settings $script:settings -Path $script:settingsPath)
-    Set-ConnectedUIState -Connected $true
-    
-    # Auto-check for updates if enabled
-    if ($script:settings.AutoCheckUpdates) {
-      Write-Log "Auto-check for updates enabled - triggering update search"
-      Update-Status "Auto-checking for updates..."
-      try {
-        # Switch to Updates tab first so PerformClick works
-        $tabControl.SelectedTab = $tabUpdate
-        Start-Sleep -Milliseconds 100
-        $updateSearchButton.PerformClick()
-      } catch {
-        Write-Log "Auto-check for updates failed: $($_.Exception.Message)"
-      }
-    }
-  } catch {
-    $msg = $_.Exception.Message
-    if ($msg -imatch 'network|connection|timeout|unreachable') {
-      [void][System.Windows.Forms.MessageBox]::Show(
-        "Network error: Please check your internet connection.`n`nDetails: $msg",
-        "Network Error",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Error
-      )
-    } elseif ($msg -imatch 'unauthorized|authentication|credential|access') {
-      [void][System.Windows.Forms.MessageBox]::Show(
-        "Authentication failed: Please check your credentials.`n`nDetails: $msg",
-        "Authentication Error",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Error
-      )
-    } else {
-      [void][System.Windows.Forms.MessageBox]::Show(
-        "Login failed: $msg",
-        "Login Error",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Error
-      )
-    }
-    Update-Status ("Login canceled/failed: {0}" -f $msg)
-    Set-ConnectedUIState -Connected $false
-  } finally {
-    $loginButton.Text = "Login to Tenant"
-    $loginButton.Enabled = (Test-ValidM365UserName -UserName $usernameBox.Text)
-  }
+  Start-WinTunerLogin
 })
-
 $searchButton.Add_Click({
   Start-WinTunerPackageSearch
 })
@@ -4216,73 +4917,28 @@ $updateAllButton.Add_Click({
 
 
 $removeOldAppsButton.Add_Click({
-  $supersededApps = @($script:supersededApps)
+  $apps = @($script:supersededApps)
   if (-not $script:isConnected -or $script:isSupersededOperationActive) {
     Update-SupersededActionState
     return
   }
-  if ($supersededApps.Count -eq 0) {
+  if ($apps.Count -eq 0) {
     Update-Status 'No Superseded Apps Found'
-    Update-SupersededActionState
     return
   }
-
-  $appNames = ($supersededApps | Select-Object -ExpandProperty Name) -join [Environment]::NewLine
-  $result = [System.Windows.Forms.MessageBox]::Show(
+  $appNames = ($apps | Select-Object -ExpandProperty Name) -join [Environment]::NewLine
+  $confirmation = [System.Windows.Forms.MessageBox]::Show(
     "The following outdated apps will be removed:$([Environment]::NewLine)$appNames",
     'Confirmation',
     [System.Windows.Forms.MessageBoxButtons]::YesNo,
     [System.Windows.Forms.MessageBoxIcon]::Question
   )
-  if ($result -ne [System.Windows.Forms.DialogResult]::Yes) {
+  if ($confirmation -ne [System.Windows.Forms.DialogResult]::Yes) {
     Update-Status 'Removal aborted.'
     return
   }
-
-  $script:isSupersededOperationActive = $true
-  $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-  $script:progressBar.Minimum = 0
-  $script:progressBar.Maximum = [Math]::Max(1, $supersededApps.Count)
-  $script:progressBar.Value = 0
-  $script:progressBar.Visible = $true
-  Update-UpdateActionState
-  Update-DiscoveryActionState
-  Update-SupersededActionState
-
-  $processedCount = 0
-  try {
-    foreach ($app in $supersededApps) {
-      try {
-        Remove-WtWin32App -GraphId $app.GraphId -ErrorAction Stop
-        Update-Status ("Removed: {0}" -f $app.Name)
-      } catch {
-        if ($_.Exception.Message -match 'not found') {
-          Write-Log "App already removed or not found in Intune: $($app.Name)"
-          Update-Status "Already removed: $($app.Name)"
-        } else {
-          Update-Status ("Error removing {0}: {1}" -f $app.Name, $_.Exception.Message)
-          Write-Log "Error while removal: $($_.Exception.Message)"
-        }
-      }
-      $processedCount++
-      $script:progressBar.Value = [Math]::Min($processedCount, $script:progressBar.Maximum)
-    }
-    Update-Status 'Deleted all superseded Apps.'
-  } catch {
-    Write-Log "Error removing superseded apps: $($_.Exception.Message)"
-    Update-Status "Error: $($_.Exception.Message)"
-  } finally {
-    $script:isSupersededOperationActive = $false
-    $script:progressBar.Value = 0
-    $script:progressBar.Visible = $false
-    Update-UpdateActionState
-    Update-DiscoveryActionState
-    Update-SupersededActionState
-  }
-
-  Start-WinTunerSupersededSearch
+  Start-WinTunerSupersededRemoval -Apps $apps -Mode All
 })
-
 # Handler: Search superseded apps
 $supersededSearchButton.Add_Click({
   Start-WinTunerSupersededSearch
@@ -4305,41 +4961,18 @@ $deleteSelectedAppButton.Add_Click({
     Update-SupersededActionState
     return
   }
-
   $app = $script:supersededApps[$selectedIndex]
-  $result = [System.Windows.Forms.MessageBox]::Show(
+  $confirmation = [System.Windows.Forms.MessageBox]::Show(
     "Delete App '$($app.Name)'?",
     'Confirmation',
     [System.Windows.Forms.MessageBoxButtons]::YesNo,
     [System.Windows.Forms.MessageBoxIcon]::Question
   )
-  if ($result -ne [System.Windows.Forms.DialogResult]::Yes) {
+  if ($confirmation -ne [System.Windows.Forms.DialogResult]::Yes) {
     Update-Status 'Removal aborted.'
     return
   }
-
-  $script:isSupersededOperationActive = $true
-  Update-UpdateActionState
-  Update-DiscoveryActionState
-  Update-SupersededActionState
-  $removed = $false
-  try {
-    Remove-WtWin32App -GraphId $app.GraphId -ErrorAction Stop
-    Update-Status ("Deleted: {0}" -f $app.Name)
-    $removed = $true
-  } catch {
-    Update-Status ("Error while removal: {0}" -f $_.Exception.Message)
-    Write-Log "Error while removing superseded app '$($app.Name)': $($_.Exception.Message)"
-  } finally {
-    $script:isSupersededOperationActive = $false
-    Update-UpdateActionState
-    Update-DiscoveryActionState
-    Update-SupersededActionState
-  }
-
-  if ($removed) {
-    Start-WinTunerSupersededSearch
-  }
+  Start-WinTunerSupersededRemoval -Apps @($app) -Mode Selected
 })
 $logoutButton.Add_Click({
   try {
@@ -4466,429 +5099,24 @@ $script:cancelDiscoveryScan = $false
 
 $scanDiscoveredButton.Add_Click({
   if ($script:discoveryScanRunning) {
-    $script:cancelDiscoveryScan = $true
-    Update-DiscoveryActionState
-    Update-Status "Cancel requested - finishing current WinGet query..."
-    Write-Log "Discovery scan cancellation requested by user."
-    return
-  }
-
-  if (-not $script:isConnected) {
-    Update-Status "Please login first."
-    Update-DiscoveryActionState
-    return
-  }
-
-  $script:discoveryScanRunning = $true
-  $script:cancelDiscoveryScan = $false
-  Update-DiscoveryActionState
-
-  # Speichere die originalen Streams und schalte sie stumm, um Threading-Crashes zu vermeiden
-  $oldProgress = $ProgressPreference
-  $oldInfo = $InformationPreference
-  $ProgressPreference = 'SilentlyContinue'
-  $InformationPreference = 'SilentlyContinue'
-
-  try {
-    Clear-DiscoveryCandidateState
-    Update-DiscoveryActionState
-    
-    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-    $script:progressBar.Visible = $true
-    [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-
-# --- GRAPH-AUTH BLOCK (FIXED) ---
-    # Ensure Microsoft Graph session has the required account and scopes
-    Update-Status "Checking Microsoft Graph session..."
-    [System.Windows.Forms.Application]::DoEvents()
-
-    $null = Connect-WinTunerGraph -UserPrincipalName $script:currentUserUpn
-
-    # 1. Vorhandene Apps checken (EXTREM SCHNELL DURCH "Resolve" STATT "Try-Resolve")
-    Update-Status "Loading existing managed apps to filter them out..."
-    [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-    $existingApps = @(Get-WtWin32Apps -Superseded:$false -ErrorAction SilentlyContinue 2>$null 3>$null 4>$null 5>$null 6>$null)
-    $existingPackageIds = [System.Collections.Generic.List[object]]::new()
-    foreach ($eApp in $existingApps) {
-		[System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-        $id = Resolve-WtWingetId -AppOrResult $eApp 2>$null 3>$null 4>$null 5>$null 6>$null
-        if ($id) { $existingPackageIds.Add($id) }
-    }
-
-    # 2. Hole ALLE Discovered Apps aus Intune (inklusive Paginierung)
-    Update-Status "Fetching ALL detected apps from Intune API (this might take a moment)..."
-    [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-    
-    $detectedResult = Get-WinTunerDetectedApps -PageSize 500 -MaxPages 1000
-
-    if ($detectedResult.FromCache) {
-        Write-Log "Detected apps loaded from Graph cache: $(@($detectedResult.Apps).Count) apps."
-    } else {
-        Write-Log "Detected apps loaded from Microsoft Graph: $(@($detectedResult.Apps).Count) apps across $($detectedResult.PageCount) pages."
-    }
-    $detectedApps = $detectedResult.Apps
-
-    if ($detectedResult.LimitReached) {
-        Write-Log "Warning: Graph API pagination limit (100 pages) reached. Some apps may not be shown."
-    }
-
-    if (-not $detectedApps -or $detectedApps.Count -eq 0) {
-        Update-Status "No discovered apps found in Intune."
-        return
-    }
-
-    $filteredApps = @($detectedApps | Where-Object { 
-        $_.publisher -notmatch "(?i)Intel|HP|Dell|Lenovo|AMD|NVIDIA|Realtek|Synaptics|VMware" 
-    })
-
-    $total = $filteredApps.Count
-    $matchCount = 0              # unique PackageIDs shown in UI
-    $matchedRawCount = 0         # total matched detected apps (before dedupe)
-
-    # Prepare normalized list first (phase 1) so matching can run with cached query results (phase 2)
-    $normalizedApps = [System.Collections.Generic.List[object]]::new()
-    $skippedNonCandidateCount = 0
-    foreach ($app in $filteredApps) {
-        # 1. Entfernt restlos alles, was in Klammern steht (z.B. "(x64 de)", "(x86 en-US)")
-        $searchName = $app.displayName -replace '\s*\([^)]*\)', ''
-        # 2. Entfernt typische Versionsnummern, die aus Zahlen und Punkten bestehen
-        $searchName = $searchName -replace '\s+[\d\.]+', ''
-        $searchName = $searchName.Trim()
-        if ([string]::IsNullOrWhiteSpace($searchName)) { continue }
-        if (-not (Test-WingetSearchCandidate -DisplayName $searchName)) {
-            if ($script:skipLowValueWingetCandidates) {
-                $skippedNonCandidateCount++
-                continue
-            }
-        }
-        $normalizedApps.Add([pscustomobject]@{
-            App        = $app
-            SearchName = $searchName
-        })
-    }
-
-    # Cache Search-WtWinGetPackage results by normalized search term
-    # to reduce expensive/repetitive module calls in large environments
-    $searchResultCache = @{}
-    # Fast lookup for already created discovered entries by PackageID
-    $discoveredByPackageId = @{}
-
-    $uniqueSearchNameSet = [System.Collections.Generic.HashSet[string]]::new(
-        [System.StringComparer]::OrdinalIgnoreCase
-    )
-    $uniqueSearchNames = @(
-        foreach ($normalizedApp in $normalizedApps) {
-            $candidateSearchName = [string]$normalizedApp.SearchName
-
-            if (
-                -not [string]::IsNullOrWhiteSpace($candidateSearchName) -and
-                $uniqueSearchNameSet.Add($candidateSearchName)
-            ) {
-                $candidateSearchName
-            }
-        }
-    )
-    $queryTotal = $uniqueSearchNames.Count
-    $queryCurrent = 0
-    Update-Status "Prepared $($normalizedApps.Count) apps for matching ($queryTotal unique search terms, skipped: $skippedNonCandidateCount, skip-mode: $($script:skipLowValueWingetCandidates))."
-    Write-Log "Discovery prep -> Filtered apps: $total, Normalized apps: $($normalizedApps.Count), Unique search terms: $queryTotal, Skipped non-candidates: $skippedNonCandidateCount, Skip-mode: $($script:skipLowValueWingetCandidates)"
-
-    # Phase 1: fetch/search all unique terms using isolated worker processes
-    $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
-    $script:progressBar.MarqueeAnimationSpeed = 25
-
-    Update-Status "WinGet discovery: processing $queryTotal unique search terms in isolated workers..."
-    Write-Log "Discovery WinGet batch search starting -> Queries: $queryTotal, Batch size: 25, Cache TTL: 24h"
-    [System.Windows.Forms.Application]::DoEvents()
-
-    try {
-        $batchResult = Search-WinTunerDiscoveryPackagesBatchCached `
-            -SearchQueries $uniqueSearchNames `
-            -BatchSize 25 `
-            -QueryTimeoutSeconds 12 `
-            -CacheTtlHours 24 `
-            -OnWait {
-                [System.Windows.Forms.Application]::DoEvents()
-            } `
-            -ShouldCancel {
-                return [bool]$script:cancelDiscoveryScan
-            }
-
-        if ($batchResult.Canceled -or $script:cancelDiscoveryScan) {
-            Clear-DiscoveryCandidateState
-            Update-Status "Discovery scan canceled during WinGet search phase."
-            Write-Log "Discovery scan canceled during isolated WinGet worker phase; partial results discarded."
-            return
-        }
-
-        $queryCurrent = 0
-
-        foreach ($searchResult in @($batchResult.Results)) {
-            $queryCurrent++
-            $searchName = [string]$searchResult.Query
-
-            if ([string]::IsNullOrWhiteSpace($searchName)) {
-                continue
-            }
-
-            if ([bool]$searchResult.Success) {
-                $searchResultCache[$searchName] = @($searchResult.Results)
-            } else {
-                $searchResultCache[$searchName] = @()
-                Write-Log "Search failed for '$searchName': $($searchResult.Error)"
-            }
-        }
-
-        Write-Log "Discovery WinGet batch search complete -> Queries: $($batchResult.TotalQueries), Cache hits: $($batchResult.CacheHits), Worker queries: $($batchResult.WorkerQueries), Workers: $($batchResult.WorkerCount)"
-        Update-Status "WinGet searches complete: $($batchResult.TotalQueries) queries, $($batchResult.CacheHits) cache hits, $($batchResult.WorkerCount) workers."
-    }
-    catch {
-        Write-Log "Discovery WinGet batch search failed: $($_.Exception.Message)"
-        Update-Status "Discovery WinGet search failed: $($_.Exception.Message)"
-        throw
-    }
-    finally {
-        $script:progressBar.MarqueeAnimationSpeed = 0
-        $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-    }
-
-    # Phase 2: match normalized discovered apps against cached results
-    $processTotal = $normalizedApps.Count
-    $processCurrent = 0
-    $script:progressBar.Maximum = if ($processTotal -gt 0) { $processTotal } else { 1 }
-    $script:progressBar.Value = 0
-
-    foreach ($entry in $normalizedApps) {
-        [System.Windows.Forms.Application]::DoEvents()
-
-        if ($script:cancelDiscoveryScan) {
-            Clear-DiscoveryCandidateState
-            Update-Status "Discovery scan canceled during matching."
-            Write-Log "Discovery scan canceled during matching phase; partial results discarded."
-            return
-        }
-
-        $processCurrent++
-        $script:progressBar.Value = $processCurrent
-        if (($processCurrent -eq 1) -or ($processCurrent % 25 -eq 0) -or ($processCurrent -eq $processTotal)) {
-            Update-Status "Matching apps ($processCurrent/$processTotal): $($entry.App.displayName)..."
-            [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-        }
-
-        try {
-            $app = $entry.App
-            $searchName = $entry.SearchName
-            $wingetResults = if ($searchResultCache.ContainsKey($searchName)) { @($searchResultCache[$searchName]) } else { @() }
-
-            $bestMatch = $null
-            $highestScore = 0
-            foreach ($wgApp in $wingetResults) {
-                $score = Get-StringSimilarity -str1 $app.displayName -str2 $wgApp.Name
-                if ($score -gt $highestScore) {
-                    $highestScore = $score
-                    $bestMatch = $wgApp
-                }
-            }
-
-            if ($bestMatch -and $highestScore -ge 50) {
-                $matchedRawCount++
-                if ($existingPackageIds -contains $bestMatch.PackageID) { continue }
-
-                # Prüfen, ob diese Winget-App (PackageID) bereits vorhanden ist
-                $existingEntry = $null
-                if ($discoveredByPackageId.ContainsKey($bestMatch.PackageID)) {
-                    $existingEntry = $discoveredByPackageId[$bestMatch.PackageID]
-                }
-
-                if ($existingEntry) {
-                    # App existiert bereits in der Liste: Wir addieren die Geräteanzahl (DeviceCount)
-                    $existingEntry.DeviceCount += $app.deviceCount
-                    $existingEntry.MatchScore = [Math]::Max([double]$existingEntry.MatchScore, [double]$highestScore)
-                    # Den Anzeigetext mit der neuen, kombinierten Anzahl aktualisieren
-                    $existingEntry.DisplayText = "[$($existingEntry.DeviceCount) PCs] $($existingEntry.DisplayName) ($($existingEntry.Publisher))  -->  Winget: $($existingEntry.WingetApp.Name) [$($existingEntry.WingetApp.PackageID)] | Match: $([Math]::Round($existingEntry.MatchScore))%"
-                } else {
-                    # App ist neu: Wir nutzen den sauberen Winget-Namen (ohne Versionsnummern aus Intune)
-                    $cleanName = $bestMatch.Name
-                    $itemObj = [pscustomobject]@{
-                        DisplayName = $cleanName
-                        Publisher   = $app.publisher
-                        DeviceCount = $app.deviceCount
-                        WingetApp   = $bestMatch
-                        MatchScore  = [double]$highestScore
-                        Checked     = $false
-                        DisplayText = "[$($app.deviceCount) PCs] $cleanName ($($app.publisher))  -->  Winget: $($bestMatch.Name) [$($bestMatch.PackageID)] | Match: $([Math]::Round($highestScore))%"
-                    }
-                    [void]$script:discoveredRaw.Add($itemObj)
-                    $discoveredByPackageId[$bestMatch.PackageID] = $itemObj
-                    $matchCount++
-                }
-            }
-        } catch {
-            Write-Log "Failed to process '$($entry.App.displayName)': $($_.Exception.Message)"
-        }
-    }
-    
-# --- NEU: Befülle das Publisher-Dropdown mit eindeutigen Werten ---
-    $uniquePublishers = $script:discoveredRaw | Select-Object -ExpandProperty Publisher -Unique | Sort-Object
-    
-    $discoveredPublisherBox.BeginUpdate()
-    $discoveredPublisherBox.Items.Clear()
-    [void]$discoveredPublisherBox.Items.Add("<All Publishers>")
-    foreach ($pub in $uniquePublishers) {
-        if (-not [string]::IsNullOrWhiteSpace($pub)) {
-            [void]$discoveredPublisherBox.Items.Add($pub)
-        }
-    }
-    $discoveredPublisherBox.SelectedIndex = 0
-    $discoveredPublisherBox.EndUpdate()
-
-    # Befüllt die Liste initial mit Sortierung
-    Update-DiscoveredListUI
-
-    $lastDiscoveryTime = Get-Date
-    $lastDiscoveryLabel.Text = "Last discovery: $($lastDiscoveryTime.ToString('HH:mm:ss'))"
-
-    $graphSource = if ([bool]$detectedResult.FromCache) { "Cached" } else { "Fresh" }
-    $wingetCacheSummary = "$($batchResult.CacheHits)/$($batchResult.TotalQueries) cached"
-
-    if ($matchCount -gt 0) {
-        Update-Status "Scanned: $($detectedApps.Count) | Filtered: $total | Matched apps: $matchedRawCount | Unique packages: $matchCount | Graph: $graphSource | WinGet: $wingetCacheSummary"
-        Write-Log "Discovery summary -> Scanned: $($detectedApps.Count), Filtered: $total, Matched apps: $matchedRawCount, Unique packages: $matchCount, Graph: $graphSource, WinGet cache: $wingetCacheSummary"
-    } else {
-        Update-Status "No Winget matches found (or all are already managed). | Graph: $graphSource | WinGet: $wingetCacheSummary"
-        Write-Log "Discovery summary -> No Winget matches, Graph: $graphSource, WinGet cache: $wingetCacheSummary"
-    }
-
-  } catch {
-    Clear-DiscoveryCandidateState
-    Update-Status "Error fetching discovered apps: $($_.Exception.Message)"
-    Write-Log "Scan Discovered Error: $($_.Exception.Message); partial results discarded."
-  } finally {
-    try {
-        Save-WinTunerDiscoveryCache
-    } catch {
-        Write-Log "Could not save Discovery WinGet cache: $($_.Exception.Message)"
-    }
-
-    $ProgressPreference = $oldProgress
-    $InformationPreference = $oldInfo
-    $script:discoveryScanRunning = $false
-    $script:cancelDiscoveryScan = $false
-    Update-DiscoveryActionState
-    $script:progressBar.Maximum = 100
-    $script:progressBar.Value = 0
-    $script:progressBar.Visible = $false
+    Request-WinTunerDiscoveryScanCancellation
+  } else {
+    Start-WinTunerDiscoveryScan
   }
 })
 
 $deployDiscoveredButton.Add_Click({
-    $checkedItems = @($script:discoveredRaw | Where-Object { $_.Checked })
-    if ($checkedItems.Count -eq 0) { 
-        Update-Status "No apps checked."
-        return 
-    }
-
-    $rootFolder = $script:settings.DefaultPackagePath
-    if ([string]::IsNullOrWhiteSpace([string]$rootFolder)) { $rootFolder = 'C:\Temp' }
-    $rootFolder = Resolve-WinTunerPackageRootForOperation -Path $rootFolder -CreateIfMissing
-    if ([string]::IsNullOrWhiteSpace($rootFolder)) { return }
-    $oldProgress = $ProgressPreference
-    $oldInfo = $InformationPreference
-    $ProgressPreference = 'SilentlyContinue'
-    $InformationPreference = 'SilentlyContinue'
-
-    $script:isDiscoveryDeploymentActive = $true
-    Update-DiscoveryActionState
-
-    try {
-        $script:progressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
-        $script:progressBar.Maximum = $checkedItems.Count
-        $script:progressBar.Value = 0
-        $script:progressBar.Visible = $true
-
-        $successCount = 0
-        $failedCount = 0
-        $i = 0
-        $successfulItems = [System.Collections.Generic.List[object]]::new()
-
-        foreach ($item in $checkedItems) {
-            $i++
-            $script:progressBar.Value = $i
-            $wingetApp = $item.WingetApp
-            
-            Update-Status "Packaging & Deploying ($i/$($checkedItems.Count)): $($wingetApp.Name)..."
-            [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
-
-            try {
-                $packageId = $wingetApp.PackageID
-                $version = $wingetApp.Version
-                
-                Write-Log "Creating package for discovered app: $packageId v$version"
-                $pkgRes = New-WingetPackageWithFallback `
-                    -PackageId $packageId `
-                    -PackageFolder $rootFolder `
-                    -LatestVersion $version `
-                    -ErrorAction Stop
-                
-                if (-not $pkgRes -or -not $pkgRes.Succeeded) {
-                    $packageError = if ($pkgRes -and $pkgRes.ErrorMessage) { $pkgRes.ErrorMessage } else { 'Unknown package creation error.' }
-                    throw "Package creation failed: $packageError"
-                }
-
-                $effVersion = if ($pkgRes.EffectiveVersion) { $pkgRes.EffectiveVersion } else { $version }
-                $artifactValidation = Test-WinTunerPackageArtifact `
-                    -RootPackageFolder $rootFolder `
-                    -PackageId $packageId `
-                    -Version ([string]$effVersion)
-
-                if (-not $artifactValidation.IsValid) {
-                    throw "Package validation failed ($($artifactValidation.ReasonCode)): $($artifactValidation.Reason)"
-                }
-
-                Write-Log "Validated discovered-app package before upload: $packageId v$effVersion -> $($artifactValidation.IntuneWinPath)"
-                Write-Log "Uploading new app to tenant: $packageId v$effVersion"
-                Deploy-WtWin32App `
-                    -PackageId $packageId `
-                    -Version $effVersion `
-                    -RootPackageFolder $rootFolder `
-                    -ErrorAction Stop
-                
-                $successCount++
-                [void]$successfulItems.Add($item)
-                Write-Log "Successfully deployed new app: $packageId"
-            } catch {
-                $failedCount++
-                Write-Log "Failed to deploy $($wingetApp.Name): $($_.Exception.Message)"
-            }
-        }
-
-        foreach ($successfulItem in $successfulItems) {
-            [void]$script:discoveredRaw.Remove($successfulItem)
-        }
-        Update-DiscoveredListUI
-
-        Update-Status "Deployment complete: $successCount successful, $failedCount failed."
-        [System.Windows.Forms.MessageBox]::Show(
-            "Deployment finished!`n`nSuccessful: $successCount`nFailed: $failedCount`n`nNewly deployed apps will now appear in your Intune tenant.",
-            "Deploy Complete",
-            [System.Windows.Forms.MessageBoxButtons]::OK,
-            [System.Windows.Forms.MessageBoxIcon]::Information
-        )
-
-    } catch {
-        Update-Status "Deployment error: $($_.Exception.Message)"
-        Write-Log "Deploy Discovered Apps Error: $($_.Exception.Message)"
-    } finally {
-        $ProgressPreference = $oldProgress
-        $InformationPreference = $oldInfo
-        $script:isDiscoveryDeploymentActive = $false
-        Update-DiscoveryActionState
-        $script:progressBar.Maximum = 100
-        $script:progressBar.Value = 0
-        $script:progressBar.Visible = $false
-    }
+  $checkedItems = @($script:discoveredRaw | Where-Object { $_.Checked })
+  if ($checkedItems.Count -eq 0) {
+    Update-Status 'No apps checked.'
+    return
+  }
+  $rootFolder = [string]$script:settings.DefaultPackagePath
+  if ([string]::IsNullOrWhiteSpace($rootFolder)) { $rootFolder = 'C:\Temp' }
+  $rootFolder = Resolve-WinTunerPackageRootForOperation -Path $rootFolder -CreateIfMissing
+  if ([string]::IsNullOrWhiteSpace($rootFolder)) { return }
+  Start-WinTunerDiscoveryDeployment -Apps $checkedItems -RootPackageFolder $rootFolder
 })
-
 $exportDiscoveredCsvButton.Add_Click({
     if (-not $script:discoveredRaw -or $script:discoveredRaw.Count -eq 0) {
         Update-Status "No discovered Winget matches to export."
@@ -4960,7 +5188,6 @@ $form.Add_FormClosing({
             if ($script:statusLabel) { 
                 Update-Status "Closing... signing out from tenant"
                 # Zwingt die UI, sich noch einmal schnell zu aktualisieren, bevor sie blockiert wird
-                [System.Windows.Forms.Application]::DoEvents()  # TODO: refactor to use Invoke-AsyncOperation
             }
         } catch {}
 
@@ -5099,6 +5326,46 @@ try {
         try { $activeSupersededSearch.PowerShell.Dispose() } catch {}
         try { $activeSupersededSearch.Timer.Dispose() } catch {}
         $script:supersededSearchContext = $null
+    }
+
+    $activeSupersededRemoval = $script:supersededRemovalContext
+    if ($activeSupersededRemoval) {
+        try { $activeSupersededRemoval.Timer.Stop() } catch {}
+        try { $activeSupersededRemoval.PowerShell.Stop() } catch {}
+        try { $activeSupersededRemoval.PowerShell.Dispose() } catch {}
+        try { $activeSupersededRemoval.Timer.Dispose() } catch {}
+        Remove-Item -LiteralPath $activeSupersededRemoval.ProgressPath -Force -ErrorAction SilentlyContinue
+        $script:supersededRemovalContext = $null
+    }
+
+    $activeDiscoveryScan = $script:discoveryScanContext
+    if ($activeDiscoveryScan) {
+        try { [System.IO.File]::WriteAllText($activeDiscoveryScan.CancelPath, (Get-Date).ToString('O'), [System.Text.UTF8Encoding]::new($false)) } catch {}
+        try { $activeDiscoveryScan.Timer.Stop() } catch {}
+        try { $activeDiscoveryScan.PowerShell.Stop() } catch {}
+        try { $activeDiscoveryScan.PowerShell.Dispose() } catch {}
+        try { $activeDiscoveryScan.Timer.Dispose() } catch {}
+        Remove-Item -LiteralPath $activeDiscoveryScan.ProgressPath, $activeDiscoveryScan.CancelPath -Force -ErrorAction SilentlyContinue
+        $script:discoveryScanContext = $null
+    }
+
+    $activeDiscoveryDeployment = $script:discoveryDeploymentContext
+    if ($activeDiscoveryDeployment) {
+        try { $activeDiscoveryDeployment.Timer.Stop() } catch {}
+        try { $activeDiscoveryDeployment.PowerShell.Stop() } catch {}
+        try { $activeDiscoveryDeployment.PowerShell.Dispose() } catch {}
+        try { $activeDiscoveryDeployment.Timer.Dispose() } catch {}
+        Remove-Item -LiteralPath $activeDiscoveryDeployment.ProgressPath -Force -ErrorAction SilentlyContinue
+        $script:discoveryDeploymentContext = $null
+    }
+
+    $activeLoginVerification = $script:loginVerificationContext
+    if ($activeLoginVerification) {
+        try { $activeLoginVerification.Timer.Stop() } catch {}
+        try { $activeLoginVerification.PowerShell.Stop() } catch {}
+        try { $activeLoginVerification.PowerShell.Dispose() } catch {}
+        try { $activeLoginVerification.Timer.Dispose() } catch {}
+        $script:loginVerificationContext = $null
     }
 
     $activePackageSearch = $script:packageSearchContext

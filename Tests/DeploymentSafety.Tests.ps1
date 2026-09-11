@@ -14,35 +14,33 @@ BeforeAll {
 }
 
 Describe 'Deployment artifact safety' {
-    It 'validates a package artifact before every direct GUI deployment call' {
-        $deployCommands = @($script:guiAst.FindAll({
+    It 'routes destructive tenant work through isolated safety modules without GUI-thread calls' {
+        $guiText = $script:guiAst.Extent.Text
+        $directDeployCommands = @($script:guiAst.FindAll({
             param($node)
             $node -is [System.Management.Automation.Language.CommandAst] -and
             $node.GetCommandName() -eq 'Deploy-WtWin32App'
         }, $true))
+        $directRemovalCommands = @($script:guiAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst] -and
+            $node.GetCommandName() -eq 'Remove-WtWin32App'
+        }, $true))
 
-        $deployCommands.Count | Should -Be 1
+        $directDeployCommands | Should -HaveCount 0
+        $directRemovalCommands | Should -HaveCount 0
+        $guiText | Should -Match 'Invoke-WinTunerDiscoveryDeployment'
+        $guiText | Should -Match 'Invoke-WinTunerSupersededRemoval'
+        $guiText | Should -Match 'Invoke-WinTunerDiscoveryScan'
+        $guiText | Should -Match 'Invoke-WinTunerConnectionVerification'
+        $guiText | Should -Not -Match '\[System\.Windows\.Forms\.Application\]::DoEvents'
 
-        foreach ($deployCommand in $deployCommands) {
-            $scope = $deployCommand.Parent
-            while ($scope -and $scope -isnot [System.Management.Automation.Language.ScriptBlockAst]) {
-                $scope = $scope.Parent
-            }
-
-            $validationCommands = @($scope.FindAll({
-                param($node)
-                $node -is [System.Management.Automation.Language.CommandAst] -and
-                $node.GetCommandName() -eq 'Test-WinTunerPackageArtifact'
-            }, $true) | Where-Object {
-                $_.Extent.StartOffset -lt $deployCommand.Extent.StartOffset
-            })
-
-            $validationCommands.Count | Should -BeGreaterThan 0 -Because (
-                "deployment at line $($deployCommand.Extent.StartLineNumber) must validate its exact package first"
-            )
-        }
+        $deploymentModule = Get-Content (Join-Path $PSScriptRoot '..\Modules\WinTuner.DiscoveryDeployment.psm1') -Raw
+        $validationOffset = $deploymentModule.IndexOf('Test-WinTunerPackageArtifact', [StringComparison]::Ordinal)
+        $deploymentOffset = $deploymentModule.IndexOf('Deploy-WtWin32App', [StringComparison]::Ordinal)
+        $validationOffset | Should -BeGreaterThan -1
+        $deploymentOffset | Should -BeGreaterThan $validationOffset
     }
-
     It 'routes both update actions through the isolated update module' {
         $updateFunction = @($script:guiAst.FindAll({
             param($node)
