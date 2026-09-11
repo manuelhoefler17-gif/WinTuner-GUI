@@ -4200,6 +4200,38 @@ $checkUpdateButton.Width = 180
 $checkUpdateButton.Height = 35
 $tabSettings.Controls.Add($checkUpdateButton)
 
+$graphPermissionsButton = New-Object System.Windows.Forms.Button
+$graphPermissionsButton.Text = "Graph Permissions..."
+$graphPermissionsButton.Location = New-Object System.Drawing.Point(220, 330)
+$graphPermissionsButton.Width = 180
+$graphPermissionsButton.Height = 35
+$tabSettings.Controls.Add($graphPermissionsButton)
+
+$graphPermissionsButton.Add_Click({
+  $permissionSummary = @"
+WinTuner GUI requests these delegated Microsoft Graph permissions:
+
+DeviceManagementApps.ReadWrite.All
+DeviceManagementConfiguration.ReadWrite.All
+DeviceManagementManagedDevices.Read.All
+Directory.Read.All
+
+A tenant administrator must grant consent for all four permissions.
+The signed-in account also needs an appropriate Intune role.
+
+DeviceManagementConfiguration.ReadWrite.All is requested by the
+WinTuner 1.3.2 default login. The other three permissions are
+requested by the WinTuner GUI Microsoft Graph connection.
+"@
+
+  [void][System.Windows.Forms.MessageBox]::Show(
+    $permissionSummary.Trim(),
+    "Required Microsoft Graph Permissions",
+    [System.Windows.Forms.MessageBoxButtons]::OK,
+    [System.Windows.Forms.MessageBoxIcon]::Information
+  )
+})
+
 $checkUpdateButton.Add_Click({
 
   $checkUpdateButton.Enabled = $false
@@ -5316,6 +5348,7 @@ if ($rememberMeCheckbox)       { $toolTip.SetToolTip($rememberMeCheckbox,       
 if ($saveSettingsButton)       { $toolTip.SetToolTip($saveSettingsButton,       "Save all settings to disk") }
 if ($clearCacheButton)         { $toolTip.SetToolTip($clearCacheButton,         "Clear WinGet version cache, Discovery search cache, and Graph detected-apps cache") }
 if ($checkUpdateButton)        { $toolTip.SetToolTip($checkUpdateButton,        "Check GitHub for a newer version of WinTuner GUI") }
+if ($graphPermissionsButton)  { $toolTip.SetToolTip($graphPermissionsButton,  "Show the delegated Microsoft Graph permissions required by WinTuner GUI") }
 
 # Run the form mit finalem Sicherheitsnetz
 try {

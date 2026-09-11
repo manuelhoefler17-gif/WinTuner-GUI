@@ -169,6 +169,8 @@ WinTuner GUI signs in interactively with delegated Microsoft Graph permissions. 
 
 These are **delegated permissions**, not application permissions. A tenant administrator must grant consent for all four permissions. The signed-in account also needs an appropriate Intune role for the operations it performs; Graph consent alone does not grant Intune administrative access.
 
+The same permission summary is available before sign-in from **Settings > Graph Permissions...**.
+
 `DeviceManagementConfiguration.ReadWrite.All` is included because WinTuner 1.3.2 requests it by default even though WinTuner GUI does not add that scope itself. The other three permissions are explicitly requested by the GUI's Microsoft Graph connection. Review the [Microsoft Graph permissions reference](https://learn.microsoft.com/en-us/graph/permissions-reference) and [Microsoft Intune Graph access setup](https://learn.microsoft.com/en-us/intune/developer/configure-graph-api-access) before approving access in a restricted tenant.
 
 ---

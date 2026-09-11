@@ -435,7 +435,7 @@ Automated validation:
 
 ## Current 0.10.18 Work
 
-Implemented and manually validated on Test:
+Merged through Pull Request #128 and manually validated:
 
 - added a Discovery checkbox that bypasses the detected-app cache for a deliberately fresh Graph scan
 - passed the force-refresh choice explicitly into the isolated Discovery runspace
@@ -447,12 +447,17 @@ Implemented and manually validated on Test:
 - documented the complete delegated Microsoft Graph permission set requested during login, including its source, purpose, admin-consent requirement, and separate Intune-role requirement
 - manually confirmed the forced-fresh Discovery scan returns current tenant results
 
+Additional work implemented and manually validated on Test:
+
+- added a Settings dialog that exposes all required delegated Microsoft Graph permissions before sign-in
+- manually confirmed the dialog opens before sign-in and displays correctly
+
 Automated validation:
 
 - PowerShell syntax validation passed for all 37 repository scripts and modules
-- all 105 Pester tests passed, including focused Discovery, E2E safety, and permission-documentation tests
+- all 107 Pester tests passed, including focused Discovery, E2E safety, and permission-documentation tests
 
-The 0.10.18 implementation is ready for the Test -> Pull Request -> main workflow. No tag or release has been created.
+Pull Request #128 was merged and main/Test were synchronized at bdb49da. The manually validated Settings permission dialog is ready for the Test -> Pull Request -> main workflow. No tag or release has been created.
 
 ---
 ## Testing Expectations
