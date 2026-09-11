@@ -433,7 +433,7 @@ Automated validation:
 
 ---
 
-## Current 0.10.18 Work
+## 0.10.18 Release Candidate Status
 
 Merged through Pull Request #128 and manually validated:
 
@@ -457,7 +457,20 @@ Automated validation:
 - PowerShell syntax validation passed for all 37 repository scripts and modules
 - all 107 Pester tests passed, including focused Discovery, E2E safety, and permission-documentation tests
 
-Pull Requests #128 and #129 were merged and main/Test were synchronized at bb523a3. No tag or release has been created.
+Pull Requests #128, #129, and #130 were merged. The implementation, permission dialog, and validation status are present on main and Test.
+
+Release preparation completed:
+
+- finalized the 0.10.18 changelog
+- verified the application version is 0.10.18
+- verified README and project status still identify v0.10.17 as the latest published release
+- calculated the release-candidate WinTuner_GUI.ps1 SHA256: E1B0ADD03A4D242625D9AA3F1DB21B0578F668D8111698087BC26CB5E61BD1C1
+
+Remaining release-only actions:
+
+- create and push the annotated v0.10.18 tag after separate authorization
+- publish the GitHub release and checksum asset after separate authorization
+- verify standalone dependency bootstrap and independently validate the published assets from the tag
 
 ---
 ## Testing Expectations
