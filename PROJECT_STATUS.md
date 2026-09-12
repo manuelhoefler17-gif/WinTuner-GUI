@@ -512,9 +512,9 @@ Release completed:
 
 ---
 
-## 0.10.20 Development Status
+## 0.10.20 Release Status
 
-Current implementation scope:
+Completed and merged through Pull Request #136:
 
 - app-only Microsoft Entra authentication with a customer-owned App Registration
 - client-secret login with a masked field, optional Windows DPAPI CurrentUser-protected reuse, and no plaintext secret persistence or logging
@@ -524,12 +524,15 @@ Current implementation scope:
 - reuse of a validated app-only Graph process context by the login verification and Discovery runspaces
 - mode-specific permission guidance in Authentication settings plus clearly separated User Login and customer-owned Entra Application requirements in the general GUI summary and README
 - interactive user sign-in retained as the default
+- automated validation passed for all 43 PowerShell files and 145 Pester tests
+- manual GUI validation confirmed authentication-mode persistence, secure secret storage, mode-specific permission guidance and dialog layout
+- read-only app-only tenant validation confirmed direct Microsoft Graph mobile-app access and Get-WtWin32Apps retrieval
+- main and Test were synchronized at merge commit e36bfd4
 
 Release state:
 
-- implementation is complete on Test and automated validation passed for all 43 PowerShell files and 145 Pester tests
-- final manual GUI validation is required before commit, Pull Request and merge
-- no v0.10.20 tag or release has been authorized
+- changelog and version references are prepared for v0.10.20
+- no v0.10.20 tag or GitHub release has been authorized
 
 ---
 ## Testing Expectations

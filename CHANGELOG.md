@@ -2,7 +2,7 @@
 
 All notable changes to WinTuner GUI are documented here.
 
-## [Unreleased]
+## [0.10.20] – 2026-09-12
 
 ### Added
 - Added app-only Microsoft Entra authentication through a customer-owned App Registration using either a client secret or a certificate.
@@ -14,6 +14,7 @@ All notable changes to WinTuner GUI are documented here.
 - Client secrets can optionally be saved as Windows DPAPI CurrentUser-protected data for automatic reuse by the same Windows user on the same computer. Without secure storage they are requested in a masked one-login dialog. Plaintext secrets are never persisted or logged and are cleared from temporary connection state after each attempt.
 - The authentication dialog now shows mode-specific permission requirements, while the general in-app summary and README clearly separate interactive User Login permissions from the two Application permissions required on a customer-owned Entra App Registration.
 - App-only Intune 403 responses now show the missing application permission, admin-consent and tenant-license checks instead of raw service JSON.
+
 ## [0.10.19] – 2026-09-12
 
 ### Added
