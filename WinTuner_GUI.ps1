@@ -55,11 +55,12 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.19"
+$script:appVersion  = "0.10.20"
 
 # Bootstrap release dependencies and keep them synchronized with the GUI release.
 $requiredReleaseFiles = @(
   'Modules/WinTuner.AppUpdate.psm1',
+  'Modules/WinTuner.Authentication.psm1',
   'Modules/WinTuner.Connection.psm1',
   'Modules/WinTuner.Core.psm1',
   'Modules/WinTuner.DiscoveryDeployment.psm1',
@@ -219,6 +220,10 @@ if ($releaseFilesToDownload.Count -gt 0) {
 # Load WinTuner core helpers
 $coreModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Core.psm1'
 Import-Module $coreModulePath -Force
+
+# Load authentication configuration helpers
+$authenticationModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Authentication.psm1'
+Import-Module $authenticationModulePath -Force
 # Load WinTuner WinGet helpers
 $wingetModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Winget.psm1'
 Import-Module $wingetModulePath -Force
@@ -2234,7 +2239,7 @@ function Start-WinTunerDiscoveryScan {
   Update-UpdateActionState
 
   $workerScript = @'
-param($RepositoryRoot, $ProgressPath, $CancelPath, $UserPrincipalName, $SkipLowValueCandidates, $ForceGraphRefresh)
+param($RepositoryRoot, $ProgressPath, $CancelPath, $AuthenticationMode, $UserPrincipalName, $GraphTenantId, $ClientId, $SkipLowValueCandidates, $ForceGraphRefresh)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $InformationPreference = 'SilentlyContinue'
@@ -2255,7 +2260,11 @@ function Write-DiscoveryScanProgress {
 
 try {
   $result = Invoke-WinTunerDiscoveryScan -ConnectGraph {
-    Connect-WinTunerGraph -UserPrincipalName $UserPrincipalName
+    if ($AuthenticationMode -eq 'Interactive') {
+      Connect-WinTunerGraph -AuthenticationMode Interactive -UserPrincipalName $UserPrincipalName
+    } else {
+      Confirm-WinTunerGraphContext -AuthenticationMode $AuthenticationMode -TenantId $GraphTenantId -ClientId $ClientId
+    }
   } -GetExistingApps {
     @(Get-WtWin32Apps -Superseded:$false -ErrorAction Stop)
   } -ResolvePackageId {
@@ -2287,7 +2296,7 @@ $result | ConvertTo-Json -Depth 8 -Compress
 '@
 
   $powerShell = [System.Management.Automation.PowerShell]::Create()
-  $null = $powerShell.AddScript($workerScript).AddArgument($PSScriptRoot).AddArgument($progressPath).AddArgument($cancelPath).AddArgument($script:currentUserUpn).AddArgument([bool]$script:skipLowValueWingetCandidates).AddArgument($forceGraphRefresh)
+  $null = $powerShell.AddScript($workerScript).AddArgument($PSScriptRoot).AddArgument($progressPath).AddArgument($cancelPath).AddArgument($script:currentAuthenticationMode).AddArgument($script:currentUserUpn).AddArgument($script:currentGraphTenantId).AddArgument($script:currentClientId).AddArgument([bool]$script:skipLowValueWingetCandidates).AddArgument($forceGraphRefresh)
   $timer = New-Object System.Windows.Forms.Timer
   $timer.Interval = 150
   $context = [pscustomobject]@{ PowerShell = $powerShell; AsyncResult = $null; Timer = $timer; ProgressPath = $progressPath; CancelPath = $cancelPath; LastProgress = $null }
@@ -2512,8 +2521,368 @@ $result | ConvertTo-Json -Depth 7 -Compress
   }
 }
 
+function Get-WinTunerConfiguredAuthentication {
+  $mode = if ($script:settings -and [string]$script:settings.AuthenticationMode -in @('Interactive', 'ClientSecret', 'Certificate')) {
+    [string]$script:settings.AuthenticationMode
+  } else {
+    'Interactive'
+  }
+
+  return Test-WinTunerAuthenticationConfiguration -Mode $mode -UserPrincipalName ([string]$usernameBox.Text) -TenantId ([string]$script:settings.EntraTenantId) -ClientId ([string]$script:settings.EntraClientId) -CertificateThumbprint ([string]$script:settings.EntraCertificateThumbprint)
+}
+
+function Update-WinTunerLoginButtonState {
+  if (-not $loginButton) { return }
+  $validation = Get-WinTunerConfiguredAuthentication
+  $loginButton.Enabled = (
+    -not [bool]$script:isConnected -and
+    -not [bool]$script:isLoginOperationActive -and
+    [bool]$validation.IsValid
+  )
+}
+
+function Update-WinTunerAuthenticationUI {
+  if (-not $script:settings) { return }
+  $validation = Get-WinTunerConfiguredAuthentication
+  $isInteractive = ($validation.Mode -eq 'Interactive')
+  $showLoginControls = -not [bool]$script:isConnected
+
+  if ($usernameLabel) {
+    $usernameLabel.Visible = ($showLoginControls -and $isInteractive)
+    $usernameLabel.Text = 'Username:'
+  }
+  if ($usernameBox) {
+    $usernameBox.Visible = ($showLoginControls -and $isInteractive)
+    $usernameBox.Enabled = (-not [bool]$script:isLoginOperationActive)
+  }
+  if ($clearHistoryButton) {
+    $clearHistoryButton.Visible = ($showLoginControls -and $isInteractive)
+    $clearHistoryButton.Enabled = (-not [bool]$script:isLoginOperationActive)
+  }
+  if ($rememberCheckBox) {
+    $rememberCheckBox.Visible = ($showLoginControls -and $isInteractive)
+  }
+  if ($authSummaryLabel) {
+    $authSummaryLabel.Visible = ($showLoginControls -and -not $isInteractive)
+    if (-not $isInteractive) {
+      $modeText = if ($validation.Mode -eq 'ClientSecret') { 'Client secret' } else { 'Certificate' }
+      $authSummaryLabel.Text = "$modeText | Tenant: $($validation.TenantId) | Client: $($validation.ClientId)"
+    } else {
+      $authSummaryLabel.Text = ''
+    }
+  }
+  if ($usernameError) {
+    $usernameError.Visible = $showLoginControls
+    $usernameError.Text = if ($validation.IsValid) { '' } else { $validation.Reason }
+  }
+  if ($authenticationSettingsButton) {
+    $authenticationSettingsButton.Enabled = (-not [bool]$script:isConnected -and -not [bool]$script:isLoginOperationActive)
+  }
+
+  Update-WinTunerLoginButtonState
+}
+
+function Show-WinTunerClientSecretPrompt {
+  $dialog = New-Object System.Windows.Forms.Form
+  $dialog.Text = 'Client Secret'
+  $dialog.Size = New-Object System.Drawing.Size(520, 190)
+  $dialog.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterParent
+  $dialog.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+  $dialog.MaximizeBox = $false
+  $dialog.MinimizeBox = $false
+  $dialog.ShowInTaskbar = $false
+
+  $label = New-Object System.Windows.Forms.Label
+  $label.Text = 'Enter the client secret. It is used for this login only and is never saved.'
+  $label.Location = New-Object System.Drawing.Point(15, 15)
+  $label.Size = New-Object System.Drawing.Size(475, 35)
+  $dialog.Controls.Add($label)
+
+  $secretBox = New-Object System.Windows.Forms.TextBox
+  $secretBox.Location = New-Object System.Drawing.Point(15, 55)
+  $secretBox.Width = 475
+  $secretBox.UseSystemPasswordChar = $true
+  $dialog.Controls.Add($secretBox)
+
+  $okButton = New-Object System.Windows.Forms.Button
+  $okButton.Text = 'Login'
+  $okButton.Location = New-Object System.Drawing.Point(315, 100)
+  $okButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
+  $dialog.Controls.Add($okButton)
+
+  $cancelButton = New-Object System.Windows.Forms.Button
+  $cancelButton.Text = 'Cancel'
+  $cancelButton.Location = New-Object System.Drawing.Point(405, 100)
+  $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+  $dialog.Controls.Add($cancelButton)
+
+  $dialog.AcceptButton = $okButton
+  $dialog.CancelButton = $cancelButton
+  $secretBox.Select()
+
+  try {
+    if ($dialog.ShowDialog($form) -ne [System.Windows.Forms.DialogResult]::OK) {
+      return $null
+    }
+    return [string]$secretBox.Text
+  } finally {
+    $secretBox.Clear()
+    $dialog.Dispose()
+  }
+}
+
+function Show-WinTunerAuthenticationSettings {
+  if ($script:isConnected -or $script:isLoginOperationActive) {
+    Update-Status 'Authentication settings can only be changed while disconnected.'
+    return
+  }
+
+  $dialog = New-Object System.Windows.Forms.Form
+  $dialog.Text = 'Authentication Options'
+  $dialog.Size = New-Object System.Drawing.Size(620, 550)
+  $dialog.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterParent
+  $dialog.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+  $dialog.MaximizeBox = $false
+  $dialog.MinimizeBox = $false
+  $dialog.ShowInTaskbar = $false
+
+  $modeLabel = New-Object System.Windows.Forms.Label
+  $modeLabel.Text = 'Authentication mode:'
+  $modeLabel.Location = New-Object System.Drawing.Point(20, 25)
+  $modeLabel.AutoSize = $true
+  $dialog.Controls.Add($modeLabel)
+
+  $modeBox = New-Object System.Windows.Forms.ComboBox
+  $modeBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+  $modeBox.Location = New-Object System.Drawing.Point(190, 22)
+  $modeBox.Width = 370
+  [void]$modeBox.Items.Add('Interactive user')
+  [void]$modeBox.Items.Add('Client secret')
+  [void]$modeBox.Items.Add('Certificate')
+  $modeBox.SelectedIndex = switch ([string]$script:settings.AuthenticationMode) {
+    'ClientSecret' { 1 }
+    'Certificate' { 2 }
+    default { 0 }
+  }
+  $dialog.Controls.Add($modeBox)
+
+  $tenantLabel = New-Object System.Windows.Forms.Label
+  $tenantLabel.Text = 'Tenant ID or domain:'
+  $tenantLabel.Location = New-Object System.Drawing.Point(20, 75)
+  $tenantLabel.AutoSize = $true
+  $dialog.Controls.Add($tenantLabel)
+
+  $tenantBox = New-Object System.Windows.Forms.TextBox
+  $tenantBox.Location = New-Object System.Drawing.Point(190, 72)
+  $tenantBox.Width = 370
+  $tenantBox.Text = [string]$script:settings.EntraTenantId
+  $dialog.Controls.Add($tenantBox)
+
+  $clientLabel = New-Object System.Windows.Forms.Label
+  $clientLabel.Text = 'Application (client) ID:'
+  $clientLabel.Location = New-Object System.Drawing.Point(20, 115)
+  $clientLabel.AutoSize = $true
+  $dialog.Controls.Add($clientLabel)
+
+  $clientBox = New-Object System.Windows.Forms.TextBox
+  $clientBox.Location = New-Object System.Drawing.Point(190, 112)
+  $clientBox.Width = 370
+  $clientBox.Text = [string]$script:settings.EntraClientId
+  $dialog.Controls.Add($clientBox)
+
+  $secretLabel = New-Object System.Windows.Forms.Label
+  $secretLabel.Text = 'Client secret:'
+  $secretLabel.Location = New-Object System.Drawing.Point(20, 155)
+  $secretLabel.AutoSize = $true
+  $dialog.Controls.Add($secretLabel)
+
+  $secretBox = New-Object System.Windows.Forms.TextBox
+  $secretBox.Location = New-Object System.Drawing.Point(190, 152)
+  $secretBox.Width = 370
+  $secretBox.UseSystemPasswordChar = $true
+  $dialog.Controls.Add($secretBox)
+
+  $storeSecretCheckBox = New-Object System.Windows.Forms.CheckBox
+  $storeSecretCheckBox.Text = 'Store securely for this Windows user'
+  $storeSecretCheckBox.Location = New-Object System.Drawing.Point(190, 185)
+  $storeSecretCheckBox.AutoSize = $true
+  $storeSecretCheckBox.Checked = -not [string]::IsNullOrWhiteSpace([string]$script:settings.EntraClientSecretProtected)
+  $dialog.Controls.Add($storeSecretCheckBox)
+
+  $certificateLabel = New-Object System.Windows.Forms.Label
+  $certificateLabel.Text = 'Certificate thumbprint:'
+  $certificateLabel.Location = New-Object System.Drawing.Point(20, 225)
+  $certificateLabel.AutoSize = $true
+  $dialog.Controls.Add($certificateLabel)
+
+  $certificateBox = New-Object System.Windows.Forms.TextBox
+  $certificateBox.Location = New-Object System.Drawing.Point(190, 222)
+  $certificateBox.Width = 370
+  $certificateBox.Text = [string]$script:settings.EntraCertificateThumbprint
+  $dialog.Controls.Add($certificateBox)
+
+  $informationLabel = New-Object System.Windows.Forms.Label
+  $informationLabel.Location = New-Object System.Drawing.Point(20, 270)
+  $informationLabel.Size = New-Object System.Drawing.Size(540, 165)
+  $dialog.Controls.Add($informationLabel)
+
+  $saveButton = New-Object System.Windows.Forms.Button
+  $saveButton.Text = 'Save'
+  $saveButton.Location = New-Object System.Drawing.Point(385, 455)
+  $saveButton.Width = 80
+  $dialog.Controls.Add($saveButton)
+
+  $cancelButton = New-Object System.Windows.Forms.Button
+  $cancelButton.Text = 'Cancel'
+  $cancelButton.Location = New-Object System.Drawing.Point(480, 455)
+  $cancelButton.Width = 80
+  $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+  $dialog.Controls.Add($cancelButton)
+  $dialog.CancelButton = $cancelButton
+
+  $updateDialogState = {
+    $isAppOnly = ($modeBox.SelectedIndex -gt 0)
+    $isCertificate = ($modeBox.SelectedIndex -eq 2)
+    $tenantLabel.Enabled = $isAppOnly
+    $tenantBox.Enabled = $isAppOnly
+    $clientLabel.Enabled = $isAppOnly
+    $clientBox.Enabled = $isAppOnly
+    $isClientSecret = ($modeBox.SelectedIndex -eq 1)
+    $secretLabel.Enabled = $isClientSecret
+    $secretBox.Enabled = ($isClientSecret -and $storeSecretCheckBox.Checked)
+    $storeSecretCheckBox.Enabled = $isClientSecret
+    $certificateLabel.Enabled = $isCertificate
+    $certificateBox.Enabled = $isCertificate
+    $permissionLines = if (-not $isAppOnly) {
+      @(
+        'USER LOGIN (Interactive)'
+        'No customer-owned Entra App Registration is required.'
+        'The sign-in clients request these delegated Microsoft Graph permissions:'
+        'DeviceManagementApps.ReadWrite.All'
+        'DeviceManagementConfiguration.ReadWrite.All'
+        'DeviceManagementManagedDevices.Read.All'
+        'Directory.Read.All'
+        'Admin consent and an appropriate Intune role are required.'
+      )
+    } else {
+      $linesForApp = @(
+        'ENTRA APPLICATION (Client secret or certificate)'
+        'Add only these Microsoft Graph > Application permissions:'
+        'DeviceManagementApps.ReadWrite.All'
+        'DeviceManagementManagedDevices.Read.All'
+        'Grant admin consent. Delegated permissions and User.Read are not required for this App Registration.'
+      )
+      if ($isCertificate) {
+        $linesForApp += 'Certificate: the certificate and private key must exist in CurrentUser\My; private-key material is not copied.'
+      } elseif ($storeSecretCheckBox.Checked) {
+        $linesForApp += 'Secret: leave this field blank to keep the existing DPAPI-protected value, or enter a new value to replace it; plaintext is never saved or logged.'
+      } else {
+        $linesForApp += 'Secret: enable secure storage for DPAPI-protected reuse, or leave it cleared to be prompted at each login; plaintext is never saved or logged.'
+      }
+      $linesForApp
+    }
+    $informationLabel.Text = $permissionLines -join [Environment]::NewLine
+  }.GetNewClosure()
+  $modeBox.Add_SelectedIndexChanged($updateDialogState)
+  $storeSecretCheckBox.Add_CheckedChanged($updateDialogState)
+  & $updateDialogState
+
+  $settingsReference = $script:settings
+  $settingsPathReference = $script:settingsPath
+
+  $saveButton.Add_Click({
+    $mode = switch ($modeBox.SelectedIndex) {
+      1 { 'ClientSecret' }
+      2 { 'Certificate' }
+      default { 'Interactive' }
+    }
+    $validation = if ($mode -eq 'Interactive') {
+      [pscustomobject]@{
+        IsValid = $true
+        Reason = ''
+        TenantId = ([string]$tenantBox.Text).Trim()
+        ClientId = ([string]$clientBox.Text).Trim()
+        CertificateThumbprint = ConvertTo-WinTunerCertificateThumbprint -Thumbprint ([string]$certificateBox.Text)
+      }
+    } else {
+      Test-WinTunerAuthenticationConfiguration -Mode $mode -TenantId ([string]$tenantBox.Text) -ClientId ([string]$clientBox.Text) -CertificateThumbprint ([string]$certificateBox.Text)
+    }
+    if (-not $validation.IsValid) {
+      [void][System.Windows.Forms.MessageBox]::Show($validation.Reason, 'Invalid Authentication Configuration', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+      return
+    }
+
+    $protectedClientSecret = ''
+    if ($mode -eq 'ClientSecret' -and $storeSecretCheckBox.Checked) {
+      if (-not [string]::IsNullOrWhiteSpace([string]$secretBox.Text)) {
+        try {
+          $protectedClientSecret = Protect-WinTunerClientSecretForCurrentUser -ClientSecret ([string]$secretBox.Text)
+          $secretBox.Clear()
+        } catch {
+          [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Client Secret Error', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+          return
+        }
+      } elseif (-not [string]::IsNullOrWhiteSpace([string]$settingsReference.EntraClientSecretProtected)) {
+        $protectedClientSecret = [string]$settingsReference.EntraClientSecretProtected
+      } else {
+        [void][System.Windows.Forms.MessageBox]::Show('Enter the client secret to store it securely, or clear the storage checkbox to be prompted at each login.', 'Client Secret Required', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        return
+      }
+    }
+
+    $settingsReference.AuthenticationMode = $mode
+    $settingsReference.EntraTenantId = $validation.TenantId
+    $settingsReference.EntraClientId = $validation.ClientId
+    $settingsReference.EntraClientSecretProtected = $protectedClientSecret
+    $settingsReference.EntraCertificateThumbprint = $validation.CertificateThumbprint
+    if (-not (Export-WinTunerSettings -Settings $settingsReference -Path $settingsPathReference)) {
+      [void][System.Windows.Forms.MessageBox]::Show('Authentication settings could not be saved.', 'Settings Error', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+      return
+    }
+
+    Update-WinTunerAuthenticationUI
+    Update-Status "Authentication mode saved: $mode"
+    $secretStorageState = if (-not [string]::IsNullOrWhiteSpace($protectedClientSecret)) { 'protected client secret saved for the current Windows user' } else { 'no client secret saved' }
+    Write-Log "Authentication configuration changed to $mode; $secretStorageState."
+    $dialog.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $dialog.Close()
+  }.GetNewClosure())
+
+  try {
+    [void]$dialog.ShowDialog($form)
+  } finally {
+    $secretBox.Clear()
+    $dialog.Dispose()
+  }
+}
 function Show-WinTunerLoginError {
   param([Parameter(Mandatory=$true)][string]$Message)
+
+  $isAppOnly = (
+    $script:settings -and
+    [string]$script:settings.AuthenticationMode -in @('ClientSecret', 'Certificate')
+  )
+  if ($isAppOnly -and $Message -imatch 'Forbidden' -and $Message -imatch 'deviceAppManagement') {
+    $permissionMessage = @"
+App-only authentication reached Microsoft Graph, but Intune app access was denied (403 Forbidden).
+
+In the Entra App Registration, add this under:
+Microsoft Graph > Application permissions
+
+DeviceManagementApps.ReadWrite.All
+
+Then select Grant admin consent. A delegated permission with the same name does not authorize app-only access.
+
+Also verify that the tenant has an active Microsoft Intune license. After changing permissions, allow time for propagation and sign in again.
+"@
+    [void][System.Windows.Forms.MessageBox]::Show(
+      $permissionMessage.Trim(),
+      'App-only Intune Permission Missing',
+      [System.Windows.Forms.MessageBoxButtons]::OK,
+      [System.Windows.Forms.MessageBoxIcon]::Warning
+    )
+    return
+  }
 
   if ($Message -imatch 'network|connection|timeout|unreachable') {
     [void][System.Windows.Forms.MessageBox]::Show("Network error: Please check your internet connection.$([Environment]::NewLine)$([Environment]::NewLine)Details: $Message", 'Network Error', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
@@ -2526,7 +2895,6 @@ function Show-WinTunerLoginError {
 
 function Complete-WinTunerLoginVerification {
   param([Parameter(Mandatory=$true)][object]$Context)
-
   $verificationResult = $null
   $completionError = $null
   try {
@@ -2535,9 +2903,8 @@ function Complete-WinTunerLoginVerification {
       if ($Context.PowerShell.Streams.Error.Count -gt 0) { throw $Context.PowerShell.Streams.Error[0].Exception }
       throw 'The connection verification returned no result.'
     }
-    $verificationResult = ([string]$output[$output.Count - 1]) | ConvertFrom-Json -ErrorAction Stop
-  } catch {
-    $completionError = $_.Exception.Message
+    $verificationResult = ([string]$output[-1]) | ConvertFrom-Json -ErrorAction Stop
+  } catch { $completionError = $_.Exception.Message
   } finally {
     try { $Context.Timer.Stop() } catch {}
     try { $Context.Timer.Dispose() } catch {}
@@ -2545,131 +2912,188 @@ function Complete-WinTunerLoginVerification {
     if ($script:loginVerificationContext -eq $Context) { $script:loginVerificationContext = $null }
     $script:isLoginOperationActive = $false
   }
-
-  $errorMessage = if ($completionError) {
-    $completionError
-  } elseif (-not $verificationResult.Succeeded) {
+  $errorMessage = if ($completionError) { $completionError } elseif (-not $verificationResult.Succeeded) {
     if ($verificationResult.ErrorMessage) { [string]$verificationResult.ErrorMessage } else { 'Authentication error or connection verification failed.' }
-  } else {
-    ''
-  }
-
+  } else { '' }
   if ($errorMessage) {
     try { Disconnect-WtWinTuner -ErrorAction SilentlyContinue } catch {}
     Disconnect-WinTunerGraph
     $script:isConnected = $false
     $script:currentUserUpn = ''
+    $script:currentIdentityLabel = ''
+    $script:currentAuthenticationMode = 'Interactive'
+    $script:currentGraphTenantId = ''
+    $script:currentClientId = ''
     Show-WinTunerLoginError -Message $errorMessage
     Update-Status ("Login canceled/failed: {0}" -f $errorMessage)
     $attemptCount = if ($verificationResult) { [int]$verificationResult.Attempts } else { 0 }
     Write-Log "Login verification failed after $attemptCount attempt(s): $errorMessage"
-    Set-ConnectedUIState -Connected $false
     $loginButton.Text = 'Login to Tenant'
-    $loginButton.Enabled = (Test-ValidM365UserName -UserName $usernameBox.Text)
+    Set-ConnectedUIState -Connected $false
     Update-PackageSearchActionState
     return
   }
-
   $script:isConnected = $true
-  $script:currentUserUpn = $Context.Upn
-  Update-Status "Login success; connection verified after $($verificationResult.Attempts) attempt(s)."
-  Write-Log "Login connection verified after $($verificationResult.Attempts) attempt(s)."
-  if ($rememberCheckBox) { $script:settings.RememberMe = [bool]$rememberCheckBox.Checked }
-  if ($script:settings.RememberMe) { $script:settings.LastUser = $Context.Upn } else { $script:settings.LastUser = '' }
-  Add-RecentUser -Upn $Context.Upn
-  $usernameBox.Items.Clear()
-  foreach ($user in @($script:settings.RecentUsers)) {
-    if ($user) { [void]$usernameBox.Items.Add($user) }
+  $script:currentUserUpn = [string]$Context.Upn
+  $script:currentIdentityLabel = [string]$Context.IdentityLabel
+  $script:currentAuthenticationMode = [string]$Context.AuthenticationMode
+  $script:currentClientId = [string]$Context.ClientId
+  $script:currentGraphTenantId = if (-not [string]::IsNullOrWhiteSpace([string]$verificationResult.GraphTenantId)) { [string]$verificationResult.GraphTenantId } else { [string]$Context.GraphTenantId }
+  Update-Status "Login success using $($script:currentAuthenticationMode); connection verified after $($verificationResult.Attempts) attempt(s)."
+  Write-Log "Login connection verified using $($script:currentAuthenticationMode) after $($verificationResult.Attempts) attempt(s)."
+  if ($script:currentAuthenticationMode -eq 'Interactive') {
+    if ($rememberCheckBox) { $script:settings.RememberMe = [bool]$rememberCheckBox.Checked }
+    if ($script:settings.RememberMe) { $script:settings.LastUser = $Context.Upn } else { $script:settings.LastUser = '' }
+    Add-RecentUser -Upn $Context.Upn
+    $usernameBox.Items.Clear()
+    foreach ($user in @($script:settings.RecentUsers)) { if ($user) { [void]$usernameBox.Items.Add($user) } }
+    [void](Export-WinTunerSettings -Settings $script:settings -Path $script:settingsPath)
   }
-  [void](Export-WinTunerSettings -Settings $script:settings -Path $script:settingsPath)
   $loginButton.Text = 'Login to Tenant'
   Set-ConnectedUIState -Connected $true
   Update-PackageActionState
   Update-PackageSearchActionState
-
   if ($script:settings.AutoCheckUpdates) {
     Write-Log 'Auto-check for updates enabled - triggering update search'
     Update-Status 'Auto-checking for updates...'
     try {
       $tabControl.SelectedTab = $tabUpdate
       $updateSearchButton.PerformClick()
-    } catch {
-      Write-Log "Auto-check for updates failed: $($_.Exception.Message)"
-    }
+    } catch { Write-Log "Auto-check for updates failed: $($_.Exception.Message)" }
   }
 }
 
 function Start-WinTunerLogin {
   if ($script:isLoginOperationActive -or $script:isConnected) { return }
-  $upn = [string]$usernameBox.Text
-  if (-not (Test-ValidM365UserName -UserName $upn)) {
-    [void][System.Windows.Forms.MessageBox]::Show('Please enter a valid M365 UPN.', 'Invalid Username', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+  $configuration = Get-WinTunerConfiguredAuthentication
+  if (-not $configuration.IsValid) {
+    [void][System.Windows.Forms.MessageBox]::Show($configuration.Reason, 'Invalid Authentication Configuration', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+    Update-WinTunerAuthenticationUI
     return
   }
-
+  $clientSecret = $null
+  if ($configuration.Mode -eq 'ClientSecret') {
+    if (-not [string]::IsNullOrWhiteSpace([string]$script:settings.EntraClientSecretProtected)) {
+      try {
+        $clientSecret = Unprotect-WinTunerClientSecretForCurrentUser -ProtectedClientSecret ([string]$script:settings.EntraClientSecretProtected)
+      } catch {
+        [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Saved Client Secret Unavailable', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+        Update-Status 'Login blocked: the saved client secret could not be decrypted.'
+        Write-Log 'Client-secret login blocked because the protected value could not be decrypted for the current Windows user.'
+        Update-WinTunerAuthenticationUI
+        return
+      }
+    } else {
+      $clientSecret = Show-WinTunerClientSecretPrompt
+    }
+    if ($null -eq $clientSecret) {
+      Update-Status 'Login canceled before authentication.'
+      Update-WinTunerAuthenticationUI
+      return
+    }
+    $configuration = Test-WinTunerAuthenticationConfiguration -Mode ClientSecret -TenantId $configuration.TenantId -ClientId $configuration.ClientId -ClientSecret $clientSecret -RequireSecret
+    if (-not $configuration.IsValid) {
+      [void][System.Windows.Forms.MessageBox]::Show($configuration.Reason, 'Invalid Authentication Configuration', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+      $clientSecret = $null
+      Update-WinTunerAuthenticationUI
+      return
+    }
+  } elseif ($configuration.Mode -eq 'Certificate') {
+    $certificateValidation = Test-WinTunerCertificateAvailable -Thumbprint $configuration.CertificateThumbprint
+    if (-not $certificateValidation.IsAvailable) {
+      [void][System.Windows.Forms.MessageBox]::Show($certificateValidation.Reason, 'Certificate Unavailable', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+      Update-Status "Login blocked: $($certificateValidation.Reason)"
+      Write-Log "Certificate login blocked: $($certificateValidation.Reason)"
+      Update-WinTunerAuthenticationUI
+      return
+    }
+    $certificateValidation = $null
+  }
   $modulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Connection.psm1'
   if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
+    $clientSecret = $null
     Update-Status 'Login failed: connection verification module is missing.'
     Write-Log "Connection verification module missing: $modulePath"
     return
   }
-
   $script:isLoginOperationActive = $true
   $script:isConnected = $false
   $loginButton.Enabled = $false
   $loginButton.Text = 'Connecting...'
-  $usernameBox.Enabled = $false
-  $clearHistoryButton.Enabled = $false
-  Update-Status 'Connecting to tenant...'
+  Update-WinTunerAuthenticationUI
+  Update-Status "Connecting to tenant using $($configuration.Mode)..."
   Update-PackageSearchActionState
-
+  $connectionParameters = $null
+  $graphContext = $null
   try {
-    $null = Connect-WtWinTuner -Username $upn -ErrorAction Stop
+    $connectionParameters = New-WinTunerModuleConnectionParameters -Mode $configuration.Mode -UserPrincipalName ([string]$usernameBox.Text) -TenantId $configuration.TenantId -ClientId $configuration.ClientId -ClientSecret $clientSecret -CertificateThumbprint $configuration.CertificateThumbprint
+    $null = Connect-WtWinTuner @connectionParameters
+    if ($configuration.Mode -eq 'ClientSecret') {
+      $graphContext = Connect-WinTunerGraph -AuthenticationMode ClientSecret -TenantId $configuration.TenantId -ClientId $configuration.ClientId -ClientSecret $clientSecret
+    } elseif ($configuration.Mode -eq 'Certificate') {
+      $graphContext = Connect-WinTunerGraph -AuthenticationMode Certificate -TenantId $configuration.TenantId -ClientId $configuration.ClientId -CertificateThumbprint $configuration.CertificateThumbprint
+    }
   } catch {
-    $message = $_.Exception.Message
+    $message = Protect-WinTunerAuthenticationErrorMessage -Message $_.Exception.Message -Secret $clientSecret
     $script:isLoginOperationActive = $false
-    $usernameBox.Enabled = $true
-    $clearHistoryButton.Enabled = $true
+    try { Disconnect-WtWinTuner -ErrorAction SilentlyContinue } catch {}
+    Disconnect-WinTunerGraph
     $loginButton.Text = 'Login to Tenant'
-    $loginButton.Enabled = (Test-ValidM365UserName -UserName $usernameBox.Text)
     Show-WinTunerLoginError -Message $message
     Update-Status ("Login canceled/failed: {0}" -f $message)
-    Write-Log "Login connection failed: $message"
+    Write-Log "Login connection failed using $($configuration.Mode): $message"
     Set-ConnectedUIState -Connected $false
     Update-PackageSearchActionState
     return
+  } finally {
+    if ($connectionParameters -and $connectionParameters.ContainsKey('ClientSecret')) {
+      $connectionParameters['ClientSecret'] = $null
+      [void]$connectionParameters.Remove('ClientSecret')
+    }
+    $clientSecret = $null
   }
-
-  Update-Status 'Tenant authentication completed; connecting Microsoft Graph and verifying tenant...'
+  $graphTenantId = if ($graphContext -and -not [string]::IsNullOrWhiteSpace([string]$graphContext.TenantId)) { [string]$graphContext.TenantId } else { [string]$configuration.TenantId }
+  $upn = if ($configuration.Mode -eq 'Interactive') { [string]$usernameBox.Text } else { '' }
+  Update-Status 'Tenant authentication completed; verifying tenant access...'
   $workerScript = @'
-param($RepositoryRoot, $UserPrincipalName)
+param($RepositoryRoot, $AuthenticationMode, $UserPrincipalName, $GraphTenantId, $ClientId)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 Import-Module WinTuner -ErrorAction Stop
 Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Connection.psm1') -Force -ErrorAction Stop
 Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Intune.psm1') -Force -ErrorAction Stop
-$null = Connect-WinTunerGraph -UserPrincipalName $UserPrincipalName
+if ($AuthenticationMode -eq 'Interactive') {
+  $graphContext = Connect-WinTunerGraph -AuthenticationMode Interactive -UserPrincipalName $UserPrincipalName
+} else {
+  $graphContext = Confirm-WinTunerGraphContext -AuthenticationMode $AuthenticationMode -TenantId $GraphTenantId -ClientId $ClientId
+}
 $result = Invoke-WinTunerConnectionVerification -GetApps {
   @(Get-WtWin32Apps -Update:$false -Superseded:$false -ErrorAction Stop)
 } -MaxAttempts 4 -RetryDelayMilliseconds 500
+$result | Add-Member -NotePropertyName GraphTenantId -NotePropertyValue ([string]$graphContext.TenantId) -Force
 $result | ConvertTo-Json -Depth 4 -Compress
 '@
-
   $powerShell = [System.Management.Automation.PowerShell]::Create()
-  $null = $powerShell.AddScript($workerScript).AddArgument($PSScriptRoot).AddArgument($upn)
+  $null = $powerShell.AddScript($workerScript).AddArgument($PSScriptRoot).AddArgument($configuration.Mode).AddArgument($upn).AddArgument($graphTenantId).AddArgument($configuration.ClientId)
   $timer = New-Object System.Windows.Forms.Timer
   $timer.Interval = 150
-  $context = [pscustomobject]@{ PowerShell = $powerShell; AsyncResult = $null; Timer = $timer; Upn = $upn }
+  $context = [pscustomobject]@{
+    PowerShell = $powerShell
+    AsyncResult = $null
+    Timer = $timer
+    Upn = $upn
+    IdentityLabel = $configuration.IdentityLabel
+    AuthenticationMode = $configuration.Mode
+    GraphTenantId = $graphTenantId
+    ClientId = $configuration.ClientId
+  }
   $script:loginVerificationContext = $context
   $timer.Add_Tick({
     $currentContext = $script:loginVerificationContext
     if ($currentContext -and $currentContext.AsyncResult -and $currentContext.AsyncResult.IsCompleted) {
-      $usernameBox.Enabled = $true
-      $clearHistoryButton.Enabled = $true
       Complete-WinTunerLoginVerification -Context $currentContext
     }
   })
-
   try {
     $context.AsyncResult = $powerShell.BeginInvoke()
     $timer.Start()
@@ -2678,15 +3102,13 @@ $result | ConvertTo-Json -Depth 4 -Compress
     try { $powerShell.Dispose() } catch {}
     $script:loginVerificationContext = $null
     $script:isLoginOperationActive = $false
-    $usernameBox.Enabled = $true
-    $clearHistoryButton.Enabled = $true
-    $loginButton.Text = 'Login to Tenant'
-    $loginButton.Enabled = (Test-ValidM365UserName -UserName $usernameBox.Text)
     try { Disconnect-WtWinTuner -ErrorAction SilentlyContinue } catch {}
+    Disconnect-WinTunerGraph
     $message = $_.Exception.Message
     Show-WinTunerLoginError -Message $message
     Update-Status "Login verification failed to start: $message"
-    Write-Log "Login verification failed to start: $message"
+    Write-Log "Login verification failed to start using $($configuration.Mode): $message"
+    $loginButton.Text = 'Login to Tenant'
     Set-ConnectedUIState -Connected $false
     Update-PackageSearchActionState
   }
@@ -3480,28 +3902,29 @@ function Clear-RecentUsers {
 # Helper: toggle UI based on connection state
 function Set-ConnectedUIState {
   param([bool]$Connected)
+
   if ($Connected) {
     $loginButton.Visible = $false
     $usernameBox.Visible = $false
     $usernameLabel.Visible = $false
     if ($usernameError) { $usernameError.Visible = $false }
+    if ($authSummaryLabel) { $authSummaryLabel.Visible = $false }
     $tabControl.Visible = $true
     $logoutButton.Visible = $true
     if ($clearHistoryButton) { $clearHistoryButton.Visible = $false }
+    if ($rememberCheckBox) { $rememberCheckBox.Visible = $false }
   } else {
     $loginButton.Visible = $true
-    $usernameBox.Visible = $true
-    $usernameLabel.Visible = $true
-    if ($usernameError) { $usernameError.Visible = $true }
     $tabControl.Visible = $true
     $logoutButton.Visible = $false
-    if ($clearHistoryButton) { $clearHistoryButton.Visible = $true }
+    Update-WinTunerAuthenticationUI
   }
-  if ($rememberCheckBox) { $rememberCheckBox.Visible = -not $Connected }
+
   if ($loginButton) {
     $loginButton.Text = 'Login to Tenant'
-    $loginButton.Enabled = (-not $Connected -and -not [bool]$script:isLoginOperationActive -and (Test-ValidM365UserName -UserName $usernameBox.Text))
+    Update-WinTunerLoginButtonState
   }
+
   if (-not $Connected) {
     $script:updateApps = [System.Collections.Generic.List[object]]::new()
     $script:updateVisibleApps = [System.Collections.Generic.List[object]]::new()
@@ -3512,18 +3935,22 @@ function Set-ConnectedUIState {
     $script:supersededApps = @()
     if ($supersededDropdown) { $supersededDropdown.Items.Clear() }
   }
+
   Update-UpdateActionState
   Update-DiscoveryActionState
   Update-SupersededActionState
-  
+
   if ($loginInfoLabel) {
     $loginInfoLabel.Visible = $Connected
-    if ($Connected -and $script:currentUserUpn) { $loginInfoLabel.Text = "Logged in as: $($script:currentUserUpn)" }
+    $loginInfoLabel.Text = if ($Connected) { "Logged in as: $($script:currentIdentityLabel)" } else { '' }
   }
 }
-
 $script:isConnected = $false
 $script:currentUserUpn = ""
+$script:currentIdentityLabel = ''
+$script:currentAuthenticationMode = 'Interactive'
+$script:currentGraphTenantId = ''
+$script:currentClientId = ''
 
 # Cache effective builds and package versions validated from disk
 $script:builtVersions = @{}
@@ -3630,12 +4057,8 @@ $headerPanel.Controls.Add($usernameError)
 
 # Live validation for username field
 $usernameBox.add_TextChanged({
-  if (Test-ValidM365UserName -UserName $usernameBox.Text) {
-    $usernameError.Text = ""
-    if ($loginButton) { $loginButton.Enabled = -not [bool]$script:isLoginOperationActive }
-  } else {
-    $usernameError.Text = "Please enter a valid M365 UPN, e.g. name@firma.de"
-    if ($loginButton) { $loginButton.Enabled = $false }
+  if ($script:settings -and [string]$script:settings.AuthenticationMode -eq 'Interactive') {
+    Update-WinTunerAuthenticationUI
   }
 })
 
@@ -3683,6 +4106,14 @@ $loginInfoLabel.Location = New-Object System.Drawing.Point(88, 10)
 $loginInfoLabel.AutoSize = $true
 $loginInfoLabel.Visible = $false
 $headerPanel.Controls.Add($loginInfoLabel)
+
+$authSummaryLabel = New-Object System.Windows.Forms.Label
+$authSummaryLabel.Text = ''
+$authSummaryLabel.Location = New-Object System.Drawing.Point(88, 10)
+$authSummaryLabel.Size = New-Object System.Drawing.Size(480, 35)
+$authSummaryLabel.AutoEllipsis = $true
+$authSummaryLabel.Visible = $false
+$headerPanel.Controls.Add($authSummaryLabel)
 
 # TabControl
 $tabControl = New-Object System.Windows.Forms.TabControl
@@ -4227,21 +4658,40 @@ $graphPermissionsButton.Width = 180
 $graphPermissionsButton.Height = 35
 $tabSettings.Controls.Add($graphPermissionsButton)
 
+$authenticationSettingsButton = New-Object System.Windows.Forms.Button
+$authenticationSettingsButton.Text = "Authentication..."
+$authenticationSettingsButton.Location = New-Object System.Drawing.Point(420, 330)
+$authenticationSettingsButton.Width = 180
+$authenticationSettingsButton.Height = 35
+$tabSettings.Controls.Add($authenticationSettingsButton)
+$authenticationSettingsButton.Add_Click({ Show-WinTunerAuthenticationSettings })
+
 $graphPermissionsButton.Add_Click({
   $permissionSummary = @"
-WinTuner GUI requests these delegated Microsoft Graph permissions:
+USER LOGIN (Interactive)
+
+No customer-owned Entra App Registration is required.
+The WinTuner and Microsoft Graph sign-in clients request these delegated permissions:
 
 DeviceManagementApps.ReadWrite.All
 DeviceManagementConfiguration.ReadWrite.All
 DeviceManagementManagedDevices.Read.All
 Directory.Read.All
 
-A tenant administrator must grant consent for all four permissions.
-The signed-in account also needs an appropriate Intune role.
+An administrator must grant consent. The signed-in user also needs an appropriate Intune role.
 
-DeviceManagementConfiguration.ReadWrite.All is requested by the
-WinTuner 1.3.2 default login. The other three permissions are
-requested by the WinTuner GUI Microsoft Graph connection.
+ENTRA APPLICATION (Client secret or certificate)
+
+Configure the customer-owned App Registration with only these Microsoft Graph Application permissions:
+
+DeviceManagementApps.ReadWrite.All
+DeviceManagementManagedDevices.Read.All
+
+Grant admin consent. Delegated permissions and User.Read are not required on this App Registration.
+The tenant must have an active Microsoft Intune license.
+
+Client secrets can optionally be stored with Windows DPAPI for this user and computer;
+plaintext is never saved or logged. Certificate authentication uses CurrentUserMy.
 "@
 
   [void][System.Windows.Forms.MessageBox]::Show(
@@ -4643,8 +5093,8 @@ $loginButton.Location = New-Object System.Drawing.Point(584, 10)
 $loginButton.Size = New-Object System.Drawing.Size(150, 27)
 $headerPanel.Controls.Add($loginButton)
 
-# initialize login button enabled state based on username validation
-$loginButton.Enabled = (Test-ValidM365UserName -UserName $usernameBox.Text)
+# Authentication settings are loaded below before the final Login state is calculated.
+$loginButton.Enabled = $false
 
 $rememberCheckBox = New-Object System.Windows.Forms.CheckBox
 $rememberCheckBox.Text = "Remember me"
@@ -4673,6 +5123,7 @@ $script:settings = Import-WinTunerSettings -Path $script:settingsPath
 $rememberCheckBox.Checked = [bool]$script:settings.RememberMe
 $rememberMeCheckbox.Checked = [bool]$script:settings.RememberMe
 if ($script:settings.RememberMe -and $script:settings.LastUser) { $usernameBox.Text = $script:settings.LastUser } else { $usernameBox.Text = "" }
+Update-WinTunerAuthenticationUI
 
 # Populate username ComboBox with recent users (only if RememberMe is on)
 if ($script:settings.RememberMe -and $script:settings.RecentUsers) {
@@ -5065,11 +5516,17 @@ $logoutButton.Add_Click({
   }
   Disconnect-WinTunerGraph
   $script:isConnected = $false
-  $script:currentUserUpn = ""
+  $script:currentUserUpn = ''
+  $script:currentIdentityLabel = ''
+  $script:currentAuthenticationMode = 'Interactive'
+  $script:currentGraphTenantId = ''
+  $script:currentClientId = ''
   Update-PackageActionState
-  if ($loginInfoLabel) { $loginInfoLabel.Text = "" }
-  if (-not $script:settings.RememberMe) { $usernameBox.Text = "" }
-  Update-Status "Logout success."
+  if ($loginInfoLabel) { $loginInfoLabel.Text = '' }
+  if ([string]$script:settings.AuthenticationMode -eq 'Interactive' -and -not $script:settings.RememberMe) {
+    $usernameBox.Text = ''
+  }
+  Update-Status 'Logout success.'
   Set-ConnectedUIState -Connected $false
 })
 # ==================================================
@@ -5370,6 +5827,7 @@ if ($saveSettingsButton)       { $toolTip.SetToolTip($saveSettingsButton,       
 if ($clearCacheButton)         { $toolTip.SetToolTip($clearCacheButton,         "Clear WinGet version cache, Discovery search cache, and Graph detected-apps cache") }
 if ($checkUpdateButton)        { $toolTip.SetToolTip($checkUpdateButton,        "Check GitHub for a newer version of WinTuner GUI") }
 if ($graphPermissionsButton)  { $toolTip.SetToolTip($graphPermissionsButton,  "Show the delegated Microsoft Graph permissions required by WinTuner GUI") }
+if ($authenticationSettingsButton) { $toolTip.SetToolTip($authenticationSettingsButton, "Configure interactive or app-only Entra authentication and optional DPAPI-protected secret storage") }
 
 # Run the form mit finalem Sicherheitsnetz
 try {

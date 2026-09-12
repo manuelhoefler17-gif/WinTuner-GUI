@@ -4,7 +4,7 @@
 
 [![PowerShell Version](https://img.shields.io/badge/PowerShell-7.0%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.10.17-orange.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.19-orange.svg)](CHANGELOG.md)
 
 ## 🎯 Overview
 
@@ -125,6 +125,7 @@ The self-update process includes:
 ### ⚙️ Settings and usability
 
 - Persistent application settings
+- Interactive, client-secret, or certificate authentication
 - Remembered username support
 - Recent-user history
 - Background tenant-connection verification with bounded retries
@@ -156,22 +157,38 @@ Manual installation:
 Install-Module -Name WinTuner -Scope CurrentUser
 ```
 
-### Microsoft Graph permissions
+### Authentication and Microsoft Graph permissions
 
-WinTuner GUI signs in interactively with delegated Microsoft Graph permissions. The effective permission set currently requested during login is:
+Interactive user sign-in remains the default. Configure another mode before signing in through **Settings > Authentication...**.
 
-| Delegated permission | Requested by | Purpose in the current sign-in flow |
+| Mode | Required configuration | Credential handling |
+| --- | --- | --- |
+| Interactive user | Microsoft 365 user principal name | Microsoft sign-in handles the user credential. The username can be remembered when requested. |
+| Client secret | Tenant ID or verified domain, application client ID | Enter the secret in a masked field and optionally protect it with Windows DPAPI for reuse by the same Windows user on the same computer. Otherwise, it is requested for each login. The plaintext secret is never saved or logged. |
+| Certificate | Tenant ID or verified domain, application client ID, certificate thumbprint | The thumbprint is saved. The certificate and accessible private key must be in `CurrentUser\My`; private-key material is never copied into WinTuner settings. |
+
+#### User login (interactive)
+
+No customer-owned Entra App Registration is required. The WinTuner and Microsoft Graph sign-in clients request these delegated Microsoft Graph permissions:
+
+| Delegated permission | Requested by | Purpose |
 | --- | --- | --- |
 | `DeviceManagementApps.ReadWrite.All` | WinTuner and WinTuner GUI | Read and manage Intune applications, including Win32 app uploads and updates. |
 | `DeviceManagementConfiguration.ReadWrite.All` | WinTuner 1.3.2 default login | Default upstream WinTuner scope for reading and managing Intune configuration and policy data. |
 | `DeviceManagementManagedDevices.Read.All` | WinTuner GUI Discovery | Read managed-device inventory and detected applications used by Discovery. |
 | `Directory.Read.All` | WinTuner GUI Graph session | Read directory data available to the current Graph integration. |
 
-These are **delegated permissions**, not application permissions. A tenant administrator must grant consent for all four permissions. The signed-in account also needs an appropriate Intune role for the operations it performs; Graph consent alone does not grant Intune administrative access.
+A tenant administrator must grant consent for all delegated permissions. The signed-in account also needs an appropriate Intune role for the operations it performs. These permissions belong to the interactive sign-in path and do not need to be added to the customer-owned app-only registration.
 
-The same permission summary is available before sign-in from **Settings > Graph Permissions...**.
+#### Entra application (client secret or certificate)
 
-`DeviceManagementConfiguration.ReadWrite.All` is included because WinTuner 1.3.2 requests it by default even though WinTuner GUI does not add that scope itself. The other three permissions are explicitly requested by the GUI's Microsoft Graph connection. Review the [Microsoft Graph permissions reference](https://learn.microsoft.com/en-us/graph/permissions-reference) and [Microsoft Intune Graph access setup](https://learn.microsoft.com/en-us/intune/developer/configure-graph-api-access) before approving access in a restricted tenant.
+App-only authentication requires a customer-owned Microsoft Entra App Registration with only these Microsoft Graph **application permissions**:
+
+- `DeviceManagementApps.ReadWrite.All` for listing, creating, updating and removing Intune applications
+- `DeviceManagementManagedDevices.Read.All` for Discovery detected-app inventory
+
+Add these under **Microsoft Graph > Application permissions**, not Delegated permissions. Delegated permissions and `User.Read` are not required on this App Registration. A tenant administrator must select **Grant admin consent** before app-only login. The tenant must also have an active Microsoft Intune license. Restrict access and credential lifetime according to the tenant's security policy.
+The same summary is available before sign-in from **Settings > Graph Permissions...**. Review the [Microsoft Graph permissions reference](https://learn.microsoft.com/en-us/graph/permissions-reference) and [Microsoft Intune Graph access setup](https://learn.microsoft.com/en-us/intune/developer/configure-graph-api-access) before approving access.
 
 ---
 
@@ -214,6 +231,7 @@ WinTuner-GUI/
 ├── WinTuner_GUI.ps1
 ├── Modules/
 │   ├── WinTuner.AppUpdate.psm1
+│   ├── WinTuner.Authentication.psm1
 │   ├── WinTuner.Connection.psm1
 │   ├── WinTuner.Core.psm1
 │   ├── WinTuner.DiscoveryDeployment.psm1
@@ -242,8 +260,11 @@ WinForms user interface, application orchestration, authentication workflow, pac
 **`WinTuner.AppUpdate.psm1`**
 Testable background package-build, exact artifact validation and tenant-deployment batching for existing apps.
 
+**`WinTuner.Authentication.psm1`**
+Authentication configuration validation, Windows DPAPI protection for optional client-secret reuse, certificate checks and safe WinTuner connection-parameter construction.
+
 **`WinTuner.Connection.psm1`**
-Bounded, testable tenant-connection verification used after interactive authentication.
+Bounded, testable tenant-connection verification used after authentication.
 
 **`WinTuner.Core.psm1`**
 Shared core functionality.
@@ -287,13 +308,12 @@ Isolated worker used for scalable WinGet discovery queries.
 
 ### 1. Login
 
-1. Enter your Microsoft 365 UPN.
-2. Optionally enable remembering the username.
-3. Click **Login**.
-4. Complete interactive authentication.
+1. Open **Settings > Authentication...** when a mode other than the default interactive user sign-in is required.
+2. For interactive sign-in, enter the Microsoft 365 UPN and optionally remember it. For app-only sign-in, configure the tenant, client ID and either client-secret or certificate mode.
+3. Click **Login to Tenant**.
+4. Complete interactive authentication. In client-secret mode, the saved DPAPI-protected secret is used automatically; if none is stored, enter it in the masked one-login prompt.
 
-WinTuner GUI verifies the tenant connection with bounded retries in a background runspace before enabling tenant-dependent actions.
-
+WinTuner GUI validates the selected configuration, establishes WinTuner and Microsoft Graph contexts, and verifies tenant access with bounded retries in a background runspace before enabling tenant-dependent actions. Decrypted client secrets are discarded after the connection attempt. Discovery workers reuse only the validated process-wide Graph context.
 ### 2. Create and deploy a WinGet application
 
 1. Open **WinGet Apps**.
@@ -350,7 +370,7 @@ Settings are stored in:
 %APPDATA%\WinTunerGUI\settings.json
 ```
 
-Typical settings include the package path, automatic update checking, remembered users and WinGet overrides.
+Typical settings include the package path, automatic update checking, remembered users, WinGet overrides, and Entra authentication configuration. If secure client-secret storage is selected, the settings file contains only a Windows DPAPI CurrentUser-protected value. It can be decrypted only by the same Windows user on the same computer; plaintext secrets are never written to the settings file.
 
 Cache data is stored separately under the current user's local application data directory:
 
@@ -540,7 +560,7 @@ Potential future improvements include:
 
 - Further Discovery and Updates UX improvements
 - Expand read-only tenant end-to-end coverage as safe test-tenant scenarios become available
-- Add app-only authentication with a customer-owned Microsoft Entra App Registration using either a client secret or certificate
+- Expand app-only tenant end-to-end coverage when a safe test application and tenant are available
 
 ---
 
