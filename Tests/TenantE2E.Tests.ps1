@@ -12,11 +12,12 @@ BeforeAll {
 }
 
 Describe 'Read-only tenant E2E runner' {
-    It 'resolves both repository helper modules from the Modules directory' {
+    It 'resolves all repository helper modules from the Modules directory' {
         $script:e2eText.Contains('ModulesWinTuner') | Should -BeFalse
         $repositoryRoot = Split-Path -Parent $PSScriptRoot
         Test-Path -LiteralPath (Join-Path (Join-Path $repositoryRoot 'Modules') 'WinTuner.Connection.psm1') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path (Join-Path $repositoryRoot 'Modules') 'WinTuner.Intune.psm1') | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path (Join-Path $repositoryRoot 'Modules') 'WinTuner.Authentication.psm1') | Should -BeTrue
     }
     It 'covers both tenant APIs and always disconnects them' {
         $commandNames = @($script:e2eAst.FindAll({
@@ -66,5 +67,34 @@ Describe 'Tenant E2E Discovery cache validation' {
     It 'rejects contradictory Discovery refresh switches' {
         $script:e2eText | Should -Match '\$ForceFreshDiscovery -and \$ValidateDiscoveryCache'
         $script:e2eText | Should -Match 'Use either ForceFreshDiscovery or ValidateDiscoveryCache'
+    }
+}
+Describe 'Tenant E2E app-only authentication' {
+    It 'supports interactive, client-secret, and certificate modes' {
+        $script:e2eText | Should -Match "\[ValidateSet\('Interactive', 'ClientSecret', 'Certificate'\)\]"
+        $script:e2eText | Should -Match '\[securestring\]\$ClientSecret'
+        $script:e2eText | Should -Match 'Test-WinTunerCertificateAvailable'
+        $script:e2eText | Should -Match 'New-WinTunerModuleConnectionParameters'
+    }
+
+    It 'clears only the dedicated WinTuner app-only cache before connecting' {
+        $script:e2eText | Should -Match 'Clear-WinTunerAppOnlyTokenCache'
+        $script:e2eText | Should -Not -Match 'mg\.msal\.cache'
+        $script:e2eText.IndexOf('Clear-WinTunerAppOnlyTokenCache') | Should -BeLessThan $script:e2eText.IndexOf('Connect-WtWinTuner @connectionParameters')
+    }
+
+    It 'checks both required Application permissions through read-only endpoints' {
+        $script:e2eText | Should -Match 'Invoke-WinTunerGraphPermissionPreflight'
+        $script:e2eText | Should -Match 'deviceAppManagement/mobileApps\?\$top=1'
+        $script:e2eText | Should -Match 'deviceManagement/detectedApps\?\$top=1'
+        $script:e2eText | Should -Match 'PermissionPreflightPassed'
+    }
+
+    It 'converts and clears the SecureString without writing the plaintext secret' {
+        $script:e2eText | Should -Match 'SecureStringToBSTR'
+        $script:e2eText | Should -Match 'ZeroFreeBSTR'
+        $script:e2eText | Should -Match '\$plainClientSecret\s*=\s*\$null'
+        $script:e2eText | Should -Not -Match 'Write-(Host|Output|Verbose).*plainClientSecret'
+        $script:e2eText | Should -Not -Match 'ClientSecret\s*=\s*\$plainClientSecret'
     }
 }

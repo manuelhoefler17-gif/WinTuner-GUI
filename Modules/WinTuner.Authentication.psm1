@@ -179,6 +179,70 @@ function Protect-WinTunerAuthenticationErrorMessage {
 
     return $Message.Replace($Secret, '[REDACTED]')
 }
+
+function Get-WinTunerAppOnlyTokenCachePath {
+    [CmdletBinding()]
+    param([AllowNull()][string]$LocalApplicationDataPath)
+
+    $root = if ([string]::IsNullOrWhiteSpace($LocalApplicationDataPath)) {
+        [Environment]::GetFolderPath('LocalApplicationData')
+    } else {
+        $LocalApplicationDataPath
+    }
+    if ([string]::IsNullOrWhiteSpace($root)) {
+        throw 'The current user local application data path is unavailable.'
+    }
+
+    return [System.IO.Path]::Combine(
+        [System.IO.Path]::GetFullPath($root),
+        '.IdentityService',
+        'WinTuner-PowerShell-CC.nocae'
+    )
+}
+
+function Clear-WinTunerAppOnlyTokenCache {
+    [CmdletBinding()]
+    param([AllowNull()][string]$LocalApplicationDataPath)
+
+    $cachePath = Get-WinTunerAppOnlyTokenCachePath -LocalApplicationDataPath $LocalApplicationDataPath
+    $identityServicePath = Split-Path -Parent $cachePath
+    if (Test-Path -LiteralPath $identityServicePath) {
+        $identityServiceItem = Get-Item -LiteralPath $identityServicePath -Force -ErrorAction Stop
+        if (-not $identityServiceItem.PSIsContainer) {
+            throw 'The WinTuner IdentityService path unexpectedly points to a file.'
+        }
+        if (($identityServiceItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'The WinTuner IdentityService path unexpectedly points to a reparse point.'
+        }
+    }
+    if (-not (Test-Path -LiteralPath $cachePath)) {
+        return [pscustomobject]@{
+            CachePath = $cachePath
+            Existed = $false
+            Cleared = $false
+        }
+    }
+
+    $cacheItem = Get-Item -LiteralPath $cachePath -Force -ErrorAction Stop
+    if ($cacheItem.PSIsContainer) {
+        throw 'The WinTuner app-only token cache path unexpectedly points to a directory.'
+    }
+    if (($cacheItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'The WinTuner app-only token cache path unexpectedly points to a reparse point.'
+    }
+
+    Remove-Item -LiteralPath $cacheItem.FullName -Force -ErrorAction Stop
+    if (Test-Path -LiteralPath $cachePath) {
+        throw 'The WinTuner app-only token cache could not be cleared.'
+    }
+
+    return [pscustomobject]@{
+        CachePath = $cachePath
+        Existed = $true
+        Cleared = $true
+    }
+}
+
 function Test-WinTunerCertificateAvailable {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Thumbprint)
@@ -210,4 +274,6 @@ Export-ModuleMember -Function @(
     'New-WinTunerModuleConnectionParameters'
     'Test-WinTunerCertificateAvailable'
     'Protect-WinTunerAuthenticationErrorMessage'
+    'Get-WinTunerAppOnlyTokenCachePath'
+    'Clear-WinTunerAppOnlyTokenCache'
 )

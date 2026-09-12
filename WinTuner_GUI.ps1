@@ -55,7 +55,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.20"
+$script:appVersion  = "0.10.21"
 
 # Bootstrap release dependencies and keep them synchronized with the GUI release.
 $requiredReleaseFiles = @(
@@ -2862,22 +2862,27 @@ function Show-WinTunerLoginError {
     $script:settings -and
     [string]$script:settings.AuthenticationMode -in @('ClientSecret', 'Certificate')
   )
-  if ($isAppOnly -and $Message -imatch 'Forbidden' -and $Message -imatch 'deviceAppManagement') {
+  if ($isAppOnly -and $Message -imatch 'Forbidden|Required Application permission') {
+    $requiredPermission = if ($Message -imatch 'DeviceManagementManagedDevices\.Read\.All') {
+      'DeviceManagementManagedDevices.Read.All'
+    } else {
+      'DeviceManagementApps.ReadWrite.All'
+    }
     $permissionMessage = @"
-App-only authentication reached Microsoft Graph, but Intune app access was denied (403 Forbidden).
+App-only authentication reached Microsoft Graph, but Intune access was denied (403 Forbidden).
 
-In the Entra App Registration, add this under:
+Required permission for the failed check:
 Microsoft Graph > Application permissions
 
-DeviceManagementApps.ReadWrite.All
+$requiredPermission
 
-Then select Grant admin consent. A delegated permission with the same name does not authorize app-only access.
+Select Grant admin consent. A delegated permission with the same name does not authorize app-only access.
 
-Also verify that the tenant has an active Microsoft Intune license. After changing permissions, allow time for propagation and sign in again.
+WinTuner requested a fresh app-only token during this login, so an older WinTuner token was not reused. If consent was granted recently, allow time for propagation and sign in again. Also verify that the tenant has an active Microsoft Intune license.
 "@
     [void][System.Windows.Forms.MessageBox]::Show(
       $permissionMessage.Trim(),
-      'App-only Intune Permission Missing',
+      'App-only Intune Access Denied',
       [System.Windows.Forms.MessageBoxButtons]::OK,
       [System.Windows.Forms.MessageBoxIcon]::Warning
     )
@@ -3027,6 +3032,15 @@ function Start-WinTunerLogin {
   $graphContext = $null
   try {
     $connectionParameters = New-WinTunerModuleConnectionParameters -Mode $configuration.Mode -UserPrincipalName ([string]$usernameBox.Text) -TenantId $configuration.TenantId -ClientId $configuration.ClientId -ClientSecret $clientSecret -CertificateThumbprint $configuration.CertificateThumbprint
+    if ($configuration.Mode -in @('ClientSecret', 'Certificate')) {
+      try { Disconnect-WtWinTuner -ErrorAction SilentlyContinue } catch {}
+      $tokenCacheReset = Clear-WinTunerAppOnlyTokenCache
+      if ($tokenCacheReset.Cleared) {
+        Write-Log 'Cleared the dedicated WinTuner app-only token cache before authentication.'
+      } else {
+        Write-Log 'No existing WinTuner app-only token cache was present before authentication.'
+      }
+    }
     $null = Connect-WtWinTuner @connectionParameters
     if ($configuration.Mode -eq 'ClientSecret') {
       $graphContext = Connect-WinTunerGraph -AuthenticationMode ClientSecret -TenantId $configuration.TenantId -ClientId $configuration.ClientId -ClientSecret $clientSecret
@@ -3054,7 +3068,11 @@ function Start-WinTunerLogin {
   }
   $graphTenantId = if ($graphContext -and -not [string]::IsNullOrWhiteSpace([string]$graphContext.TenantId)) { [string]$graphContext.TenantId } else { [string]$configuration.TenantId }
   $upn = if ($configuration.Mode -eq 'Interactive') { [string]$usernameBox.Text } else { '' }
-  Update-Status 'Tenant authentication completed; verifying tenant access...'
+  if ($configuration.Mode -in @('ClientSecret', 'Certificate')) {
+    Update-Status 'Tenant authentication completed; checking app-only Graph permissions...'
+  } else {
+    Update-Status 'Tenant authentication completed; verifying tenant access...'
+  }
   $workerScript = @'
 param($RepositoryRoot, $AuthenticationMode, $UserPrincipalName, $GraphTenantId, $ClientId)
 $ErrorActionPreference = 'Stop'
@@ -3066,11 +3084,28 @@ if ($AuthenticationMode -eq 'Interactive') {
   $graphContext = Connect-WinTunerGraph -AuthenticationMode Interactive -UserPrincipalName $UserPrincipalName
 } else {
   $graphContext = Confirm-WinTunerGraphContext -AuthenticationMode $AuthenticationMode -TenantId $GraphTenantId -ClientId $ClientId
+  $permissionPreflight = Invoke-WinTunerGraphPermissionPreflight -GetManagedApps {
+    Invoke-MgGraphRequest -Method GET -Uri 'https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps?$top=1' -ErrorAction Stop
+  } -GetDetectedApps {
+    Invoke-MgGraphRequest -Method GET -Uri 'https://graph.microsoft.com/v1.0/deviceManagement/detectedApps?$top=1' -ErrorAction Stop
+  }
+  if (-not $permissionPreflight.Succeeded) {
+    [pscustomobject]@{
+      Succeeded = $false
+      Attempts = 1
+      ErrorMessage = [string]$permissionPreflight.ErrorMessage
+      GraphTenantId = [string]$graphContext.TenantId
+      PermissionPreflightPassed = $false
+      MissingPermission = [string]$permissionPreflight.MissingPermission
+    } | ConvertTo-Json -Depth 4 -Compress
+    return
+  }
 }
 $result = Invoke-WinTunerConnectionVerification -GetApps {
   @(Get-WtWin32Apps -Update:$false -Superseded:$false -ErrorAction Stop)
 } -MaxAttempts 4 -RetryDelayMilliseconds 500
 $result | Add-Member -NotePropertyName GraphTenantId -NotePropertyValue ([string]$graphContext.TenantId) -Force
+$result | Add-Member -NotePropertyName PermissionPreflightPassed -NotePropertyValue ($AuthenticationMode -in @('ClientSecret', 'Certificate')) -Force
 $result | ConvertTo-Json -Depth 4 -Compress
 '@
   $powerShell = [System.Management.Automation.PowerShell]::Create()
@@ -5826,7 +5861,7 @@ if ($rememberMeCheckbox)       { $toolTip.SetToolTip($rememberMeCheckbox,       
 if ($saveSettingsButton)       { $toolTip.SetToolTip($saveSettingsButton,       "Save all settings to disk") }
 if ($clearCacheButton)         { $toolTip.SetToolTip($clearCacheButton,         "Clear WinGet version cache, Discovery search cache, and Graph detected-apps cache") }
 if ($checkUpdateButton)        { $toolTip.SetToolTip($checkUpdateButton,        "Check GitHub for a newer version of WinTuner GUI") }
-if ($graphPermissionsButton)  { $toolTip.SetToolTip($graphPermissionsButton,  "Show the delegated Microsoft Graph permissions required by WinTuner GUI") }
+if ($graphPermissionsButton)  { $toolTip.SetToolTip($graphPermissionsButton,  "Show the Microsoft Graph permissions required for interactive and app-only authentication") }
 if ($authenticationSettingsButton) { $toolTip.SetToolTip($authenticationSettingsButton, "Configure interactive or app-only Entra authentication and optional DPAPI-protected secret storage") }
 
 # Run the form mit finalem Sicherheitsnetz

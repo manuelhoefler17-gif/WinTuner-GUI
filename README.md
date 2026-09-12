@@ -187,7 +187,7 @@ App-only authentication requires a customer-owned Microsoft Entra App Registrati
 - `DeviceManagementApps.ReadWrite.All` for listing, creating, updating and removing Intune applications
 - `DeviceManagementManagedDevices.Read.All` for Discovery detected-app inventory
 
-Add these under **Microsoft Graph > Application permissions**, not Delegated permissions. Delegated permissions and `User.Read` are not required on this App Registration. A tenant administrator must select **Grant admin consent** before app-only login. The tenant must also have an active Microsoft Intune license. Restrict access and credential lifetime according to the tenant's security policy.
+Add these under **Microsoft Graph > Application permissions**, not Delegated permissions. Delegated permissions and `User.Read` are not required on this App Registration. A tenant administrator must select **Grant admin consent** before app-only login. The tenant must also have an active Microsoft Intune license. Restrict access and credential lifetime according to the tenant's security policy. WinTuner GUI clears only WinTuner's dedicated app-only token cache before each app-only login, forcing the current Entra application roles to be requested without clearing Microsoft Graph's general sign-in cache.
 The same summary is available before sign-in from **Settings > Graph Permissions...**. Review the [Microsoft Graph permissions reference](https://learn.microsoft.com/en-us/graph/permissions-reference) and [Microsoft Intune Graph access setup](https://learn.microsoft.com/en-us/intune/developer/configure-graph-api-access) before approving access.
 
 ---
@@ -540,7 +540,16 @@ Add `-ForceFreshDiscovery` to validate one uncached detected-app request. Use th
 
     pwsh.exe -NoProfile -File ./Tests/Run-TenantE2E.ps1 -UserPrincipalName admin@contoso.com -ValidateDiscoveryCache
 
-The cache check first requests fresh Graph data, then verifies that an immediate second request uses the persistent detected-app cache and returns the same application count. The runner authenticates WinTuner and Microsoft Graph, reads managed and detected application inventories, performs no tenant writes, and disconnects both sessions when finished.
+For an app-only client-secret check, keep the secret out of the process command line and invoke the runner in the current PowerShell session:
+
+    $secret = Read-Host 'Client secret' -AsSecureString
+    & ./Tests/Run-TenantE2E.ps1 -AuthenticationMode ClientSecret -TenantId '<tenant-id>' -ClientId '<application-id>' -ClientSecret $secret -ValidateDiscoveryCache
+
+For certificate authentication, use:
+
+    pwsh.exe -NoProfile -File ./Tests/Run-TenantE2E.ps1 -AuthenticationMode Certificate -TenantId '<tenant-id>' -ClientId '<application-id>' -CertificateThumbprint '<thumbprint>' -ValidateDiscoveryCache
+
+The app-only runner clears only WinTuner's dedicated client-credential token cache, then checks both required Microsoft Graph Application permissions before reading tenant inventory. The cache check first requests fresh Graph data, then verifies that an immediate second request uses the persistent detected-app cache and returns the same application count. Every mode reads managed and detected application inventories, performs no tenant writes, and disconnects both sessions when finished.
 
 A development checkout intentionally uses its local dependency files and is therefore not a substitute for testing the standalone release bootstrap.
 
@@ -560,7 +569,7 @@ Potential future improvements include:
 
 - Further Discovery and Updates UX improvements
 - Expand read-only tenant end-to-end coverage as safe test-tenant scenarios become available
-- Expand app-only tenant end-to-end coverage when a safe test application and tenant are available
+- Add controlled opt-in tenant write end-to-end coverage when a dedicated test application and tenant are available
 
 ---
 

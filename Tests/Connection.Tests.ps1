@@ -71,3 +71,57 @@ Describe 'GUI connection state integration' {
         $script:intuneModuleText | Should -Match 'Connect-MgGraph(?s).*?-ContextScope\s+Process'
     }
 }
+Describe 'App-only Graph permission preflight' {
+    It 'validates both required read-only Graph paths' {
+        $calls = [System.Collections.Generic.List[string]]::new()
+        $result = Invoke-WinTunerGraphPermissionPreflight -GetManagedApps {
+            $calls.Add('apps')
+            [pscustomobject]@{ value = @() }
+        }.GetNewClosure() -GetDetectedApps {
+            $calls.Add('detected')
+            [pscustomobject]@{ value = @() }
+        }.GetNewClosure()
+
+        $result.Succeeded | Should -BeTrue
+        $result.ChecksCompleted | Should -Be @(
+            'DeviceManagementApps.ReadWrite.All',
+            'DeviceManagementManagedDevices.Read.All'
+        )
+        $calls | Should -Be @('apps', 'detected')
+    }
+
+    It 'maps an apps 403 to the exact required Application permission and stops' {
+        $detectedCalled = $false
+        $result = Invoke-WinTunerGraphPermissionPreflight -GetManagedApps {
+            throw 'HTTP 403 Forbidden with raw service details'
+        } -GetDetectedApps {
+            $detectedCalled = $true
+        }.GetNewClosure()
+
+        $result.Succeeded | Should -BeFalse
+        $result.Forbidden | Should -BeTrue
+        $result.MissingPermission | Should -Be 'DeviceManagementApps.ReadWrite.All'
+        $result.ErrorMessage | Should -Match 'Grant admin consent'
+        $result.ErrorMessage | Should -Not -Match 'raw service details'
+        $detectedCalled | Should -BeFalse
+    }
+
+    It 'maps a detected-apps 403 to the exact required Application permission' {
+        $result = Invoke-WinTunerGraphPermissionPreflight -GetManagedApps { @() } -GetDetectedApps {
+            throw 'Forbidden'
+        }
+
+        $result.Succeeded | Should -BeFalse
+        $result.Forbidden | Should -BeTrue
+        $result.MissingPermission | Should -Be 'DeviceManagementManagedDevices.Read.All'
+        $result.ChecksCompleted | Should -Be @('DeviceManagementApps.ReadWrite.All')
+    }
+
+    It 'keeps non-permission failures distinguishable' {
+        $result = Invoke-WinTunerGraphPermissionPreflight -GetManagedApps { throw 'network timeout' } -GetDetectedApps { @() }
+        $result.Succeeded | Should -BeFalse
+        $result.Forbidden | Should -BeFalse
+        $result.MissingPermission | Should -BeNullOrEmpty
+        $result.ErrorMessage | Should -Match 'network timeout'
+    }
+}

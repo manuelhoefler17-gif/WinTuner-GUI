@@ -64,3 +64,39 @@ Describe 'WinTuner authentication configuration' {
         { Unprotect-WinTunerClientSecretForCurrentUser -ProtectedClientSecret 'not-valid-base64' } | Should -Throw '*save it again*'
     }
 }
+Describe 'WinTuner app-only token cache' {
+    It 'targets only the dedicated WinTuner client-credential cache' {
+        $root = Join-Path $TestDrive 'LocalAppData'
+        $path = Get-WinTunerAppOnlyTokenCachePath -LocalApplicationDataPath $root
+        $path | Should -Be (Join-Path $root '.IdentityService\WinTuner-PowerShell-CC.nocae')
+        $path | Should -Not -Match 'mg\.msal\.cache'
+    }
+
+    It 'reports an absent cache without creating or deleting anything' {
+        $root = Join-Path $TestDrive 'AbsentCache'
+        $result = Clear-WinTunerAppOnlyTokenCache -LocalApplicationDataPath $root
+        $result.Existed | Should -BeFalse
+        $result.Cleared | Should -BeFalse
+        Test-Path -LiteralPath $root | Should -BeFalse
+    }
+
+    It 'deletes only the exact WinTuner app-only cache file' {
+        $root = Join-Path $TestDrive 'ExistingCache'
+        $identityRoot = Join-Path $root '.IdentityService'
+        $target = Join-Path $identityRoot 'WinTuner-PowerShell-CC.nocae'
+        $graphCache = Join-Path $identityRoot 'mg.msal.cache.nocae'
+        $unrelated = Join-Path $identityRoot 'WinTuner-PowerShell-CC.nocae.backup'
+        New-Item -ItemType Directory -Path $identityRoot -Force | Out-Null
+        Set-Content -LiteralPath $target -Value 'stale-token-cache'
+        Set-Content -LiteralPath $graphCache -Value 'graph-cache'
+        Set-Content -LiteralPath $unrelated -Value 'keep-me'
+
+        $result = Clear-WinTunerAppOnlyTokenCache -LocalApplicationDataPath $root
+
+        $result.Existed | Should -BeTrue
+        $result.Cleared | Should -BeTrue
+        Test-Path -LiteralPath $target | Should -BeFalse
+        Test-Path -LiteralPath $graphCache | Should -BeTrue
+        Test-Path -LiteralPath $unrelated | Should -BeTrue
+    }
+}
