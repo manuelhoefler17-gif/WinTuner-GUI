@@ -8,8 +8,8 @@ BeforeAll {
 }
 
 Describe 'GUI authentication modes' {
-    It 'declares version 0.10.20 and bootstraps the authentication module' {
-        $script:guiText | Should -Match '\$script:AppVersion\s*=\s*"0\.10\.20"'
+    It 'declares version 0.10.21 and bootstraps the authentication module' {
+        $script:guiText | Should -Match '\$script:AppVersion\s*=\s*"0\.10\.21"'
         $script:guiText | Should -Match "Modules/WinTuner\.Authentication\.psm1"
         $script:guiText | Should -Match '\$authenticationModulePath\s*=\s*Join-Path.*WinTuner\.Authentication\.psm1'
         $script:guiText | Should -Match 'Import-Module\s+\$authenticationModulePath\s+-Force'
@@ -78,11 +78,28 @@ Describe 'GUI authentication modes' {
         $function | Should -HaveCount 1
         $text = $function[0].Extent.Text
         $text | Should -Match 'Forbidden'
-        $text | Should -Match 'deviceAppManagement'
+        $text | Should -Match 'DeviceManagementApps\.ReadWrite\.All'
+        $text | Should -Match 'DeviceManagementManagedDevices\.Read\.All'
+        $text | Should -Match 'fresh app-only token'
         $text | Should -Match 'Application permissions'
         $text | Should -Match 'Grant admin consent'
     }
 
+    It 'clears only the WinTuner app-only token cache and checks both Graph permissions before accepting login' {
+        $function = @($script:guiAst.FindAll({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Start-WinTunerLogin'
+        }, $true))
+        $function | Should -HaveCount 1
+        $text = $function[0].Extent.Text
+        $text | Should -Match 'Clear-WinTunerAppOnlyTokenCache'
+        $text | Should -Match 'Invoke-WinTunerGraphPermissionPreflight'
+        $text | Should -Match 'deviceAppManagement/mobileApps\?\$top=1'
+        $text | Should -Match 'deviceManagement/detectedApps\?\$top=1'
+        $text | Should -Match 'PermissionPreflightPassed'
+        $text | Should -Not -Match 'mg\.msal\.cache'
+    }
     It 'validates certificate availability and clears client-secret connection parameters' {
         $function = @($script:guiAst.FindAll({
             param($node)

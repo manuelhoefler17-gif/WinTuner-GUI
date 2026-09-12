@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Development version: **0.10.20**
+Development version: **0.10.21**
 
 Latest published stable release: **v0.10.20**
 
@@ -16,7 +16,7 @@ Branches:
 - Changes are developed and tested on `Test`
 - Changes reach `main` only through Pull Requests
 
-At the current project state, `main` and `Test` are synchronized.
+`main` contains stable v0.10.20 while `Test` contains the active 0.10.21 development work.
 
 ---
 
@@ -543,6 +543,29 @@ Release completed:
 - verified `WinTuner_GUI.ps1` SHA256: `A898D57269254249CC895417F6A92EA859FAF15620F95087C9047DF9EECABC28`
 
 ---
+
+## 0.10.21 Development Status
+
+Implemented on `Test`:
+
+- clear only the dedicated `WinTuner-PowerShell-CC.nocae` cache before app-only WinTuner authentication
+- preserve Microsoft Graph's general MSAL cache and unrelated IdentityService files
+- validate `DeviceManagementApps.ReadWrite.All` and `DeviceManagementManagedDevices.Read.All` independently through read-only Graph requests
+- identify the exact missing Application permission without exposing raw Intune service JSON
+- extend the read-only tenant E2E runner to Interactive, ClientSecret and Certificate modes
+- accept E2E client secrets as `SecureString`, clear temporary connection values and prohibit tenant-write commands
+- update app-only status, diagnostic and test instructions for the fresh-token behavior
+
+Validation completed so far:
+
+- PowerShell syntax validation passed for all 43 repository scripts and modules
+- all 157 Pester tests passed
+- read-only ClientSecret tenant E2E confirmed both Application permissions, 11 managed Win32 apps and 544 detected apps
+- fresh-to-cached Discovery validation returned the same 544 detected apps and performed 0 tenant writes
+- final manual GUI validation confirmed app-only login, logout/relogin, permission checks, Discovery, Updates and Superseded Apps behavior
+
+---
+
 ## Testing Expectations
 
 Before committing significant changes:
@@ -584,6 +607,6 @@ Latest published stable release:
 
 Current development version:
 
-**0.10.20**
+**0.10.21**
 
-0.10.20 was published on 2026-09-12. The `main` and `Test` branches are synchronized.
+0.10.21 is under development on `Test`. The latest published stable release is v0.10.20.
