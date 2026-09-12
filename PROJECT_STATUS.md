@@ -4,7 +4,7 @@
 
 Development version: **0.10.19**
 
-Latest published stable release: **v0.10.18**
+Latest published stable release: **v0.10.19**
 
 Repository:
 `manuelhoefler17-gif/WinTuner-GUI`
@@ -474,9 +474,9 @@ Release completed:
 
 ---
 
-## 0.10.19 Release Candidate Status
+## 0.10.19 Release Status
 
-Implementation and final manual validation are complete on `Test`. Git integration and release publication are in progress.
+Released: **2026-09-12**
 
 Current scope:
 
@@ -497,7 +497,20 @@ Validation completed:
 - manually confirmed the persistent Updates result summary and retry behavior
 - manually confirmed the two-pass read-only tenant cache validation
 
+Release completed:
+
+- merged the implementation through Pull Request #133
+- corrected the publication date through Pull Request #134
+- created and pushed annotated tag v0.10.19 from synchronized main and Test commit 866671f
+- published the GitHub release with WinTuner_GUI.ps1 and its SHA256 checksum
+- independently downloaded both assets and verified the declared and actual SHA256
+- verified the downloaded script reports version 0.10.19 and has no PowerShell syntax errors
+- verified standalone dependency bootstrap directly from tag v0.10.19
+- verified all 14 runtime files match the release content, the release marker is 0.10.19, and no temporary downloads remain
+- verified WinTuner_GUI.ps1 SHA256: C99A2F47084BCA648D1E8CCFC74E3F84A3A414E16D95903923007CAF2BE14107
+
 ---
+
 ## Planned Authentication Options
 
 Support for app-only authentication using a Microsoft Entra application is planned for a future release.
@@ -548,10 +561,10 @@ For significant function changes, prefer replacing a complete known block rather
 
 Latest published stable release:
 
-**v0.10.18**
+**v0.10.19**
 
 Current development version:
 
 **0.10.19**
 
-0.10.19 is in development. The latest published stable release remains v0.10.18.
+0.10.19 was published on 2026-09-12.
