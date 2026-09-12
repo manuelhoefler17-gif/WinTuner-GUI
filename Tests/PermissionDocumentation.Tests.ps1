@@ -46,4 +46,23 @@ Describe 'Microsoft Graph permission documentation' {
             $script:gui | Should -Match ([regex]::Escape($scope))
         }
     }
+
+    It 'separates interactive User Login from customer-owned Entra Application requirements' {
+        foreach ($text in @(
+            'User login (interactive)'
+            'No customer-owned Entra App Registration is required'
+            'Entra application (client secret or certificate)'
+            'only these Microsoft Graph **application permissions**'
+            'Delegated permissions and'
+            'User.Read'
+            'are not required on this App Registration'
+        )) {
+            $script:readme | Should -Match ([regex]::Escape($text))
+        }
+
+        $script:gui | Should -Match ([regex]::Escape('USER LOGIN (Interactive)'))
+        $script:gui | Should -Match ([regex]::Escape('ENTRA APPLICATION (Client secret or certificate)'))
+        $script:gui | Should -Match ([regex]::Escape('Add only these Microsoft Graph > Application permissions:'))
+        $script:gui | Should -Match ([regex]::Escape('Delegated permissions and User.Read are not required'))
+    }
 }

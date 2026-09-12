@@ -51,8 +51,8 @@ Describe 'GUI connection state integration' {
             $node.Name -eq 'Set-ConnectedUIState'
         }, $true))
         $function | Should -HaveCount 1
-        $function[0].Extent.Text | Should -Match '\$loginButton\.Enabled\s*=\s*\(-not \$Connected'
-        $function[0].Extent.Text | Should -Match 'Test-ValidM365UserName'
+        $function[0].Extent.Text | Should -Match 'Update-WinTunerLoginButtonState'
+        $function[0].Extent.Text | Should -Match 'Update-WinTunerAuthenticationUI'
     }
 
     It 'connects Microsoft Graph during the initial login workflow' {
@@ -62,8 +62,9 @@ Describe 'GUI connection state integration' {
             $node.Name -eq 'Start-WinTunerLogin'
         }, $true))
         $function | Should -HaveCount 1
-        $function[0].Extent.Text | Should -Match 'Connect-WinTunerGraph\s+-UserPrincipalName\s+\$UserPrincipalName'
-        $function[0].Extent.Text | Should -Match 'AddArgument\(\$upn\)'
+        $function[0].Extent.Text | Should -Match 'Connect-WinTunerGraph\s+-AuthenticationMode\s+Interactive\s+-UserPrincipalName\s+\$UserPrincipalName'
+        $function[0].Extent.Text | Should -Match 'Confirm-WinTunerGraphContext'
+        $function[0].Extent.Text | Should -Match 'AddArgument\(\$configuration\.Mode\).*AddArgument\(\$upn\).*AddArgument\(\$graphTenantId\)'
     }
 
     It 'stores the Microsoft Graph context for reuse across runspaces' {

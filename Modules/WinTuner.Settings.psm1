@@ -12,6 +12,11 @@ function New-WinTunerDefaultSettings {
         WingetOverrides    = @{}
         DefaultPackagePath = "C:\Temp"
         AutoCheckUpdates   = $false
+        AuthenticationMode = 'Interactive'
+        EntraTenantId      = ''
+        EntraClientId      = ''
+        EntraClientSecretProtected = ''
+        EntraCertificateThumbprint = ''
     }
 }
 
@@ -61,6 +66,28 @@ function Import-WinTunerSettings {
 
         if ($o.PSObject.Properties['AutoCheckUpdates']) {
             $settings.AutoCheckUpdates = [bool]$o.AutoCheckUpdates
+        }
+
+        if ($o.PSObject.Properties['AuthenticationMode']) {
+            $mode = [string]$o.AuthenticationMode
+            if ($mode -in @('Interactive', 'ClientSecret', 'Certificate')) {
+                $settings.AuthenticationMode = $mode
+            }
+        }
+
+        if ($o.PSObject.Properties['EntraTenantId']) {
+            $settings.EntraTenantId = [string]$o.EntraTenantId
+        }
+
+        if ($o.PSObject.Properties['EntraClientId']) {
+            $settings.EntraClientId = [string]$o.EntraClientId
+        }
+        if ($o.PSObject.Properties['EntraClientSecretProtected']) {
+            $settings.EntraClientSecretProtected = [string]$o.EntraClientSecretProtected
+        }
+
+        if ($o.PSObject.Properties['EntraCertificateThumbprint']) {
+            $settings.EntraCertificateThumbprint = [string]$o.EntraCertificateThumbprint
         }
 
         if ($o.PSObject.Properties['WingetOverrides']) {

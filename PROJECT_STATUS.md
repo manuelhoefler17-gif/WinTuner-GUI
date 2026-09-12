@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Development version: **0.10.19**
+Development version: **0.10.20**
 
 Latest published stable release: **v0.10.19**
 
@@ -53,6 +53,7 @@ Main application:
 Modules:
 
 - `Modules/WinTuner.AppUpdate.psm1`
+- `Modules/WinTuner.Authentication.psm1`
 - `Modules/WinTuner.Connection.psm1`
 - `Modules/WinTuner.Core.psm1`
 - `Modules/WinTuner.DiscoveryDeployment.psm1`
@@ -511,19 +512,26 @@ Release completed:
 
 ---
 
-## Planned Authentication Options
+## 0.10.20 Development Status
 
-Support for app-only authentication using a Microsoft Entra application is planned for a future release.
+Current implementation scope:
 
-The goal is to allow WinTuner GUI to authenticate using a customer-owned Entra App Registration with either:
+- app-only Microsoft Entra authentication with a customer-owned App Registration
+- client-secret login with a masked field, optional Windows DPAPI CurrentUser-protected reuse, and no plaintext secret persistence or logging
+- certificate login using a certificate with an accessible private key from CurrentUser\My
+- authentication settings for mode, tenant, client ID, DPAPI-protected client secret and certificate thumbprint
+- centralized validation for authentication configuration, local certificate availability and Microsoft Graph process context
+- reuse of a validated app-only Graph process context by the login verification and Discovery runspaces
+- mode-specific permission guidance in Authentication settings plus clearly separated User Login and customer-owned Entra Application requirements in the general GUI summary and README
+- interactive user sign-in retained as the default
 
-- a client secret
-- a certificate
+Release state:
 
-This will provide an alternative to interactive user sign-in and make the authentication model more suitable for enterprise environments with stricter security and access requirements.
+- implementation is complete on Test and automated validation passed for all 43 PowerShell files and 145 Pester tests
+- final manual GUI validation is required before commit, Pull Request and merge
+- no v0.10.20 tag or release has been authorized
 
 ---
-
 ## Testing Expectations
 
 Before committing significant changes:
@@ -565,6 +573,6 @@ Latest published stable release:
 
 Current development version:
 
-**0.10.19**
+**0.10.20**
 
-0.10.19 was published on 2026-09-12.
+0.10.20 is under development on Test. The latest published stable release is v0.10.19.

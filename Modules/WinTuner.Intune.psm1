@@ -1,12 +1,81 @@
 Set-StrictMode -Version Latest
 
+function Get-WinTunerGraphContextValidation {
+    [CmdletBinding()]
+    param(
+        [ValidateSet('Interactive', 'ClientSecret', 'Certificate')]
+        [string]$AuthenticationMode = 'Interactive',
+        [AllowNull()][string]$UserPrincipalName,
+        [AllowNull()][string]$TenantId,
+        [AllowNull()][string]$ClientId,
+        [AllowNull()][object]$Context
+    )
+
+    if (-not $Context) {
+        $Context = Get-MgContext -ErrorAction SilentlyContinue
+    }
+    if (-not $Context) {
+        return [pscustomobject]@{ IsValid = $false; Reason = 'No Microsoft Graph process context is available.'; Context = $null }
+    }
+
+    if ($AuthenticationMode -eq 'Interactive') {
+        if ([string]::IsNullOrWhiteSpace($UserPrincipalName)) {
+            return [pscustomobject]@{ IsValid = $false; Reason = 'The expected user principal name is empty.'; Context = $Context }
+        }
+        if (-not [string]::Equals([string]$Context.Account, [string]$UserPrincipalName, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return [pscustomobject]@{ IsValid = $false; Reason = 'The Microsoft Graph account does not match the requested user.'; Context = $Context }
+        }
+    } else {
+        if ([string]::IsNullOrWhiteSpace($ClientId)) {
+            return [pscustomobject]@{ IsValid = $false; Reason = 'The expected Entra client ID is empty.'; Context = $Context }
+        }
+        if (-not [string]::Equals([string]$Context.ClientId, [string]$ClientId, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return [pscustomobject]@{ IsValid = $false; Reason = 'The Microsoft Graph client ID does not match the configured Entra application.'; Context = $Context }
+        }
+
+        $expectedTenantGuid = [guid]::Empty
+        if ([guid]::TryParse([string]$TenantId, [ref]$expectedTenantGuid)) {
+            if (-not [string]::Equals([string]$Context.TenantId, $expectedTenantGuid.ToString(), [System.StringComparison]::OrdinalIgnoreCase)) {
+                return [pscustomobject]@{ IsValid = $false; Reason = 'The Microsoft Graph tenant does not match the configured tenant ID.'; Context = $Context }
+            }
+        }
+
+        $authTypeProperty = $Context.PSObject.Properties['AuthType']
+        if (-not $authTypeProperty -or [string]$authTypeProperty.Value -ne 'AppOnly') {
+            return [pscustomobject]@{ IsValid = $false; Reason = 'The Microsoft Graph context is not an app-only context.'; Context = $Context }
+        }
+    }
+
+    return [pscustomobject]@{ IsValid = $true; Reason = ''; Context = $Context }
+}
+
+function Confirm-WinTunerGraphContext {
+    [CmdletBinding()]
+    param(
+        [ValidateSet('Interactive', 'ClientSecret', 'Certificate')]
+        [string]$AuthenticationMode = 'Interactive',
+        [AllowNull()][string]$UserPrincipalName,
+        [AllowNull()][string]$TenantId,
+        [AllowNull()][string]$ClientId
+    )
+
+    $validation = Get-WinTunerGraphContextValidation -AuthenticationMode $AuthenticationMode -UserPrincipalName $UserPrincipalName -TenantId $TenantId -ClientId $ClientId
+    if (-not $validation.IsValid) {
+        throw $validation.Reason
+    }
+    return $validation.Context
+}
+
 function Connect-WinTunerGraph {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [string]$UserPrincipalName,
-
+        [ValidateSet('Interactive', 'ClientSecret', 'Certificate')]
+        [string]$AuthenticationMode = 'Interactive',
+        [AllowNull()][string]$UserPrincipalName,
+        [AllowNull()][string]$TenantId,
+        [AllowNull()][string]$ClientId,
+        [AllowNull()][string]$ClientSecret,
+        [AllowNull()][string]$CertificateThumbprint,
         [string[]]$Scopes = @(
             'DeviceManagementApps.ReadWrite.All',
             'DeviceManagementManagedDevices.Read.All',
@@ -15,56 +84,73 @@ function Connect-WinTunerGraph {
     )
 
     if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
-        throw "Microsoft.Graph.Authentication module not found. Install Microsoft.Graph first."
+        throw 'Microsoft.Graph.Authentication module not found. Install Microsoft.Graph first.'
     }
 
-    if ($UserPrincipalName -notmatch '^[^@\s]+@[^@\s]+$') {
-        throw "Invalid user principal name: '$UserPrincipalName'."
+    if ($AuthenticationMode -eq 'Interactive') {
+        if ($UserPrincipalName -notmatch '^[^@\s]+@[^@\s]+$') {
+            throw "Invalid user principal name: '$UserPrincipalName'."
+        }
+        $TenantId = $UserPrincipalName.Split('@')[1]
+    } else {
+        if ([string]::IsNullOrWhiteSpace($TenantId)) {
+            throw 'Tenant ID is required for app-only Microsoft Graph authentication.'
+        }
+        $parsedClientId = [guid]::Empty
+        if (-not [guid]::TryParse([string]$ClientId, [ref]$parsedClientId)) {
+            throw 'A valid Entra application (client) ID is required for app-only Microsoft Graph authentication.'
+        }
+        if ($AuthenticationMode -eq 'ClientSecret' -and [string]::IsNullOrWhiteSpace($ClientSecret)) {
+            throw 'Client secret is required for client-secret Microsoft Graph authentication.'
+        }
+        if ($AuthenticationMode -eq 'Certificate' -and [string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
+            throw 'Certificate thumbprint is required for certificate Microsoft Graph authentication.'
+        }
     }
 
     $context = Get-MgContext -ErrorAction SilentlyContinue
-    $needsAuth = $false
-
-    if (-not $context) {
-        $needsAuth = $true
-    }
-    else {
-        foreach ($scope in $Scopes) {
-            if ($context.Scopes -notcontains $scope) {
-                $needsAuth = $true
-                break
+    if ($context) {
+        $existingValidation = Get-WinTunerGraphContextValidation -AuthenticationMode $AuthenticationMode -UserPrincipalName $UserPrincipalName -TenantId $TenantId -ClientId $ClientId -Context $context
+        if ($existingValidation.IsValid) {
+            if ($AuthenticationMode -ne 'Interactive' -or @($Scopes | Where-Object { $context.Scopes -notcontains $_ }).Count -eq 0) {
+                return $context
             }
         }
 
-        if ($context.Account -ne $UserPrincipalName) {
-            $needsAuth = $true
-        }
+        try {
+            Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
+        } catch {}
     }
 
-    if ($needsAuth) {
-        if ($context) {
+    switch ($AuthenticationMode) {
+        'Interactive' {
+            $null = Connect-MgGraph -TenantId $TenantId -Scopes $Scopes -ContextScope Process -NoWelcome -ErrorAction Stop *>&1
+        }
+        'ClientSecret' {
+            $secureSecret = ConvertTo-SecureString -String $ClientSecret -AsPlainText -Force
+            $credential = [System.Management.Automation.PSCredential]::new($ClientId, $secureSecret)
             try {
-                Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
-            }
-            catch {
+                $null = Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $credential -ContextScope Process -NoWelcome -ErrorAction Stop *>&1
+            } finally {
+                $credential = $null
+                $secureSecret = $null
+                $ClientSecret = $null
             }
         }
+        'Certificate' {
+            $normalizedThumbprint = ($CertificateThumbprint -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+            $null = Connect-MgGraph -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $normalizedThumbprint -ContextScope Process -NoWelcome -ErrorAction Stop *>&1
+        }
+    }
 
-        $tenantDomain = $UserPrincipalName.Split('@')[1]
-
-        $null = Connect-MgGraph `
-            -TenantId $tenantDomain `
-            -Scopes $Scopes `
-            -ContextScope Process `
-            -NoWelcome `
-            -ErrorAction Stop *>&1
-
-        $context = Get-MgContext -ErrorAction Stop
+    $context = Get-MgContext -ErrorAction Stop
+    $validation = Get-WinTunerGraphContextValidation -AuthenticationMode $AuthenticationMode -UserPrincipalName $UserPrincipalName -TenantId $TenantId -ClientId $ClientId -Context $context
+    if (-not $validation.IsValid) {
+        throw "Microsoft Graph authentication returned an unexpected context: $($validation.Reason)"
     }
 
     return $context
 }
-
 
 $script:detectedAppsCachePath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'WinTuner_DetectedAppsCache.json'
 
@@ -338,6 +424,8 @@ function Disconnect-WinTunerGraph {
 
 Export-ModuleMember -Function `
     Connect-WinTunerGraph, `
+    Get-WinTunerGraphContextValidation, `
+    Confirm-WinTunerGraphContext, `
     Get-WinTunerDetectedApps, `
     Clear-WinTunerDetectedAppsCache, `
     Disconnect-WinTunerGraph
