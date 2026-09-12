@@ -2,7 +2,7 @@
 
 All notable changes to WinTuner GUI are documented here.
 
-## [0.10.21] – Unreleased
+## [0.10.21] – 2026-09-12
 
 ### Added
 - Added an app-only Microsoft Graph preflight that separately validates managed-app and detected-app access and identifies the exact missing Application permission on 403 responses.
