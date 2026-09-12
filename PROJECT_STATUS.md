@@ -4,7 +4,7 @@
 
 Development version: **0.10.20**
 
-Latest published stable release: **v0.10.19**
+Latest published stable release: **v0.10.20**
 
 Repository:
 `manuelhoefler17-gif/WinTuner-GUI`
@@ -514,6 +514,8 @@ Release completed:
 
 ## 0.10.20 Release Status
 
+Released: **2026-09-12**
+
 Completed and merged through Pull Request #136:
 
 - app-only Microsoft Entra authentication with a customer-owned App Registration
@@ -529,10 +531,16 @@ Completed and merged through Pull Request #136:
 - read-only app-only tenant validation confirmed direct Microsoft Graph mobile-app access and Get-WtWin32Apps retrieval
 - main and Test were synchronized at merge commit e36bfd4
 
-Release state:
+Release completed:
 
-- changelog and version references are prepared for v0.10.20
-- no v0.10.20 tag or GitHub release has been authorized
+- merged the release documentation through Pull Request #137
+- created and pushed annotated tag `v0.10.20` from synchronized `main` and `Test` commit `827c927`
+- published the GitHub release with `WinTuner_GUI.ps1` and its SHA256 checksum
+- independently downloaded both assets and verified the declared and actual SHA256
+- verified the downloaded script reports version 0.10.20 and has no PowerShell syntax errors
+- verified standalone dependency bootstrap directly from tag `v0.10.20`
+- verified all 15 runtime files match the release content and the release marker is 0.10.20
+- verified `WinTuner_GUI.ps1` SHA256: `A898D57269254249CC895417F6A92EA859FAF15620F95087C9047DF9EECABC28`
 
 ---
 ## Testing Expectations
@@ -572,10 +580,10 @@ For significant function changes, prefer replacing a complete known block rather
 
 Latest published stable release:
 
-**v0.10.19**
+**v0.10.20**
 
 Current development version:
 
 **0.10.20**
 
-0.10.20 is under development on Test. The latest published stable release is v0.10.19.
+0.10.20 was published on 2026-09-12. The `main` and `Test` branches are synchronized.
