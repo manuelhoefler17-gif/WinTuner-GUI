@@ -562,7 +562,7 @@ Validation completed so far:
 - all 157 Pester tests passed
 - read-only ClientSecret tenant E2E confirmed both Application permissions, 11 managed Win32 apps and 544 detected apps
 - fresh-to-cached Discovery validation returned the same 544 detected apps and performed 0 tenant writes
-- final manual GUI validation remains before the 0.10.21 release
+- final manual GUI validation confirmed app-only login, logout/relogin, permission checks, Discovery, Updates and Superseded Apps behavior
 
 ---
 
