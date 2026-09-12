@@ -2,7 +2,7 @@
 
 All notable changes to WinTuner GUI are documented here.
 
-## [0.10.19] – 2026-09-11
+## [0.10.19] – 2026-09-12
 
 ### Added
 - Added Graph retrieval time and cache-age metadata to Discovery scan results.
