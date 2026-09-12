@@ -544,9 +544,9 @@ Release completed:
 
 ---
 
-## 0.10.21 Development Status
+## 0.10.21 Release Status
 
-Implemented on `Test`:
+Completed and merged through Pull Request #139:
 
 - clear only the dedicated `WinTuner-PowerShell-CC.nocae` cache before app-only WinTuner authentication
 - preserve Microsoft Graph's general MSAL cache and unrelated IdentityService files
@@ -556,13 +556,18 @@ Implemented on `Test`:
 - accept E2E client secrets as `SecureString`, clear temporary connection values and prohibit tenant-write commands
 - update app-only status, diagnostic and test instructions for the fresh-token behavior
 
-Validation completed so far:
+Validation completed:
 
 - PowerShell syntax validation passed for all 43 repository scripts and modules
 - all 157 Pester tests passed
 - read-only ClientSecret tenant E2E confirmed both Application permissions, 11 managed Win32 apps and 544 detected apps
 - fresh-to-cached Discovery validation returned the same 544 detected apps and performed 0 tenant writes
 - final manual GUI validation confirmed app-only login, logout/relogin, permission checks, Discovery, Updates and Superseded Apps behavior
+
+Release preparation:
+
+- changelog finalized for v0.10.21 on 2026-09-12
+- tag and GitHub release authorized; publication pending final release-asset verification
 
 ---
 
