@@ -4,7 +4,7 @@
 
 Development version: **0.10.21**
 
-Latest published stable release: **v0.10.20**
+Latest published stable release: **v0.10.21**
 
 Repository:
 `manuelhoefler17-gif/WinTuner-GUI`
@@ -546,6 +546,8 @@ Release completed:
 
 ## 0.10.21 Release Status
 
+Released: **2026-09-12**
+
 Completed and merged through Pull Request #139:
 
 - clear only the dedicated `WinTuner-PowerShell-CC.nocae` cache before app-only WinTuner authentication
@@ -564,10 +566,15 @@ Validation completed:
 - fresh-to-cached Discovery validation returned the same 544 detected apps and performed 0 tenant writes
 - final manual GUI validation confirmed app-only login, logout/relogin, permission checks, Discovery, Updates and Superseded Apps behavior
 
-Release preparation:
+Release completed:
 
-- changelog finalized for v0.10.21 on 2026-09-12
-- tag and GitHub release authorized; publication pending final release-asset verification
+- finalized the changelog through Pull Request #140
+- created and pushed annotated tag `v0.10.21` from synchronized `main` and `Test` commit `7809828`
+- published the GitHub release with `WinTuner_GUI.ps1` and its SHA256 checksum
+- independently downloaded both assets and verified version, syntax and SHA256 integrity
+- verified standalone dependency bootstrap directly from tag `v0.10.21`
+- verified all 15 runtime files match the release content and the release marker is 0.10.21
+- verified `WinTuner_GUI.ps1` SHA256: `36EF43CA5920AD8DF831D56F51BE78F5318F60D27C7D5CE07F91EF225F57D0A1`
 
 ---
 
@@ -608,10 +615,10 @@ For significant function changes, prefer replacing a complete known block rather
 
 Latest published stable release:
 
-**v0.10.20**
+**v0.10.21**
 
 Current development version:
 
 **0.10.21**
 
-0.10.21 is under development on `Test`. The latest published stable release is v0.10.20.
+0.10.21 was published on 2026-09-12. The `main` and `Test` branches are synchronized.
