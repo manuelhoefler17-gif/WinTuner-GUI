@@ -4,7 +4,7 @@
 
 Development version: **0.10.22**
 
-Latest published stable release: **v0.10.21**
+Latest published stable release: **v0.10.22**
 
 Repository:
 `manuelhoefler17-gif/WinTuner-GUI`
@@ -16,7 +16,7 @@ Branches:
 - Changes are developed and tested on `Test`
 - Changes reach `main` only through Pull Requests
 
-`main` and `Test` contain v0.10.21; the 0.10.22 bugfix release is being prepared on `Test`.
+`main` and `Test` are synchronized with the completed v0.10.22 release.
 
 ---
 
@@ -580,7 +580,7 @@ Release completed:
 
 ## 0.10.22 Release Status
 
-Release candidate: **2026-09-28**
+Released: **2026-09-28**
 
 Completed:
 
@@ -596,6 +596,16 @@ Validation completed:
 - PowerShell syntax validation passed for all 44 repository scripts and modules
 - all 160 Pester tests passed
 - git diff --check passed
+
+Release completed:
+
+- merged the implementation and release metadata through Pull Request #142
+- created and pushed annotated tag v0.10.22 from synchronized main and Test commit c0d2c44
+- published the GitHub release with WinTuner_GUI.ps1 and its SHA256 checksum
+- independently downloaded both assets and verified version, syntax and SHA256 integrity
+- verified standalone dependency bootstrap directly from tag v0.10.22
+- verified all 15 runtime files match the tagged release content and the release marker is 0.10.22
+- verified WinTuner_GUI.ps1 SHA256: 805E3373ABED06A7852A563D5B54ADADAFA90F52AB73BBE24D7139B7F169A9D2
 
 ---
 
@@ -636,10 +646,10 @@ For significant function changes, prefer replacing a complete known block rather
 
 Latest published stable release:
 
-**v0.10.21**
+**v0.10.22**
 
 Current development version:
 
 **0.10.22**
 
-0.10.22 is being prepared on `Test` as a Discovery deployment bugfix release.
+0.10.22 was published on 2026-09-28. The `main` and `Test` branches are synchronized.
