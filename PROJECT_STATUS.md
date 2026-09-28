@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Development version: **0.10.21**
+Development version: **0.10.22**
 
 Latest published stable release: **v0.10.21**
 
@@ -16,7 +16,7 @@ Branches:
 - Changes are developed and tested on `Test`
 - Changes reach `main` only through Pull Requests
 
-`main` contains stable v0.10.20 while `Test` contains the active 0.10.21 development work.
+`main` and `Test` contain v0.10.21; the 0.10.22 bugfix release is being prepared on `Test`.
 
 ---
 
@@ -578,6 +578,27 @@ Release completed:
 
 ---
 
+## 0.10.22 Release Status
+
+Release candidate: **2026-09-28**
+
+Completed:
+
+- preserved the WinGet target version across the isolated Discovery worker, normalized results and persistent cache
+- rejected incomplete WinGet matches that cannot be deployed safely
+- invalidated and refreshed legacy Discovery cache entries without a target version
+- added regression coverage for fresh worker results, cache hits and legacy-cache refresh
+- manually confirmed the corrected Discovery deployment flow
+- live-validated target versions for ams.SolutionAG.ams.Client.X64 and Autodesk.NavisworksFreedom.2027
+
+Validation completed:
+
+- PowerShell syntax validation passed for all 44 repository scripts and modules
+- all 160 Pester tests passed
+- git diff --check passed
+
+---
+
 ## Testing Expectations
 
 Before committing significant changes:
@@ -619,6 +640,6 @@ Latest published stable release:
 
 Current development version:
 
-**0.10.21**
+**0.10.22**
 
-0.10.21 was published on 2026-09-12. The `main` and `Test` branches are synchronized.
+0.10.22 is being prepared on `Test` as a Discovery deployment bugfix release.

@@ -91,14 +91,19 @@ foreach ($item in $inputData) {
                 }
 
                 $packageId = [string]$result.PackageID
+                $version = [string]$result.Version
 
-                if ([string]::IsNullOrWhiteSpace($packageId)) {
+                if (
+                    [string]::IsNullOrWhiteSpace($packageId) -or
+                    [string]::IsNullOrWhiteSpace($version)
+                ) {
                     continue
                 }
 
                 [pscustomobject]@{
                     Name      = [string]$result.Name
                     PackageID = $packageId
+                    Version   = $version
                 }
             }
         )
