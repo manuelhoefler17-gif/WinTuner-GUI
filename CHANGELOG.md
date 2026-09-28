@@ -2,6 +2,13 @@
 
 All notable changes to WinTuner GUI are documented here.
 
+## [0.10.22] – 2026-09-28
+
+### Fixed
+- Preserved the WinGet target version across isolated Discovery workers, in-memory results, and the persistent Discovery cache so checked matches can be packaged and deployed.
+- Invalidated legacy Discovery cache entries that do not contain a target version and refreshed them automatically instead of presenting undeployable matches.
+- Ignored incomplete fresh WinGet results that do not provide both a package ID and target version.
+
 ## [0.10.21] – 2026-09-12
 
 ### Added

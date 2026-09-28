@@ -219,6 +219,31 @@ $script:discoverySearchCacheLoaded = $false
 $script:discoverySearchCacheDirty  = $false
 $script:discoveryCachePath         = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'WinTuner_DiscoveryCache.json'
 
+function Get-WinTunerDiscoveryResultVersion {
+    param([AllowNull()][object]$InputObject)
+
+    if ($null -eq $InputObject) {
+        return ''
+    }
+
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        foreach ($key in $InputObject.Keys) {
+            if ([string]::Equals([string]$key, 'Version', [System.StringComparison]::OrdinalIgnoreCase)) {
+                return [string]$InputObject[$key]
+            }
+        }
+
+        return ''
+    }
+
+    $property = $InputObject.PSObject.Properties['Version']
+    if ($property) {
+        return [string]$property.Value
+    }
+
+    return ''
+}
+
 function Get-DiscoverySearchDiskCache {
     $cache = @{}
 
@@ -249,6 +274,7 @@ function Get-DiscoverySearchDiskCache {
                     [pscustomobject]@{
                         Name      = [string]$item.Name
                         PackageID = [string]$item.PackageID
+                        Version   = (Get-WinTunerDiscoveryResultVersion -InputObject $item)
                     }
                 }
             )
@@ -296,6 +322,7 @@ function Save-WinTunerDiscoveryCache {
                         [pscustomobject]@{
                             Name      = [string]$item.Name
                             PackageID = [string]$item.PackageID
+                            Version   = (Get-WinTunerDiscoveryResultVersion -InputObject $item)
                         }
                     }
                 )
@@ -361,7 +388,18 @@ function Search-WinTunerDiscoveryPackageCached {
         ).TotalHours
 
         if ($ageHours -lt $CacheTtlHours) {
-            return @($entry.results)
+            $cachedResults = @($entry.results)
+            $cacheHasDeployableResults = -not @(
+                $cachedResults |
+                    Where-Object {
+                        [string]::IsNullOrWhiteSpace([string]$_.PackageID) -or
+                        [string]::IsNullOrWhiteSpace((Get-WinTunerDiscoveryResultVersion -InputObject $_))
+                    }
+            )
+
+            if ($cacheHasDeployableResults) {
+                return $cachedResults
+            }
         }
 
         [void]$script:discoverySearchCache.Remove($cacheKey)
@@ -379,12 +417,14 @@ function Search-WinTunerDiscoveryPackageCached {
         $rawResults |
             Where-Object {
                 -not [string]::IsNullOrWhiteSpace([string]$_.Name) -and
-                -not [string]::IsNullOrWhiteSpace([string]$_.PackageID)
+                -not [string]::IsNullOrWhiteSpace([string]$_.PackageID) -and
+                -not [string]::IsNullOrWhiteSpace((Get-WinTunerDiscoveryResultVersion -InputObject $_))
             } |
             ForEach-Object {
                 [pscustomobject]@{
                     Name      = [string]$_.Name
                     PackageID = [string]$_.PackageID
+                    Version   = (Get-WinTunerDiscoveryResultVersion -InputObject $_)
                 }
             } |
             Sort-Object PackageID -Unique
@@ -545,21 +585,31 @@ function Search-WinTunerDiscoveryPackagesBatchCached {
                             [pscustomobject]@{
                                 Name      = [string]$item.Name
                                 PackageID = [string]$item.PackageID
+                                Version   = (Get-WinTunerDiscoveryResultVersion -InputObject $item)
                             }
                         }
                     )
-
-                    $resultList.Add(
-                        [pscustomobject]@{
-                            Query     = $query
-                            Success   = $true
-                            FromCache = $true
-                            Results   = $cachedResults
-                            Error     = $null
-                        }
+                    $cacheHasDeployableResults = -not @(
+                        $cachedResults |
+                            Where-Object {
+                                [string]::IsNullOrWhiteSpace([string]$_.PackageID) -or
+                                [string]::IsNullOrWhiteSpace((Get-WinTunerDiscoveryResultVersion -InputObject $_))
+                            }
                     )
 
-                    continue
+                    if ($cacheHasDeployableResults) {
+                        $resultList.Add(
+                            [pscustomobject]@{
+                                Query     = $query
+                                Success   = $true
+                                FromCache = $true
+                                Results   = $cachedResults
+                                Error     = $null
+                            }
+                        )
+
+                        continue
+                    }
                 }
             }
             catch {
@@ -731,14 +781,19 @@ function Search-WinTunerDiscoveryPackagesBatchCached {
                         }
 
                         $packageId = [string]$item.PackageID
+                        $version = (Get-WinTunerDiscoveryResultVersion -InputObject $item)
 
-                        if ([string]::IsNullOrWhiteSpace($packageId)) {
+                        if (
+                            [string]::IsNullOrWhiteSpace($packageId) -or
+                            [string]::IsNullOrWhiteSpace($version)
+                        ) {
                             continue
                         }
 
                         [pscustomobject]@{
                             Name      = [string]$item.Name
                             PackageID = $packageId
+                            Version   = $version
                         }
                     }
                 )
