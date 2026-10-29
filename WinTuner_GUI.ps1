@@ -55,7 +55,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.22"
+$script:appVersion  = "0.10.23"
 
 # Bootstrap release dependencies and keep them synchronized with the GUI release.
 $requiredReleaseFiles = @(
@@ -1589,6 +1589,9 @@ function Complete-WinTunerAppUpdateBatch {
   foreach ($itemResult in @($batchResult.Results)) {
     if ($itemResult.Succeeded) {
       Write-Log "Successfully updated in background: $($itemResult.Name) ($($itemResult.CurrentVersion) -> $($itemResult.EffectiveVersion))"
+      if (-not [string]::IsNullOrWhiteSpace([string]$itemResult.AutoUpdateSummary)) {
+        Write-Log "Available-assignment AutoUpdate for $($itemResult.Name): $($itemResult.AutoUpdateSummary)"
+      }
       $cachedApp = $null
       foreach ($candidate in @($script:updateApps)) {
         $graphMatches = (-not [string]::IsNullOrWhiteSpace([string]$itemResult.GraphId) -and [string]$candidate.GraphId -eq [string]$itemResult.GraphId)

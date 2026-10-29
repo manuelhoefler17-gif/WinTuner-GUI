@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Development version: **0.10.22**
+Development version: **0.10.23**
 
 Latest published stable release: **v0.10.22**
 
@@ -16,7 +16,17 @@ Branches:
 - Changes are developed and tested on `Test`
 - Changes reach `main` only through Pull Requests
 
-`main` and `Test` are synchronized with the completed v0.10.22 release.
+The v0.10.23 release is being prepared on `Test`; the latest published release remains v0.10.22 until publication.
+
+## 0.10.23 Release Preparation
+
+- Enable AutoUpdate superseded apps on copied Available assignments of the newly deployed app after an existing Intune app is updated.
+- Preserve other assignment settings and skip other assignment intents.
+- Report configuration failures as warnings after a successful deployment, avoiding an unnecessary repeated deployment.
+- Manual tenant test confirmed Greenshot updated from 1.3.315 to 1.3.328 and its Available assignment shows AutoUpdate = Yes.
+- A transient HTTP 429 during package creation failed safely; a user-initiated retry succeeded.
+- Release validation passed: 44 PowerShell files parsed without errors, 161 Pester tests passed, and git diff --check passed.
+- Unified interactive authentication is deferred to the next development change after this release.
 
 ---
 
@@ -646,10 +656,10 @@ For significant function changes, prefer replacing a complete known block rather
 
 Latest published stable release:
 
-**v0.10.22**
+**v0.10.22** (v0.10.23 prepared for publication)
 
 Current development version:
 
-**0.10.22**
+**0.10.23**
 
-0.10.22 was published on 2026-09-28. The `main` and `Test` branches are synchronized.
+0.10.22 was published on 2026-09-28. Version 0.10.23 is being prepared on `Test` on 2026-10-29.

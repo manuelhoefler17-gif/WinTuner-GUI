@@ -10,6 +10,116 @@ function Get-WinTunerAppUpdateProperty {
     if ($property) { return [string]$property.Value }
     return ''
 }
+
+function Get-WinTunerAppUpdateObjectValue {
+    param(
+        [AllowNull()][object]$InputObject,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    if ($null -eq $InputObject) { return $null }
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        if ($InputObject.Contains($Name)) { return $InputObject[$Name] }
+        return $null
+    }
+
+    $property = $InputObject.PSObject.Properties[$Name]
+    if ($property) { return $property.Value }
+    return $null
+}
+
+function ConvertTo-WinTunerAppUpdateHashtable {
+    param([AllowNull()][object]$InputObject)
+
+    if ($null -eq $InputObject) { return [ordered]@{} }
+    return ($InputObject | ConvertTo-Json -Depth 30 | ConvertFrom-Json -AsHashtable -Depth 30)
+}
+
+function Set-WinTunerAvailableAssignmentAutoUpdate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$GraphId,
+        [scriptblock]$InvokeGraphRequest = {
+            param([string]$Method, [string]$Uri, [AllowNull()][string]$Body)
+            $parameters = @{ Method = $Method; Uri = $Uri; ErrorAction = 'Stop' }
+            if (-not [string]::IsNullOrWhiteSpace($Body)) {
+                $parameters.Body = $Body
+                $parameters.ContentType = 'application/json'
+            }
+            Invoke-MgGraphRequest @parameters
+        }
+    )
+
+    if (-not (Get-Command Invoke-MgGraphRequest -ErrorAction SilentlyContinue)) {
+        Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+    }
+    if (-not (Get-Command Invoke-MgGraphRequest -ErrorAction SilentlyContinue)) {
+        throw 'Microsoft.Graph.Authentication does not provide Invoke-MgGraphRequest.'
+    }
+
+    $escapedGraphId = [uri]::EscapeDataString($GraphId)
+    $nextLink = "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps/$escapedGraphId/assignments?`$top=999"
+    $assignments = [System.Collections.Generic.List[object]]::new()
+    while (-not [string]::IsNullOrWhiteSpace($nextLink)) {
+        $page = & $InvokeGraphRequest 'GET' $nextLink $null
+        foreach ($assignment in @(Get-WinTunerAppUpdateObjectValue -InputObject $page -Name 'value')) {
+            if ($assignment) { $assignments.Add($assignment) }
+        }
+        $nextLink = [string](Get-WinTunerAppUpdateObjectValue -InputObject $page -Name '@odata.nextLink')
+    }
+
+    $availableCount = 0
+    $enabledCount = 0
+    $alreadyEnabledCount = 0
+    foreach ($assignment in $assignments) {
+        if (-not [string]::Equals([string](Get-WinTunerAppUpdateObjectValue -InputObject $assignment -Name 'intent'), 'available', [System.StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+        $availableCount++
+
+        $settings = ConvertTo-WinTunerAppUpdateHashtable -InputObject (Get-WinTunerAppUpdateObjectValue -InputObject $assignment -Name 'settings')
+        $existingAutoUpdate = Get-WinTunerAppUpdateObjectValue -InputObject $settings -Name 'autoUpdateSettings'
+        $existingState = [string](Get-WinTunerAppUpdateObjectValue -InputObject $existingAutoUpdate -Name 'autoUpdateSupersededAppsState')
+        if ([string]::Equals($existingState, 'enabled', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $alreadyEnabledCount++
+            continue
+        }
+
+        if (-not $settings.Contains('@odata.type')) {
+            $settings['@odata.type'] = '#microsoft.graph.win32LobAppAssignmentSettings'
+        }
+        $settings['autoUpdateSettings'] = [ordered]@{
+            '@odata.type' = '#microsoft.graph.win32LobAppAutoUpdateSettings'
+            autoUpdateSupersededAppsState = 'enabled'
+        }
+
+        $assignmentId = [string](Get-WinTunerAppUpdateObjectValue -InputObject $assignment -Name 'id')
+        if ([string]::IsNullOrWhiteSpace($assignmentId)) {
+            throw 'Microsoft Graph returned an Available assignment without an ID.'
+        }
+        $assignmentUri = "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps/$escapedGraphId/assignments/$([uri]::EscapeDataString($assignmentId))"
+        $body = @{ settings = $settings } | ConvertTo-Json -Depth 30 -Compress
+        $null = & $InvokeGraphRequest 'PATCH' $assignmentUri $body
+        $enabledCount++
+    }
+
+    $summary = if ($availableCount -eq 0) {
+        'No Available assignments found; AutoUpdate was not required.'
+    }
+    elseif ($enabledCount -eq 0) {
+        "AutoUpdate was already enabled for all $alreadyEnabledCount Available assignment(s)."
+    }
+    else {
+        "Enabled AutoUpdate for $enabledCount Available assignment(s); already enabled for $alreadyEnabledCount."
+    }
+    return [pscustomobject]@{
+        AvailableCount      = $availableCount
+        EnabledCount        = $enabledCount
+        AlreadyEnabledCount = $alreadyEnabledCount
+        Summary             = $summary
+    }
+}
+
 function New-WinTunerAppUpdateItemResult {
     param(
         [bool]$Succeeded,
@@ -20,7 +130,8 @@ function New-WinTunerAppUpdateItemResult {
         [AllowNull()][string]$GraphId,
         [AllowNull()][string]$PackageId,
         [string]$ReasonCode,
-        [string]$Message
+        [string]$Message,
+        [AllowNull()][string]$AutoUpdateSummary
     )
 
     [pscustomobject]@{
@@ -33,6 +144,7 @@ function New-WinTunerAppUpdateItemResult {
         PackageId        = $PackageId
         ReasonCode       = $ReasonCode
         Message          = $Message
+        AutoUpdateSummary = $AutoUpdateSummary
     }
 }
 
@@ -42,7 +154,8 @@ function Invoke-WinTunerAppUpdateItem {
         [Parameter(Mandatory)][string]$RootPackageFolder,
         [Parameter(Mandatory)][scriptblock]$BuildPackage,
         [Parameter(Mandatory)][scriptblock]$ValidateArtifact,
-        [Parameter(Mandatory)][scriptblock]$DeployPackage
+        [Parameter(Mandatory)][scriptblock]$DeployPackage,
+        [Parameter(Mandatory)][scriptblock]$ConfigureAvailableAssignmentAutoUpdate
     )
 
     $name = Get-WinTunerAppUpdateProperty -InputObject $App -Name 'Name'
@@ -157,7 +270,7 @@ function Invoke-WinTunerAppUpdateItem {
     }
 
     try {
-        $null = & $DeployPackage $App $packageId $effectiveVersion $RootPackageFolder
+        $deployment = & $DeployPackage $App $packageId $effectiveVersion $RootPackageFolder
     }
     catch {
         return New-WinTunerAppUpdateItemResult `
@@ -172,6 +285,23 @@ function Invoke-WinTunerAppUpdateItem {
             -Message "Update failed for ${name}: $($_.Exception.Message)"
     }
 
+    $autoUpdateSummary = ''
+    if (-not [string]::IsNullOrWhiteSpace($graphId)) {
+        $deployedGraphId = [string](Get-WinTunerAppUpdateObjectValue -InputObject $deployment -Name 'Id')
+        if ([string]::IsNullOrWhiteSpace($deployedGraphId)) {
+            $autoUpdateSummary = 'Warning: AutoUpdate could not be configured because the new app ID was not returned.'
+        }
+        else {
+            try {
+                $autoUpdateResult = & $ConfigureAvailableAssignmentAutoUpdate $deployedGraphId
+                $autoUpdateSummary = [string](Get-WinTunerAppUpdateObjectValue -InputObject $autoUpdateResult -Name 'Summary')
+            }
+            catch {
+                $autoUpdateSummary = "Warning: Available-assignment AutoUpdate could not be configured: $($_.Exception.Message)"
+            }
+        }
+    }
+
     return New-WinTunerAppUpdateItemResult `
         -Succeeded $true `
         -Name $name `
@@ -181,7 +311,8 @@ function Invoke-WinTunerAppUpdateItem {
         -GraphId $graphId `
         -PackageId $packageId `
         -ReasonCode 'Updated' `
-        -Message "Update completed successfully for $name."
+        -Message "Update completed successfully for $name." `
+        -AutoUpdateSummary $autoUpdateSummary
 }
 
 function Invoke-WinTunerAppUpdateBatch {
@@ -224,6 +355,10 @@ function Invoke-WinTunerAppUpdateBatch {
                     -ErrorAction Stop
             }
         },
+        [scriptblock]$ConfigureAvailableAssignmentAutoUpdate = {
+            param($DeployedGraphId)
+            Set-WinTunerAvailableAssignmentAutoUpdate -GraphId $DeployedGraphId
+        },
         [scriptblock]$ReportProgress = { param($ProgressInfo) }
     )
 
@@ -248,7 +383,8 @@ function Invoke-WinTunerAppUpdateBatch {
             -RootPackageFolder $RootPackageFolder `
             -BuildPackage $BuildPackage `
             -ValidateArtifact $ValidateArtifact `
-            -DeployPackage $DeployPackage
+            -DeployPackage $DeployPackage `
+            -ConfigureAvailableAssignmentAutoUpdate $ConfigureAvailableAssignmentAutoUpdate
         $results.Add($itemResult)
     }
 

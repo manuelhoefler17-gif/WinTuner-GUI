@@ -4,7 +4,7 @@
 
 [![PowerShell Version](https://img.shields.io/badge/PowerShell-7.0%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.10.22-orange.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.23-orange.svg)](CHANGELOG.md)
 
 ## 🎯 Overview
 
@@ -337,7 +337,7 @@ Changing the selected version invalidates the previous Upload state. The new ver
 7. Review the candidate count and checked count.
 8. Confirm the checked or all-candidates update operation.
 
-Update actions remain disabled until their required candidates or checked selections exist. Logout is disabled during scans and deployments. Both update actions use the current verified scan result, then build, validate, and deploy each app in an isolated background runspace. Successful apps are removed from the list while failed apps remain available for retry. The candidate summary keeps the latest batch result visible, including successful and failed counts.
+Update actions remain disabled until their required candidates or checked selections exist. Logout is disabled during scans and deployments. Both update actions use the current verified scan result, then build, validate, and deploy each app in an isolated background runspace. When an existing Intune app is superseded, WinTuner automatically enables **AutoUpdate superseded apps** on its copied **Available** assignments; Required, Uninstall, and other assignment intents are not changed. Successful apps are removed from the list while failed apps remain available for retry. The candidate summary keeps the latest batch result visible, including successful and failed counts.
 
 ### 4. Find superseded Intune applications
 
@@ -559,7 +559,7 @@ A development checkout intentionally uses its local dependency files and is ther
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete version history.
 
-Current stable release: **v0.10.22**.
+Current stable release: **v0.10.23**.
 
 ---
 

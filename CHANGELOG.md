@@ -2,6 +2,13 @@
 
 All notable changes to WinTuner GUI are documented here.
 
+## [0.10.23] – 2026-10-29
+
+### Changed
+- Automatically enable AutoUpdate superseded apps on copied Available assignments of the newly deployed Win32 app when updating an existing Intune app.
+- Preserve other assignment settings and leave Required, Uninstall, and other assignment intents unchanged.
+- Log the AutoUpdate configuration result, including a warning if the app was deployed successfully but assignment configuration could not be completed.
+
 ## [0.10.22] – 2026-09-28
 
 ### Fixed
