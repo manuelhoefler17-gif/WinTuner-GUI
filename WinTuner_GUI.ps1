@@ -55,7 +55,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.27"
+$script:appVersion  = "0.10.28"
 
 # Bootstrap release dependencies and keep them synchronized with the GUI release.
 $requiredReleaseFiles = @(
@@ -1755,6 +1755,15 @@ function Complete-WinTunerAppUpdateBatch {
   Update-DiscoveryActionState
 }
 
+function Update-WinTunerAppUpdateRetryStatus {
+  param([Parameter(Mandatory)][object]$ProgressInfo)
+  $codeProperty = $ProgressInfo.PSObject.Properties['StatusCode']
+  $code = if ($codeProperty) { [int]$codeProperty.Value } else { 0 }
+  $reason = if ($code -eq 429) { 'HTTP 429 (Too Many Requests)' } elseif ($code -gt 0) { "HTTP $code" } else { 'Temporary network error or timeout' }
+  # Update-Status already writes to the GUI and file log; do not log the retry twice.
+  Update-Status "Waiting $($ProgressInfo.DelaySeconds)s before retry $($ProgressInfo.Attempt)/$($ProgressInfo.MaxAttempts): $($ProgressInfo.AppName) | $reason"
+}
+
 function Start-WinTunerAppUpdateBatch {
   param(
     [Parameter(Mandatory=$true)][object[]]$Apps,
@@ -1894,9 +1903,7 @@ $result | ConvertTo-Json -Depth 7 -Compress
           $script:progressBar.Maximum = $maximum
           $script:progressBar.Value = [Math]::Min([int]$progressInfo.Processed, $maximum)
           if ([string]$progressInfo.Stage -eq 'Retry') {
-            $retryText = "Waiting $($progressInfo.DelaySeconds)s before retry $($progressInfo.Attempt)/$($progressInfo.MaxAttempts): $($progressInfo.AppName)"
-            Update-Status $retryText
-            Write-Log $retryText
+            Update-WinTunerAppUpdateRetryStatus -ProgressInfo $progressInfo
           } else { Update-Status ("Updating ({0}/{1}): {2}" -f $progressInfo.Processed, $progressInfo.Total, $progressInfo.AppName) }
         }
       } catch {}

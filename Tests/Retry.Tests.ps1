@@ -12,7 +12,7 @@ Describe 'Bounded transient retries' {
         }.GetNewClosure() -Wait { param($ms) $waits.Add($ms) }.GetNewClosure() -ReportRetry { param($info) $reports.Add($info) }.GetNewClosure()
         $result | Should -Be 'success'
         $state.Calls | Should -Be 2
-        ($waits | Measure-Object -Sum).Sum | Should -Be 3000
+        ($waits | Measure-Object -Sum).Sum | Should -Be 15000
         $reports[0].Attempt | Should -Be 2
         $reports[0].StatusCode | Should -Be 429
     }
@@ -28,6 +28,46 @@ Describe 'Bounded transient retries' {
         try {
             $null = Invoke-WinTunerRetry -Operation { $state.Calls++; if ($state.Calls -eq 1) { throw $failure }; 'ok' }.GetNewClosure() -Wait { param($ms) $waits.Add($ms) }.GetNewClosure()
             ($waits | Measure-Object -Sum).Sum | Should -Be 7000
+        } finally { $response.Dispose() }
+    }
+
+    It 'backs off for 15 and 30 seconds on repeated 429 responses, then stops after three attempts' {
+        $state = @{ Calls = 0 }
+        $waits = [Collections.Generic.List[int]]::new()
+        $reports = [Collections.Generic.List[object]]::new()
+        $operation = { $state.Calls++; throw 'HTTP 429 Too Many Requests' }.GetNewClosure()
+        $wait = { param($ms) $waits.Add($ms) }.GetNewClosure()
+        $report = { param($info) $reports.Add($info) }.GetNewClosure()
+        { Invoke-WinTunerRetry -Operation $operation -Wait $wait -ReportRetry $report } | Should -Throw '*429*'
+        $state.Calls | Should -Be 3
+        ($waits | Measure-Object -Sum).Sum | Should -Be 45000
+        $reports.Count | Should -Be 2
+        $reports[0].DelaySeconds | Should -Be 15
+        $reports[1].DelaySeconds | Should -Be 30
+    }
+
+    It 'keeps the shorter fallback delays for other transient server errors' {
+        $state = @{ Calls = 0 }
+        $waits = [Collections.Generic.List[int]]::new()
+        $null = Invoke-WinTunerRetry -Operation {
+            $state.Calls++
+            if ($state.Calls -lt 3) { throw 'HTTP 503 Service Unavailable' }
+        }.GetNewClosure() -Wait { param($ms) $waits.Add($ms) }.GetNewClosure()
+        $state.Calls | Should -Be 3
+        ($waits | Measure-Object -Sum).Sum | Should -Be 8000
+    }
+
+    It 'does not shorten a Retry-After that exceeds the remaining wait budget' {
+        $response = [Net.Http.HttpResponseMessage]::new([Net.HttpStatusCode]::TooManyRequests)
+        $response.Headers.Add('Retry-After','121')
+        $exception = [Exception]::new('Throttle')
+        $exception | Add-Member -NotePropertyName Response -NotePropertyValue $response
+        $failure = [Management.Automation.ErrorRecord]::new($exception,'Throttled',[Management.Automation.ErrorCategory]::LimitsExceeded,$null)
+        $state = @{ Calls = 0 }
+        $operation = { $state.Calls++; throw $failure }.GetNewClosure()
+        try {
+            { Invoke-WinTunerRetry -Operation $operation -Wait { throw 'Must not wait' } } | Should -Throw '*Throttle*'
+            $state.Calls | Should -Be 1
         } finally { $response.Dispose() }
     }
 
