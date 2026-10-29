@@ -1,4 +1,5 @@
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'WinTuner.Retry.psm1') -ErrorAction Stop
 
 # Share identity metadata across runspaces; the WinTuner provider owns tokens.
 function Get-WinTunerGraphContext {
@@ -59,7 +60,8 @@ function Invoke-WinTunerGraphRequest {
     if ([AppDomain]::CurrentDomain.GetData('WinTuner.GUI.DelegatedGraphContext')) {
         $parameters = @{ Uri = $Uri; Method = $Method }
         if ($PSBoundParameters.ContainsKey('Body')) { $parameters.Body = $Body }
-        return Invoke-WinTunerDelegatedGraphRequest @parameters
+        $requestCommand = Get-Command Invoke-WinTunerDelegatedGraphRequest
+        return Invoke-WinTunerRetry -Operation { & $requestCommand @parameters }.GetNewClosure()
     }
     $parameters = @{ Uri = $Uri; Method = $Method; ErrorAction = 'Stop' }
     if ($PSBoundParameters.ContainsKey('Body')) {

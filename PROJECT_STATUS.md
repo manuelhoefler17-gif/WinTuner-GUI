@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Development version: **0.10.24**
+Development version: **0.10.25**
 
 Latest published stable release: **v0.10.24**
 
@@ -16,7 +16,34 @@ Branches:
 - Changes are developed and tested on `Test`
 - Changes reach `main` only through Pull Requests
 
-`main` and `Test` are synchronized with the completed v0.10.24 release.
+The stable baseline is v0.10.24. Version 0.10.25 is being prepared for publication on `Test`.
+
+## Release Preparation for 0.10.25
+
+First implementation block from the agreed feature list:
+
+1. Bounded transient retries for package builds and direct delegated Graph calls; no automatic replay of complete deployments.
+2. Read-only deployment preview with live assignment details, explicit approval and final stale-plan/version checks before upload.
+3. Local tenant-scoped update history with per-item persistence, Settings viewer and CSV export.
+
+Manual preview testing found that Graph v1.0 does not expose Win32 displayVersion. The live app-version read now uses beta, while assignment requests remain on v1.0. A missing version fails with a separate diagnostic; the worker fixture now models the endpoint difference.
+
+Automated release validation passed: 51 PowerShell files parsed without errors, all 190 Pester tests passed, and git diff --check passed. Coverage includes the actual GUI worker with simulated Intune APIs (preview without writes, approved deployment, stale assignment blocking and history persistence), as well as the Graph API version-field regression.
+
+Manual validation completed:
+
+- Preview displayed the correct old/target versions and Available/Required/no-assignment cases for 7-Zip and Adobe Reader.
+- A real 7-Zip update from 26.03 to 26.05 completed and appeared in the tenant history as Updated.
+- The user supplied the CSV export with the expected tenant, operation, app, version and outcome fields.
+- The user authorized commit, PR, merge and publication of v0.10.25.
+
+Following implementation blocks, in priority order:
+
+4. Exclude apps from Update All or pin versions, optionally with a reason and expiry.
+5. Tenant profiles with clear active-tenant and authentication identity display.
+6. Show installation success/pending/failure counts after upload.
+7. Propose old app cleanup using retention rules and dependency/assignment checks.
+8. Export a sanitized support/diagnostic report.
 
 ## Completed Work for 0.10.24
 
@@ -92,6 +119,8 @@ Main application:
 Modules:
 
 - `Modules/WinTuner.AppUpdate.psm1`
+- `Modules/WinTuner.Retry.psm1`
+- `Modules/WinTuner.UpdateHistory.psm1`
 - `Modules/WinTuner.Authentication.psm1`
 - `Modules/WinTuner.Connection.psm1`
 - `Modules/WinTuner.Core.psm1`
@@ -689,6 +718,6 @@ Latest published stable release:
 
 Current development version:
 
-**0.10.24**
+**0.10.25**
 
-0.10.24 was published on 2026-10-29. The `main` and `Test` branches are synchronized.
+0.10.24 was published on 2026-10-29. Version 0.10.25 is in development on `Test`.

@@ -2,6 +2,21 @@
 
 All notable changes to WinTuner GUI are documented here.
 
+## [0.10.25] – 2026-10-29
+
+### Fixed
+- Read the live Win32 app version from the Intune beta model, which exposes displayVersion, and distinguish a missing field from an actual version change in deployment preview.
+
+### Added
+- Read-only deployment preview for checked/all app updates, showing tenant, old/target versions, assignment intents, group IDs, exclusions, filters and planned AutoUpdate settings.
+- A final pre-upload comparison blocks changed Intune versions, assignment settings or an unapproved fallback package version.
+- Tenant-separated local update history with timestamp, package/version identifiers, result and reason code, plus a Settings viewer and CSV export.
+- Bounded retries for transient package-build and direct delegated Graph request failures, honoring Retry-After when available and reporting update-package retry waits.
+
+### Changed
+- Update package creation starts only after approval in the deployment preview.
+- A failed local history write reports a warning without repeating a successful deployment.
+
 ## [0.10.24] – 2026-10-29
 
 ### Fixed

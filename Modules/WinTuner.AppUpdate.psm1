@@ -113,6 +113,106 @@ function Set-WinTunerAvailableAssignmentAutoUpdate {
     }
 }
 
+function ConvertTo-WinTunerCanonicalPlanValue {
+    param([AllowNull()][object]$Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [Collections.IDictionary] -or $Value -is [pscustomobject]) {
+        $result = [ordered]@{}
+        $keys = if ($Value -is [Collections.IDictionary]) { @($Value.Keys) } else { @($Value.PSObject.Properties.Name) }
+        foreach ($key in @($keys | Sort-Object)) {
+            $result[$key] = ConvertTo-WinTunerCanonicalPlanValue (Get-WinTunerAppUpdateObjectValue $Value $key)
+        }
+        return $result
+    }
+    if ($Value -is [Collections.IEnumerable] -and $Value -isnot [string]) {
+        $items = [Collections.Generic.List[object]]::new()
+        foreach ($item in $Value) { $items.Add((ConvertTo-WinTunerCanonicalPlanValue $item)) }
+        return ,$items.ToArray()
+    }
+    return $Value
+}
+
+function New-WinTunerUpdatePlan {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object[]]$Apps,
+        [Parameter(Mandatory)][guid]$TenantId,
+        [Parameter(Mandatory)][string]$RootPackageFolder,
+        [scriptblock]$GetApp = {
+            param($GraphId)
+            # displayVersion is exposed by the Intune beta Win32 model, not v1.0.
+            Invoke-WinTunerGraphRequest -Uri "https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/$([uri]::EscapeDataString($GraphId))"
+        },
+        [scriptblock]$GetAssignments = {
+            param($GraphId)
+            $uri = "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps/$([uri]::EscapeDataString($GraphId))/assignments"
+            $seen = [Collections.Generic.HashSet[string]]::new()
+            while (-not [string]::IsNullOrWhiteSpace($uri)) {
+                if (-not $seen.Add($uri) -or $seen.Count -gt 1000) { throw 'Invalid assignment pagination.' }
+                $target = [uri]$uri
+                if ($target.Scheme -ne 'https' -or $target.Host -ne 'graph.microsoft.com' -or $target.Port -ne 443) { throw 'Invalid Graph pagination target.' }
+                $page = Invoke-WinTunerGraphRequest -Uri $uri
+                foreach ($entry in @(Get-WinTunerAppUpdateObjectValue $page 'value')) { if ($entry) { $entry } }
+                $uri = [string](Get-WinTunerAppUpdateObjectValue $page '@odata.nextLink')
+            }
+        }
+    )
+    if ($TenantId -eq [guid]::Empty) { throw 'A verified tenant ID is required for deployment preview.' }
+    $items = [Collections.Generic.List[object]]::new()
+    foreach ($app in $Apps) {
+        foreach ($field in 'Name','GraphId','PackageId','CurrentVersion','LatestVersion') {
+            if ([string]::IsNullOrWhiteSpace((Get-WinTunerAppUpdateProperty $app $field))) { throw "Deployment preview requires $field for every app. Run a fresh update scan." }
+        }
+        $current = & $GetApp ([string]$app.GraphId)
+        if ([string](Get-WinTunerAppUpdateObjectValue $current 'id') -ne [string]$app.GraphId) {
+            throw "The Intune app identity for '$($app.Name)' could not be verified. Run a fresh update scan."
+        }
+        $liveVersion = [string](Get-WinTunerAppUpdateObjectValue $current 'displayVersion')
+        if ([string]::IsNullOrWhiteSpace($liveVersion)) {
+            throw "Cannot read the current Intune version of '$($app.Name)': displayVersion is missing. No upload was started."
+        }
+        if ($liveVersion -cne [string]$app.CurrentVersion) {
+            throw "The current Intune version of '$($app.Name)' changed. Run a fresh update scan."
+        }
+        $assignments = @(& $GetAssignments ([string]$app.GraphId))
+        $canonical = ConvertTo-WinTunerCanonicalPlanValue @($assignments | Sort-Object { [string](Get-WinTunerAppUpdateObjectValue $_ 'id') })
+        $json = ConvertTo-Json -InputObject $canonical -Depth 40 -Compress
+        $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($json)))
+        $items.Add([pscustomobject]@{
+            Name = [string]$app.Name; GraphId = [string]$app.GraphId; PackageId = [string]$app.PackageId
+            CurrentVersion = [string]$app.CurrentVersion; LatestVersion = [string]$app.LatestVersion
+            AssignmentHash = $hash; Assignments = @($assignments)
+        })
+    }
+    [pscustomobject]@{ TenantId = $TenantId.ToString('D'); RootPackageFolder = $RootPackageFolder; Items = @($items); CreatedAtUtc = [datetime]::UtcNow.ToString('o') }
+}
+
+function Format-WinTunerUpdatePlan {
+    param([Parameter(Mandatory)][object]$Plan)
+    $lines = [Collections.Generic.List[string]]::new()
+    $lines.Add("Tenant: $($Plan.TenantId)")
+    $lines.Add("Package folder: $($Plan.RootPackageFolder)")
+    foreach ($item in @($Plan.Items)) {
+        $lines.Add('')
+        $lines.Add("$($item.Name): $($item.CurrentVersion) -> $($item.LatestVersion) [$($item.PackageId)]")
+        if (@($item.Assignments).Count -eq 0) { $lines.Add('  No assignments. The new app will not be assigned.'); continue }
+        foreach ($assignment in @($item.Assignments)) {
+            $intent = [string](Get-WinTunerAppUpdateObjectValue $assignment 'intent')
+            $target = Get-WinTunerAppUpdateObjectValue $assignment 'target'
+            $targetType = [string](Get-WinTunerAppUpdateObjectValue $target '@odata.type')
+            $groupId = [string](Get-WinTunerAppUpdateObjectValue $target 'groupId')
+            $targetText = if ($targetType -match 'exclusionGroup') { "Excluded group: $groupId" } elseif ($groupId) { "Group: $groupId" } elseif ($targetType -match 'allLicensedUsers') { 'All users' } elseif ($targetType -match 'allDevices') { 'All devices' } else { $targetType }
+            $filterId = [string](Get-WinTunerAppUpdateObjectValue $target 'deviceAndAppManagementAssignmentFilterId')
+            if ($filterId) { $targetText += " | Filter: $filterId ($([string](Get-WinTunerAppUpdateObjectValue $target 'deviceAndAppManagementAssignmentFilterType')))" }
+            $auto = if ($intent -eq 'available') { ' | AutoUpdate: enabled on new app' } else { '' }
+            $lines.Add("  $intent | $targetText$auto")
+        }
+    }
+    $lines.Add('')
+    $lines.Add('Assignments will be preserved. If the Intune version or assignments change before upload, the affected update is blocked for a new review.')
+    $lines -join [Environment]::NewLine
+}
+
 function New-WinTunerAppUpdateItemResult {
     param(
         [bool]$Succeeded,
@@ -148,7 +248,9 @@ function Invoke-WinTunerAppUpdateItem {
         [Parameter(Mandatory)][scriptblock]$BuildPackage,
         [Parameter(Mandatory)][scriptblock]$ValidateArtifact,
         [Parameter(Mandatory)][scriptblock]$DeployPackage,
-        [Parameter(Mandatory)][scriptblock]$ConfigureAvailableAssignmentAutoUpdate
+        [Parameter(Mandatory)][scriptblock]$ConfigureAvailableAssignmentAutoUpdate,
+        [Parameter(Mandatory)][scriptblock]$ValidatePlan,
+        [Parameter(Mandatory)][scriptblock]$ReportRetry
     )
 
     $name = Get-WinTunerAppUpdateProperty -InputObject $App -Name 'Name'
@@ -180,7 +282,7 @@ function Invoke-WinTunerAppUpdateItem {
     }
 
     try {
-        $buildResult = & $BuildPackage $packageId $RootPackageFolder $targetVersion $currentVersion
+        $buildResult = & $BuildPackage $packageId $RootPackageFolder $targetVersion $currentVersion $ReportRetry
     }
     catch {
         return New-WinTunerAppUpdateItemResult `
@@ -263,6 +365,12 @@ function Invoke-WinTunerAppUpdateItem {
     }
 
     try {
+        $null = & $ValidatePlan $App $effectiveVersion
+    } catch {
+        return New-WinTunerAppUpdateItemResult -Succeeded $false -Name $name -CurrentVersion $currentVersion -TargetVersion $targetVersion -EffectiveVersion $effectiveVersion -GraphId $graphId -PackageId $packageId -ReasonCode 'PlanChanged' -Message "Update blocked for ${name}: $($_.Exception.Message)"
+    }
+
+    try {
         $deployment = & $DeployPackage $App $packageId $effectiveVersion $RootPackageFolder
     }
     catch {
@@ -314,13 +422,14 @@ function Invoke-WinTunerAppUpdateBatch {
         [Parameter(Mandatory)][ValidateNotNull()][object[]]$Apps,
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$RootPackageFolder,
         [scriptblock]$BuildPackage = {
-            param($Id, $Folder, $Target, $Installed)
+            param($Id, $Folder, $Target, $Installed, $RetryReporter)
             Invoke-WinTunerPackageBuild `
                 -PackageId $Id `
                 -PackageFolder $Folder `
                 -DesiredVersion $Target `
                 -LatestVersion $Target `
-                -InstalledVersion $Installed
+                -InstalledVersion $Installed `
+                -ReportRetry $RetryReporter
         },
         [scriptblock]$ValidateArtifact = {
             param($Root, $Id, $Version)
@@ -352,6 +461,8 @@ function Invoke-WinTunerAppUpdateBatch {
             param($DeployedGraphId)
             Set-WinTunerAvailableAssignmentAutoUpdate -GraphId $DeployedGraphId
         },
+        [scriptblock]$ValidatePlan = { param($App, $Version) },
+        [scriptblock]$RecordResult = { param($Result) },
         [scriptblock]$ReportProgress = { param($ProgressInfo) }
     )
 
@@ -377,7 +488,18 @@ function Invoke-WinTunerAppUpdateBatch {
             -BuildPackage $BuildPackage `
             -ValidateArtifact $ValidateArtifact `
             -DeployPackage $DeployPackage `
-            -ConfigureAvailableAssignmentAutoUpdate $ConfigureAvailableAssignmentAutoUpdate
+            -ConfigureAvailableAssignmentAutoUpdate $ConfigureAvailableAssignmentAutoUpdate `
+            -ValidatePlan $ValidatePlan `
+            -ReportRetry {
+                param($retryInfo)
+                $null = & $ReportProgress ([pscustomobject]@{
+                    Stage = 'Retry'; Processed = $processed; Total = $items.Count
+                    AppName = [string]$app.Name
+                    DelaySeconds = $retryInfo.DelaySeconds; Attempt = $retryInfo.Attempt; MaxAttempts = $retryInfo.MaxAttempts
+                })
+            }.GetNewClosure()
+        try { $null = & $RecordResult $itemResult }
+        catch { $itemResult | Add-Member -NotePropertyName HistoryWarning -NotePropertyValue 'The local history entry could not be saved; the deployment result is unchanged.' }
         $results.Add($itemResult)
     }
 
@@ -389,4 +511,4 @@ function Invoke-WinTunerAppUpdateBatch {
     }
 }
 
-Export-ModuleMember -Function Invoke-WinTunerAppUpdateBatch
+Export-ModuleMember -Function Invoke-WinTunerAppUpdateBatch,New-WinTunerUpdatePlan,Format-WinTunerUpdatePlan

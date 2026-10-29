@@ -4,7 +4,7 @@
 
 [![PowerShell Version](https://img.shields.io/badge/PowerShell-7.0%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.10.24-orange.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.25-orange.svg)](CHANGELOG.md)
 
 ## 🎯 Overview
 
@@ -337,9 +337,16 @@ Changing the selected version invalidates the previous Upload state. The new ver
 5. Filter the results if required; checked candidates remain selected when hidden by the filter.
 6. Select the applications to update.
 7. Review the candidate count and checked count.
-8. Confirm the checked or all-candidates update operation.
+8. Review the deployment preview for the checked or all-candidates operation. It shows versions, tenant, assignment intents, target group IDs (including exclusions and filters), and the planned Available-assignment AutoUpdate setting.
+9. Click **Start updates**, or **Cancel** to leave Intune unchanged. The preview only reads Intune data; package creation starts after approval.
 
 Update actions remain disabled until their required candidates or checked selections exist. Logout is disabled during scans and deployments. Both update actions use the current verified scan result, then build, validate, and deploy each app in an isolated background runspace. When an existing Intune app is superseded, WinTuner automatically enables **AutoUpdate superseded apps** on its copied **Available** assignments; Required, Uninstall, and other assignment intents are not changed. Successful apps are removed from the list while failed apps remain available for retry. The candidate summary keeps the latest batch result visible, including successful and failed counts.
+
+Before each upload, the existing Intune version and assignment settings are checked again. A changed assignment or a built version that differs from the approved preview blocks that app's upload and requires a new review. This includes automatic previous-version package fallback.
+
+From version 0.10.25, transient HTTP 408, 429, 500, 502, 503 and 504 errors and timeout exceptions during package creation or direct delegated Graph requests have at most three attempts with a total retry-wait budget of 120 seconds. `Retry-After` is honored when available; otherwise increasing delays are used. Update package retries show their wait and attempt in the status/log. Complete app deployments are never automatically repeated. Authentication failures, hash mismatches and missing resources retain their existing handling. The Graph SDK keeps its own retry handling for app-only requests.
+
+Open **Settings > Update history...** while signed in to view the latest 500 completed app-update results for the current tenant and export the displayed rows to CSV. History is stored locally under `%LOCALAPPDATA%\WinTuner\UpdateHistory\<tenant-id>` and retained across GUI restarts and cache clearing. It contains timestamps, package/version identifiers, outcome and reason code; raw service errors and authentication material are excluded. It is a local operational record, not a server audit log. An interrupted app may have no final history entry; earlier completed items remain recorded. CSV exports neutralize leading spreadsheet formulas in text values.
 
 ### 4. Find superseded Intune applications
 
@@ -561,7 +568,7 @@ A development checkout intentionally uses its local dependency files and is ther
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete version history.
 
-Current stable release: **v0.10.24**.
+Current stable release: **v0.10.25**.
 
 ---
 
