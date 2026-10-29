@@ -2,6 +2,12 @@
 
 All notable changes to WinTuner GUI are documented here.
 
+## [0.10.28] – Unreleased
+
+### Fixed
+- Log each background package-build retry once and show its HTTP status directly in the status/log message.
+- When HTTP 429 provides no usable Retry-After header, wait 15 and 30 seconds before retrying instead of 3 and 5 seconds. Valid server-specified delays remain authoritative; retries stay limited to three attempts and 120 seconds of total retry wait.
+
 ## [0.10.27] – 2026-10-29
 
 ### Added

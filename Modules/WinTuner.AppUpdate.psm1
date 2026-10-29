@@ -504,6 +504,7 @@ function Invoke-WinTunerAppUpdateBatch {
                     Stage = 'Retry'; Processed = $processed; Total = $items.Count
                     AppName = [string]$app.Name
                     DelaySeconds = $retryInfo.DelaySeconds; Attempt = $retryInfo.Attempt; MaxAttempts = $retryInfo.MaxAttempts
+                    StatusCode = $(if ($retryInfo.PSObject.Properties['StatusCode']) { [int]$retryInfo.StatusCode } else { 0 })
                 })
             }.GetNewClosure()
         try { $null = & $RecordResult $itemResult }

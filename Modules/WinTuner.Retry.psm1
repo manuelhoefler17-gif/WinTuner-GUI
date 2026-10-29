@@ -55,7 +55,14 @@ function Invoke-WinTunerRetry {
             $failure = $_
             $policy = Get-WinTunerRetryPolicy -ErrorRecord $failure
             if (-not $policy.CanRetry -or $attempt -ge $MaxAttempts) { throw }
-            $delay = if ($null -ne $policy.RetryAfterSeconds) { [double]$policy.RetryAfterSeconds } else { [math]::Pow(2, $attempt) + 1 }
+            $delay = if ($null -ne $policy.RetryAfterSeconds) {
+                [double]$policy.RetryAfterSeconds
+            } elseif ($policy.StatusCode -eq 429) {
+                # Give a throttled service time to recover when it supplies no retry window.
+                15 * [math]::Pow(2, $attempt - 1)
+            } else {
+                [math]::Pow(2, $attempt) + 1
+            }
             # Never shorten a server's Retry-After. Fail when it exceeds this operation's budget.
             if ($delay -gt ($MaxTotalWaitSeconds - $totalWait)) { throw }
             try {

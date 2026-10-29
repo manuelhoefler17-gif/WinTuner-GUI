@@ -8,8 +8,8 @@ BeforeAll {
 }
 
 Describe 'GUI authentication modes' {
-    It 'declares version 0.10.27 and bootstraps the authentication module' {
-        $script:guiText | Should -Match '\$script:AppVersion\s*=\s*"0\.10\.27"'
+    It 'declares version 0.10.28 and bootstraps the authentication module' {
+        $script:guiText | Should -Match '\$script:AppVersion\s*=\s*"0\.10\.28"'
         $script:guiText | Should -Match "Modules/WinTuner\.Authentication\.psm1"
         $script:guiText | Should -Match '\$authenticationModulePath\s*=\s*Join-Path.*WinTuner\.Authentication\.psm1'
         $script:guiText | Should -Match 'Import-Module\s+\$authenticationModulePath\s+-Force'
