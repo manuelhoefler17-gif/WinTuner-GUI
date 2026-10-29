@@ -13,6 +13,7 @@ function New-WinTunerDefaultSettings {
         DefaultPackagePath = "C:\Temp"
         AutoCheckUpdates   = $false
         AuthenticationMode = 'Interactive'
+        ActiveTenantProfileId = ''
         EntraTenantId      = ''
         EntraClientId      = ''
         EntraClientSecretProtected = ''
@@ -73,6 +74,10 @@ function Import-WinTunerSettings {
             if ($mode -in @('Interactive', 'ClientSecret', 'Certificate')) {
                 $settings.AuthenticationMode = $mode
             }
+        }
+
+        if ($o.PSObject.Properties['ActiveTenantProfileId']) {
+            $settings.ActiveTenantProfileId = [string]$o.ActiveTenantProfileId
         }
 
         if ($o.PSObject.Properties['EntraTenantId']) {

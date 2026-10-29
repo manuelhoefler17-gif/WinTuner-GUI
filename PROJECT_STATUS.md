@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Development version: **0.10.26**
+Development version: **0.10.27**
 
 Latest published stable release: **v0.10.26**
 
@@ -16,7 +16,19 @@ Branches:
 - Changes are developed and tested on `Test`
 - Changes reach `main` only through Pull Requests
 
-`main` and `Test` are synchronized with the completed v0.10.26 release.
+The 0.10.27 tenant-profile implementation was developed on `Test` for integration through a Pull Request. The published release remains v0.10.26 until separate release approval.
+
+## Development Work for 0.10.27
+
+- Feature-list item 5: named tenant profiles containing expected tenant GUID, authentication mode/identity and default package folder, with opt-in copying of an existing DPAPI-protected secret.
+- Added Settings profile management, explicit manual configuration, startup restoration and a profile/tenant/authentication header.
+- Profile switching requires a disconnected, idle GUI and clears the previous identity. Authentication edits detach the profile; saving a profile does not relabel or switch an active session.
+- The login worker verifies the actual tenant against the selected profile before Intune inventory reads or app-only permission preflight. Missing/malformed selected profiles block login.
+- Profile storage is separate from caches, schema validated and written atomically under a named mutex. Tenant IDs of existing profiles are immutable; no plaintext credentials or tokens are stored.
+- Automated validation passed: all 55 PowerShell files parse, all 221 Pester tests pass, and git diff --check passes. Tests include DPAPI-only profile secrets, credential isolation, malformed/duplicate profile blocking, profile restoration and the actual login worker rejecting a wrong tenant in all three modes before Intune inventory/preflight reads.
+- The user confirmed the final profile workflow and successful profile restoration after a GUI restart. The interactive profile manager was tested with a saved customer configuration.
+- Implementation integration is approved. Tagging and publication of v0.10.27 still require separate release approval; app-only profile login has automated coverage but was not explicitly confirmed in this final manual test.
+- Remaining feature-list items after profiles: 6 (installation status), 7 (controlled old-app cleanup), 8 (sanitized diagnostic export).
 
 ## Completed Work for 0.10.26
 
@@ -750,6 +762,6 @@ Latest published stable release:
 
 Current development version:
 
-**0.10.26**
+**0.10.27**
 
-0.10.26 was published on 2026-10-29. The `main` and `Test` branches are synchronized.
+0.10.26 was published on 2026-10-29. Work for 0.10.27 is on `Test`; the release remains v0.10.26.

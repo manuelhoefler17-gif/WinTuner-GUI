@@ -55,7 +55,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.26"
+$script:appVersion  = "0.10.27"
 
 # Bootstrap release dependencies and keep them synchronized with the GUI release.
 $requiredReleaseFiles = @(
@@ -63,6 +63,7 @@ $requiredReleaseFiles = @(
   'Modules/WinTuner.Retry.psm1',
   'Modules/WinTuner.UpdateHistory.psm1',
   'Modules/WinTuner.UpdateRules.psm1',
+  'Modules/WinTuner.TenantProfiles.psm1',
   'Modules/WinTuner.Authentication.psm1',
   'Modules/WinTuner.Connection.psm1',
   'Modules/WinTuner.Core.psm1',
@@ -245,6 +246,9 @@ Import-Module $intuneModulePath -Force
 Import-Module (Join-Path $PSScriptRoot 'Modules\WinTuner.UpdateHistory.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'Modules\WinTuner.AppUpdate.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'Modules\WinTuner.UpdateRules.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'Modules\WinTuner.TenantProfiles.psm1') -Force
+$script:activeTenantProfile = $null
+$script:tenantProfileError = ''
 $script:updateRules = @()
 $script:updateRulesTenant = ''
 $script:updateRulesError = ''
@@ -2700,6 +2704,176 @@ $result | ConvertTo-Json -Depth 7 -Compress
   }
 }
 
+function Test-WinTunerProfileSwitchBusy {
+  return [bool]($script:isLoginOperationActive -or $script:isUpdateOperationActive -or $script:updateScanRunning -or $script:isSupersededOperationActive -or $script:discoveryScanRunning -or $script:isDiscoveryDeploymentActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive -or $script:isPackageUploadActive)
+}
+
+function Initialize-WinTunerActiveTenantProfile {
+  $script:activeTenantProfile = $null
+  $script:tenantProfileError = ''
+  if (-not $script:settings.ActiveTenantProfileId) { return }
+  try {
+    $profiles = @(Get-WinTunerTenantProfiles)
+    $matching = @($profiles | Where-Object Id -EQ $script:settings.ActiveTenantProfileId)
+    if ($matching.Count -ne 1) { throw 'The selected tenant profile no longer exists. Select another profile or manual configuration.' }
+    $settings = Get-WinTunerTenantProfileSettings -Settings $script:settings -Profile $matching[0] -Connected ([bool]$script:isConnected) -IsBusy (Test-WinTunerProfileSwitchBusy)
+    $script:activeTenantProfile = $matching[0]
+    $script:settings = $settings
+    $usernameBox.Text = $matching[0].UserPrincipalName
+    if ($pathBox) { $pathBox.Text = $settings.DefaultPackagePath }
+    if ($defaultPathTextBox) { $defaultPathTextBox.Text = $settings.DefaultPackagePath }
+  } catch { $script:tenantProfileError = $_.Exception.Message }
+}
+
+function Update-WinTunerTenantProfileSummary {
+  if (-not $tenantProfileSummaryLabel) { return }
+  $name = if ($script:isConnected) { [string]$script:currentTenantProfileName } elseif ($script:activeTenantProfile) { [string]$script:activeTenantProfile.Name } else { 'Manual' }
+  $shortName = if ($name.Length -gt 24) { $name.Substring(0,21) + '...' } else { $name }
+  if ($script:isConnected) {
+    $tenantProfileSummaryLabel.Text = "Profile: $shortName | Tenant: $($script:currentGraphTenantId) | Auth: $($script:currentAuthenticationMode)"
+  } elseif ($script:tenantProfileError) {
+    $tenantProfileSummaryLabel.Text = 'Profile unavailable. Open Settings > Tenant profiles.'
+  } elseif ($script:activeTenantProfile) {
+    $tenantProfileSummaryLabel.Text = "Profile: $shortName | Expected tenant: $($script:activeTenantProfile.TenantId) | Auth: $($script:activeTenantProfile.AuthenticationMode)"
+  } else {
+    $tenantProfileSummaryLabel.Text = "Profile: Manual | Auth: $($script:settings.AuthenticationMode)"
+  }
+}
+
+function Show-WinTunerTenantProfiles {
+  $dialog = New-Object System.Windows.Forms.Form
+  $dialog.Text = 'Tenant profiles'
+  $dialog.ClientSize = New-Object System.Drawing.Size(720,425)
+  $dialog.StartPosition = 'CenterParent'
+  $dialog.FormBorderStyle = 'FixedDialog'
+  $dialog.MaximizeBox = $false
+  $dialog.MinimizeBox = $false
+  $list = New-Object System.Windows.Forms.ListBox
+  $list.Location = New-Object System.Drawing.Point(15,15)
+  $list.Size = New-Object System.Drawing.Size(690,125)
+  $list.DisplayMember = 'Name'
+  $dialog.Controls.Add($list)
+  $info = New-Object System.Windows.Forms.Label
+  $info.Location = New-Object System.Drawing.Point(15,145)
+  $info.Size = New-Object System.Drawing.Size(690,40)
+  $dialog.Controls.Add($info)
+  $nameLabel = New-Object System.Windows.Forms.Label
+  $nameLabel.Text = 'Save current configuration as:'
+  $nameLabel.Location = New-Object System.Drawing.Point(15,195)
+  $nameLabel.Size = New-Object System.Drawing.Size(200,20)
+  $dialog.Controls.Add($nameLabel)
+  $name = New-Object System.Windows.Forms.TextBox
+  $name.Location = New-Object System.Drawing.Point(220,192)
+  $name.Width = 480
+  $name.MaxLength = 80
+  $dialog.Controls.Add($name)
+  $tenantLabel = New-Object System.Windows.Forms.Label
+  $tenantLabel.Text = 'Expected tenant ID (GUID):'
+  $tenantLabel.Location = New-Object System.Drawing.Point(15,225)
+  $tenantLabel.Size = New-Object System.Drawing.Size(200,20)
+  $dialog.Controls.Add($tenantLabel)
+  $tenant = New-Object System.Windows.Forms.TextBox
+  $tenant.Location = New-Object System.Drawing.Point(220,222)
+  $tenant.Width = 480
+  $tenant.Text = if ($script:isConnected) { $script:currentGraphTenantId } else { $script:settings.EntraTenantId }
+  $tenant.ReadOnly = [bool]$script:isConnected
+  $dialog.Controls.Add($tenant)
+  $secret = New-Object System.Windows.Forms.CheckBox
+  $secret.Text = 'Include the existing DPAPI-protected client secret (this Windows user only)'
+  $secret.Location = New-Object System.Drawing.Point(15,255)
+  $secret.Size = New-Object System.Drawing.Size(690,25)
+  $secret.Enabled = ($script:settings.AuthenticationMode -eq 'ClientSecret' -and -not [string]::IsNullOrWhiteSpace($script:settings.EntraClientSecretProtected))
+  $dialog.Controls.Add($secret)
+  $hint = New-Object System.Windows.Forms.Label
+  $hint.Text = 'Profiles store the username and package folder explicitly. No passwords or tokens are saved. Switching requires logout and idle operations. Saving does not switch the current session.'
+  $hint.Location = New-Object System.Drawing.Point(15,287)
+  $hint.Size = New-Object System.Drawing.Size(690,45)
+  $dialog.Controls.Add($hint)
+  $state = @{ Apply = $false; Profile = $null }
+  $settingsSnapshot = $script:settings.Clone()
+  $upnSnapshot = [string]$usernameBox.Text
+  $canSwitch = (-not $script:isConnected -and -not (Test-WinTunerProfileSwitchBusy))
+  $refresh = {
+    $list.Items.Clear()
+    try { foreach ($p in @(Get-WinTunerTenantProfiles)) { [void]$list.Items.Add($p) }; $info.Text = 'Select a saved profile, or save the current authentication configuration below.' }
+    catch { $info.Text = $_.Exception.Message }
+  }.GetNewClosure()
+  $list.Add_SelectedIndexChanged({
+    if ($list.SelectedItem) { $p = $list.SelectedItem; $info.Text = "Tenant: $($p.TenantId)`nAuth: $($p.AuthenticationMode) | Identity: $($p.UserPrincipalName)$($p.ClientId)" }
+  }.GetNewClosure())
+  $use = New-Object System.Windows.Forms.Button
+  $use.Text = 'Use selected'
+  $use.Location = New-Object System.Drawing.Point(15,350)
+  $use.Size = New-Object System.Drawing.Size(125,30)
+  $use.Enabled = $canSwitch
+  $use.Add_Click({ if ($list.SelectedItem) { $state.Profile = $list.SelectedItem; $state.Apply = $true; $dialog.Close() } }.GetNewClosure())
+  $dialog.Controls.Add($use)
+  $manual = New-Object System.Windows.Forms.Button
+  $manual.Text = 'Manual configuration'
+  $manual.Location = New-Object System.Drawing.Point(150,350)
+  $manual.Size = New-Object System.Drawing.Size(160,30)
+  $manual.Enabled = $canSwitch
+  $manual.Add_Click({ $state.Apply = $true; $state.Profile = $null; $dialog.Close() }.GetNewClosure())
+  $dialog.Controls.Add($manual)
+  $save = New-Object System.Windows.Forms.Button
+  $save.Text = 'Save as new profile'
+  $save.Location = New-Object System.Drawing.Point(320,350)
+  $save.Size = New-Object System.Drawing.Size(155,30)
+  $save.Enabled = (-not (Test-WinTunerProfileSwitchBusy))
+  $save.Add_Click({
+    try {
+      $protected = if ($secret.Checked) { [string]$settingsSnapshot.EntraClientSecretProtected } else { '' }
+      $profile = New-WinTunerTenantProfile -Name $name.Text -TenantId $tenant.Text -AuthenticationMode $settingsSnapshot.AuthenticationMode -UserPrincipalName $upnSnapshot -ClientId $settingsSnapshot.EntraClientId -CertificateThumbprint $settingsSnapshot.EntraCertificateThumbprint -EntraClientSecretProtected $protected -DefaultPackagePath $settingsSnapshot.DefaultPackagePath
+      Set-WinTunerTenantProfile -Profile $profile
+      & $refresh
+      $list.SelectedIndex = $list.Items.Count - 1
+      $name.Clear()
+    } catch { [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Profile not saved') }
+  }.GetNewClosure())
+  $dialog.Controls.Add($save)
+  $delete = New-Object System.Windows.Forms.Button
+  $delete.Text = 'Delete selected'
+  $delete.Location = New-Object System.Drawing.Point(485,350)
+  $delete.Size = New-Object System.Drawing.Size(130,30)
+  $delete.Enabled = $canSwitch
+  $delete.Add_Click({
+    if (-not $list.SelectedItem) { return }
+    if ([System.Windows.Forms.MessageBox]::Show('Delete this saved profile? Its protected secret copy is removed too.', 'Delete profile', 'YesNo', 'Warning') -ne 'Yes') { return }
+    try { Set-WinTunerTenantProfile -Profile $list.SelectedItem -Remove; & $refresh }
+    catch { [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Profile not deleted') }
+  }.GetNewClosure())
+  $dialog.Controls.Add($delete)
+  & $refresh
+  try { [void]$dialog.ShowDialog($form) } finally { $dialog.Dispose() }
+  if ($state.Apply) {
+    try {
+      # Re-read on use: another GUI instance may have removed or changed the selected profile.
+      $profile = $null
+      if ($state.Profile) {
+        $found = @(Get-WinTunerTenantProfiles | Where-Object Id -EQ $state.Profile.Id)
+        if ($found.Count -ne 1) { throw 'The selected profile no longer exists.' }
+        $profile = $found[0]
+      }
+      $newSettings = Get-WinTunerTenantProfileSettings -Settings $script:settings -Profile $profile -Connected ([bool]$script:isConnected) -IsBusy (Test-WinTunerProfileSwitchBusy)
+      if (-not (Export-WinTunerSettings -Settings $newSettings -Path $script:settingsPath)) { throw 'Could not save the selected profile. Configuration unchanged.' }
+      $script:settings = $newSettings
+      $script:activeTenantProfile = $profile
+      $script:tenantProfileError = ''
+      $usernameBox.Text = $newSettings.LastUser
+      $pathBox.Text = $newSettings.DefaultPackagePath
+      $defaultPathTextBox.Text = $newSettings.DefaultPackagePath
+      Set-ConnectedUIState -Connected $false
+      Update-PackageActionState
+      $profileLabel = if ($profile) { $profile.Name } else { 'Manual' }
+      Update-Status "Selected tenant profile: $profileLabel. Sign in to verify tenant access."
+      Write-Log "Tenant profile selected: $profileLabel; authentication: $($newSettings.AuthenticationMode)."
+    } catch { [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Profile switch blocked') }
+  } elseif (-not $script:isConnected -and -not (Test-WinTunerProfileSwitchBusy)) {
+    Initialize-WinTunerActiveTenantProfile
+    Update-WinTunerAuthenticationUI
+  }
+}
+
 function Get-WinTunerConfiguredAuthentication {
   $mode = if ($script:settings -and [string]$script:settings.AuthenticationMode -in @('Interactive', 'ClientSecret', 'Certificate')) {
     [string]$script:settings.AuthenticationMode
@@ -2707,7 +2881,9 @@ function Get-WinTunerConfiguredAuthentication {
     'Interactive'
   }
 
-  return Test-WinTunerAuthenticationConfiguration -Mode $mode -UserPrincipalName ([string]$usernameBox.Text) -TenantId ([string]$script:settings.EntraTenantId) -ClientId ([string]$script:settings.EntraClientId) -CertificateThumbprint ([string]$script:settings.EntraCertificateThumbprint)
+  $validation = Test-WinTunerAuthenticationConfiguration -Mode $mode -UserPrincipalName ([string]$usernameBox.Text) -TenantId ([string]$script:settings.EntraTenantId) -ClientId ([string]$script:settings.EntraClientId) -CertificateThumbprint ([string]$script:settings.EntraCertificateThumbprint)
+  if ($script:tenantProfileError) { $validation.IsValid = $false; $validation.Reason = $script:tenantProfileError }
+  return $validation
 }
 
 function Update-WinTunerLoginButtonState {
@@ -2732,11 +2908,11 @@ function Update-WinTunerAuthenticationUI {
   }
   if ($usernameBox) {
     $usernameBox.Visible = ($showLoginControls -and $isInteractive)
-    $usernameBox.Enabled = (-not [bool]$script:isLoginOperationActive)
+    $usernameBox.Enabled = (-not [bool]$script:isLoginOperationActive -and -not $script:settings.ActiveTenantProfileId)
   }
   if ($clearHistoryButton) {
     $clearHistoryButton.Visible = ($showLoginControls -and $isInteractive)
-    $clearHistoryButton.Enabled = (-not [bool]$script:isLoginOperationActive)
+    $clearHistoryButton.Enabled = (-not [bool]$script:isLoginOperationActive -and -not $script:settings.ActiveTenantProfileId)
   }
   if ($rememberCheckBox) {
     $rememberCheckBox.Visible = ($showLoginControls -and $isInteractive)
@@ -2757,6 +2933,7 @@ function Update-WinTunerAuthenticationUI {
   if ($authenticationSettingsButton) {
     $authenticationSettingsButton.Enabled = (-not [bool]$script:isConnected -and -not [bool]$script:isLoginOperationActive)
   }
+  Update-WinTunerTenantProfileSummary
 
   Update-WinTunerLoginButtonState
 }
@@ -3010,6 +3187,7 @@ function Show-WinTunerAuthenticationSettings {
     }
 
     $settingsReference.AuthenticationMode = $mode
+    $settingsReference.ActiveTenantProfileId = ''
     $settingsReference.EntraTenantId = $validation.TenantId
     $settingsReference.EntraClientId = $validation.ClientId
     $settingsReference.EntraClientSecretProtected = $protectedClientSecret
@@ -3019,6 +3197,7 @@ function Show-WinTunerAuthenticationSettings {
       return
     }
 
+    Initialize-WinTunerActiveTenantProfile
     Update-WinTunerAuthenticationUI
     Update-Status "Authentication mode saved: $mode"
     $secretStorageState = if (-not [string]::IsNullOrWhiteSpace($protectedClientSecret)) { 'protected client secret saved for the current Windows user' } else { 'no client secret saved' }
@@ -3120,6 +3299,7 @@ function Complete-WinTunerLoginVerification {
   $script:isConnected = $true
   $script:currentUserUpn = [string]$Context.Upn
   $script:currentIdentityLabel = [string]$Context.IdentityLabel
+  $script:currentTenantProfileName = [string]$Context.ProfileName
   $script:currentAuthenticationMode = [string]$Context.AuthenticationMode
   $script:currentClientId = [string]$Context.ClientId
   $script:currentGraphTenantId = if (-not [string]::IsNullOrWhiteSpace([string]$verificationResult.GraphTenantId)) { [string]$verificationResult.GraphTenantId } else { [string]$Context.GraphTenantId }
@@ -3149,6 +3329,11 @@ function Complete-WinTunerLoginVerification {
 
 function Start-WinTunerLogin {
   if ($script:isLoginOperationActive -or $script:isConnected) { return }
+  if ($script:settings.ActiveTenantProfileId -and (Test-WinTunerProfileSwitchBusy)) {
+    Update-Status 'Wait for the current operation to finish before signing in with a tenant profile.'
+    return
+  }
+  Initialize-WinTunerActiveTenantProfile
   $configuration = Get-WinTunerConfiguredAuthentication
   if (-not $configuration.IsValid) {
     [void][System.Windows.Forms.MessageBox]::Show($configuration.Reason, 'Invalid Authentication Configuration', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
@@ -3211,6 +3396,7 @@ function Start-WinTunerLogin {
   $graphContext = $null
   try {
     $connectionParameters = New-WinTunerModuleConnectionParameters -Mode $configuration.Mode -UserPrincipalName ([string]$usernameBox.Text) -TenantId $configuration.TenantId -ClientId $configuration.ClientId -ClientSecret $clientSecret -CertificateThumbprint $configuration.CertificateThumbprint
+    if ($script:activeTenantProfile) { $connectionParameters.TenantId = $script:activeTenantProfile.TenantId }
     if ($configuration.Mode -in @('ClientSecret', 'Certificate')) {
       try { Disconnect-WtWinTuner -ErrorAction SilentlyContinue } catch {}
       $tokenCacheReset = Clear-WinTunerAppOnlyTokenCache
@@ -3254,16 +3440,20 @@ function Start-WinTunerLogin {
     Update-Status 'Tenant authentication completed; verifying tenant access...'
   }
   $workerScript = @'
-param($RepositoryRoot, $AuthenticationMode, $UserPrincipalName, $GraphTenantId, $ClientId)
+param($RepositoryRoot, $AuthenticationMode, $UserPrincipalName, $GraphTenantId, $ClientId, $ExpectedTenantId)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 Import-Module WinTuner -ErrorAction Stop
 Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Connection.psm1') -Force -ErrorAction Stop
 Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Intune.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.TenantProfiles.psm1') -Force -ErrorAction Stop
 if ($AuthenticationMode -eq 'Interactive') {
   $graphContext = Connect-WinTunerGraph -AuthenticationMode Interactive -UserPrincipalName $UserPrincipalName
 } else {
   $graphContext = Confirm-WinTunerGraphContext -AuthenticationMode $AuthenticationMode -TenantId $GraphTenantId -ClientId $ClientId
+}
+Assert-WinTunerTenantProfileContext -ExpectedTenantId $ExpectedTenantId -ActualTenantId ([string]$graphContext.TenantId)
+if ($AuthenticationMode -ne 'Interactive') {
   $permissionPreflight = Invoke-WinTunerGraphPermissionPreflight -GetManagedApps {
     Invoke-MgGraphRequest -Method GET -Uri 'https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps?$top=1' -ErrorAction Stop
   } -GetDetectedApps {
@@ -3289,7 +3479,8 @@ $result | Add-Member -NotePropertyName PermissionPreflightPassed -NotePropertyVa
 $result | ConvertTo-Json -Depth 4 -Compress
 '@
   $powerShell = [System.Management.Automation.PowerShell]::Create()
-  $null = $powerShell.AddScript($workerScript).AddArgument($PSScriptRoot).AddArgument($configuration.Mode).AddArgument($upn).AddArgument($graphTenantId).AddArgument($configuration.ClientId)
+  $expectedTenantId = if ($script:activeTenantProfile) { [string]$script:activeTenantProfile.TenantId } else { '' }
+  $null = $powerShell.AddScript($workerScript).AddArgument($PSScriptRoot).AddArgument($configuration.Mode).AddArgument($upn).AddArgument($graphTenantId).AddArgument($configuration.ClientId).AddArgument($expectedTenantId)
   $timer = New-Object System.Windows.Forms.Timer
   $timer.Interval = 150
   $context = [pscustomobject]@{
@@ -3301,6 +3492,7 @@ $result | ConvertTo-Json -Depth 4 -Compress
     AuthenticationMode = $configuration.Mode
     GraphTenantId = $graphTenantId
     ClientId = $configuration.ClientId
+    ProfileName = $(if ($script:activeTenantProfile) { [string]$script:activeTenantProfile.Name } else { 'Manual' })
   }
   $script:loginVerificationContext = $context
   $timer.Add_Tick({
@@ -4159,6 +4351,7 @@ function Set-ConnectedUIState {
     $loginInfoLabel.Visible = $Connected
     $loginInfoLabel.Text = if ($Connected) { "Logged in as: $($script:currentIdentityLabel)" } else { '' }
   }
+  Update-WinTunerTenantProfileSummary
 }
 $script:isConnected = $false
 $script:currentUserUpn = ""
@@ -4166,6 +4359,7 @@ $script:currentIdentityLabel = ''
 $script:currentAuthenticationMode = 'Interactive'
 $script:currentGraphTenantId = ''
 $script:currentClientId = ''
+$script:currentTenantProfileName = ''
 
 # Cache effective builds and package versions validated from disk
 $script:builtVersions = @{}
@@ -4200,7 +4394,7 @@ $contentWidth = [Math]::Max(760, $form.ClientSize.Width - 20)
 # Header panel – contains all login/top controls so they stay in one row
 $headerPanel = New-Object System.Windows.Forms.Panel
 $headerPanel.Dock = [System.Windows.Forms.DockStyle]::Top
-$headerPanel.Height = 78
+$headerPanel.Height = 83
 $form.Controls.Add($headerPanel)
 
 # Theme toggle button (top right, anchored so it never clips)
@@ -4329,6 +4523,13 @@ $authSummaryLabel.Size = New-Object System.Drawing.Size(480, 35)
 $authSummaryLabel.AutoEllipsis = $true
 $authSummaryLabel.Visible = $false
 $headerPanel.Controls.Add($authSummaryLabel)
+
+$tenantProfileSummaryLabel = New-Object System.Windows.Forms.Label
+$tenantProfileSummaryLabel.Location = New-Object System.Drawing.Point(10,64)
+$tenantProfileSummaryLabel.Size = New-Object System.Drawing.Size(740,17)
+$tenantProfileSummaryLabel.AutoEllipsis = $true
+$tenantProfileSummaryLabel.Anchor = 'Top,Left,Right'
+$headerPanel.Controls.Add($tenantProfileSummaryLabel)
 
 # TabControl
 $tabControl = New-Object System.Windows.Forms.TabControl
@@ -4727,6 +4928,7 @@ $script:isDiscoveryDeploymentActive = $false
 # ==================================================
 $tabSettings = New-Object System.Windows.Forms.TabPage
 $tabSettings.Text = "Settings"
+$tabSettings.AutoScroll = $true
 $tabControl.TabPages.Add($tabSettings)
 
 # Settings Header
@@ -4896,6 +5098,13 @@ $historyButton.Location = New-Object System.Drawing.Point(20,375)
 $historyButton.Size = New-Object System.Drawing.Size(180,35)
 $historyButton.Add_Click({ Show-WinTunerUpdateHistory })
 $tabSettings.Controls.Add($historyButton)
+
+$tenantProfilesButton = New-Object System.Windows.Forms.Button
+$tenantProfilesButton.Text = 'Tenant profiles...'
+$tenantProfilesButton.Location = New-Object System.Drawing.Point(220,375)
+$tenantProfilesButton.Size = New-Object System.Drawing.Size(180,35)
+$tenantProfilesButton.Add_Click({ Show-WinTunerTenantProfiles })
+$tabSettings.Controls.Add($tenantProfilesButton)
 
 $graphPermissionsButton.Add_Click({
   $permissionSummary = @"
@@ -5502,6 +5711,7 @@ $script:settings = Import-WinTunerSettings -Path $script:settingsPath
 $rememberCheckBox.Checked = [bool]$script:settings.RememberMe
 $rememberMeCheckbox.Checked = [bool]$script:settings.RememberMe
 if ($script:settings.RememberMe -and $script:settings.LastUser) { $usernameBox.Text = $script:settings.LastUser } else { $usernameBox.Text = "" }
+Initialize-WinTunerActiveTenantProfile
 Update-WinTunerAuthenticationUI
 
 # Populate username ComboBox with recent users (only if RememberMe is on)
@@ -5895,7 +6105,7 @@ $logoutButton.Add_Click({
   $script:currentClientId = ''
   Update-PackageActionState
   if ($loginInfoLabel) { $loginInfoLabel.Text = '' }
-  if ([string]$script:settings.AuthenticationMode -eq 'Interactive' -and -not $script:settings.RememberMe) {
+  if ([string]$script:settings.AuthenticationMode -eq 'Interactive' -and -not $script:settings.RememberMe -and -not $script:settings.ActiveTenantProfileId) {
     $usernameBox.Text = ''
   }
   Update-Status 'Logout success.'

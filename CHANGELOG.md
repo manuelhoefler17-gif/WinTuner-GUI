@@ -2,6 +2,18 @@
 
 All notable changes to WinTuner GUI are documented here.
 
+## [0.10.27] – Unreleased
+
+### Added
+- Local named tenant profiles for interactive, client-secret and certificate authentication, including the expected tenant GUID, identity and package folder.
+- Settings profile manager with save, selection, deletion and explicit manual configuration. Switching is allowed only while signed out and idle.
+- Header profile, tenant and authentication display. The login worker rejects a mismatched tenant before reading Intune inventory or enabling tenant actions.
+- Optional reuse of an existing Windows DPAPI-protected client secret in a profile. Plaintext secrets and tokens are excluded; previous identity fields are cleared when switching.
+
+### Safety
+- Profile files use schema validation and serialized atomic writes. A missing or invalid selected profile blocks login instead of silently falling back.
+- Existing manual authentication remains the default. Editing authentication settings explicitly returns to manual configuration.
+
 ## [0.10.26] – 2026-10-29
 
 ### Added
