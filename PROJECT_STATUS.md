@@ -4,7 +4,7 @@
 
 Development version: **0.10.27**
 
-Latest published stable release: **v0.10.26**
+Latest published stable release: **v0.10.27**
 
 Repository:
 `manuelhoefler17-gif/WinTuner-GUI`
@@ -16,9 +16,9 @@ Branches:
 - Changes are developed and tested on `Test`
 - Changes reach `main` only through Pull Requests
 
-The 0.10.27 tenant-profile implementation was merged through Pull Request #152 and `Test` was synchronized with `main`. Release publication has been approved and release metadata is being prepared on `Test`.
+The v0.10.27 release is published and verified. Implementation and release metadata reached `main` through Pull Requests #152 and #153; `Test` is synchronized with `main` after each merge.
 
-## Development Work for 0.10.27
+## Completed Work for 0.10.27
 
 - Feature-list item 5: named tenant profiles containing expected tenant GUID, authentication mode/identity and default package folder, with opt-in copying of an existing DPAPI-protected secret.
 - Added Settings profile management, explicit manual configuration, startup restoration and a profile/tenant/authentication header.
@@ -28,8 +28,17 @@ The 0.10.27 tenant-profile implementation was merged through Pull Request #152 a
 - Automated validation passed: all 55 PowerShell files parse, all 221 Pester tests pass, and git diff --check passes. Tests include DPAPI-only profile secrets, credential isolation, malformed/duplicate profile blocking, profile restoration and the actual login worker rejecting a wrong tenant in all three modes before Intune inventory/preflight reads.
 - The user confirmed the final profile workflow and successful profile restoration after a GUI restart. The interactive profile manager was tested with a saved customer configuration.
 - Implementation was integrated through Pull Request #152 after both GitHub checks passed; `Test` and `main` were synchronized at 9daea99.
-- The user authorized tagging and publication of v0.10.27. Release asset and standalone bootstrap verification are pending; app-only profile login has automated coverage but was not explicitly confirmed in this final manual test.
+- The user authorized tagging and publication of v0.10.27; app-only profile login has automated coverage but was not explicitly confirmed in this final manual test.
 - Remaining feature-list items after profiles: 6 (installation status), 7 (controlled old-app cleanup), 8 (sanitized diagnostic export).
+
+Release completed on 2026-10-29:
+
+- Merged release metadata through Pull Request #153 after both GitHub checks passed. The implementation was previously merged through Pull Request #152.
+- Created and pushed annotated tag v0.10.27 from synchronized main/Test commit 371e7bf.
+- Published the GitHub release with WinTuner_GUI.ps1 and its SHA256 checksum.
+- Independently downloaded both assets and verified version, syntax and SHA256 integrity.
+- Executed the downloaded script's actual standalone bootstrap in a fresh temporary folder. All 19 runtime files match their tagged Git blobs exactly, parse without errors and produce release marker 0.10.27.
+- WinTuner_GUI.ps1 SHA256: 6B3EC1DD3307BD1983C36A2E7AB3417A2559D35A1FEA5DF3955CB50D691B6A65.
 
 ## Completed Work for 0.10.26
 
@@ -759,10 +768,10 @@ For significant function changes, prefer replacing a complete known block rather
 
 Latest published stable release:
 
-**v0.10.26**
+**v0.10.27**
 
 Current development version:
 
 **0.10.27**
 
-0.10.26 was published on 2026-10-29. Work for 0.10.27 is on `Test`; the release remains v0.10.26.
+0.10.27 was published and its assets/standalone bootstrap verified on 2026-10-29. The `main` and `Test` branches are synchronized after each release-documentation merge.
