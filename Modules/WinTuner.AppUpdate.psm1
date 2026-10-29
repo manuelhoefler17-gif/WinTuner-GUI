@@ -46,16 +46,9 @@ function Set-WinTunerAvailableAssignmentAutoUpdate {
                 $parameters.Body = $Body
                 $parameters.ContentType = 'application/json'
             }
-            Invoke-MgGraphRequest @parameters
+            Invoke-WinTunerGraphRequest @parameters
         }
     )
-
-    if (-not (Get-Command Invoke-MgGraphRequest -ErrorAction SilentlyContinue)) {
-        Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
-    }
-    if (-not (Get-Command Invoke-MgGraphRequest -ErrorAction SilentlyContinue)) {
-        throw 'Microsoft.Graph.Authentication does not provide Invoke-MgGraphRequest.'
-    }
 
     $escapedGraphId = [uri]::EscapeDataString($GraphId)
     $nextLink = "https://graph.microsoft.com/v1.0/deviceAppManagement/mobileApps/$escapedGraphId/assignments?`$top=999"

@@ -145,7 +145,16 @@ function New-WinTunerModuleConnectionParameters {
 
     switch ($Mode) {
         'Interactive' {
-            return @{ Username = [string]$UserPrincipalName; ErrorAction = 'Stop' }
+            return @{
+                Username = [string]$UserPrincipalName
+                Scopes = @(
+                    'DeviceManagementApps.ReadWrite.All'
+                    'DeviceManagementConfiguration.ReadWrite.All'
+                    'DeviceManagementManagedDevices.Read.All'
+                    'Directory.Read.All'
+                )
+                ErrorAction = 'Stop'
+            }
         }
         'ClientSecret' {
             return @{

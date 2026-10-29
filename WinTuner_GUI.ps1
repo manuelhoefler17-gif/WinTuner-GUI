@@ -55,7 +55,7 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.23"
+$script:appVersion  = "0.10.24"
 
 # Bootstrap release dependencies and keep them synchronized with the GUI release.
 $requiredReleaseFiles = @(
@@ -1682,6 +1682,7 @@ Import-Module WinTuner -ErrorAction Stop
 Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Core.psm1') -Force -ErrorAction Stop
 Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Winget.psm1') -Force -ErrorAction Stop
 Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.PackageBuild.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Intune.psm1') -Force -ErrorAction Stop
 Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.AppUpdate.psm1') -Force -ErrorAction Stop
 function Write-AppUpdateProgressFile {
   param([object]$ProgressInfo)
@@ -2760,7 +2761,7 @@ function Show-WinTunerAuthenticationSettings {
       @(
         'USER LOGIN (Interactive)'
         'No customer-owned Entra App Registration is required.'
-        'The sign-in clients request these delegated Microsoft Graph permissions:'
+        'The shared WinTuner sign-in requests these delegated Microsoft Graph permissions:'
         'DeviceManagementApps.ReadWrite.All'
         'DeviceManagementConfiguration.ReadWrite.All'
         'DeviceManagementManagedDevices.Read.All'
@@ -3044,6 +3045,7 @@ function Start-WinTunerLogin {
         Write-Log 'No existing WinTuner app-only token cache was present before authentication.'
       }
     }
+    Disconnect-WinTunerGraph
     $null = Connect-WtWinTuner @connectionParameters
     if ($configuration.Mode -eq 'ClientSecret') {
       $graphContext = Connect-WinTunerGraph -AuthenticationMode ClientSecret -TenantId $configuration.TenantId -ClientId $configuration.ClientId -ClientSecret $clientSecret
@@ -4709,7 +4711,7 @@ $graphPermissionsButton.Add_Click({
 USER LOGIN (Interactive)
 
 No customer-owned Entra App Registration is required.
-The WinTuner and Microsoft Graph sign-in clients request these delegated permissions:
+The shared WinTuner sign-in requests these delegated permissions:
 
 DeviceManagementApps.ReadWrite.All
 DeviceManagementConfiguration.ReadWrite.All

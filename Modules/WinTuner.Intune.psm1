@@ -1,5 +1,74 @@
 Set-StrictMode -Version Latest
 
+# Share identity metadata across runspaces; the WinTuner provider owns tokens.
+function Get-WinTunerGraphContext {
+    $context = [AppDomain]::CurrentDomain.GetData('WinTuner.GUI.DelegatedGraphContext')
+    if ($context) { return $context }
+    if (Get-Command Get-MgContext -ErrorAction SilentlyContinue) {
+        return Get-MgContext -ErrorAction SilentlyContinue
+    }
+    return $null
+}
+
+function Invoke-WinTunerDelegatedGraphRequest {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [ValidateSet('GET', 'PATCH')][string]$Method = 'GET',
+        [AllowNull()][string]$Body
+    )
+
+    $target = [uri]$Uri
+    if (-not $target.IsAbsoluteUri -or $target.Scheme -ne 'https' -or
+        $target.Host -ne 'graph.microsoft.com' -or $target.Port -ne 443 -or
+        -not [string]::IsNullOrEmpty($target.UserInfo)) {
+        throw 'The Graph request must target https://graph.microsoft.com.'
+    }
+
+    $token = $null
+    $headers = $null
+    try {
+        $token = Get-WtToken -ShowToken:$false -DecodeToken:$false -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($token)) { throw 'WinTuner returned no Graph access token.' }
+        $headers = @{ Authorization = "Bearer $token" }
+        $parameters = @{
+            Uri = $target; Method = $Method; Headers = $headers
+            MaximumRedirection = 0; ErrorAction = 'Stop'; Verbose = $false; Debug = $false
+        }
+        if ($PSBoundParameters.ContainsKey('Body')) {
+            $parameters.Body = $Body
+            $parameters.ContentType = 'application/json'
+        }
+        Invoke-RestMethod @parameters
+    }
+    finally {
+        if ($headers) { $headers.Clear() }
+        $token = $null
+    }
+}
+
+function Invoke-WinTunerGraphRequest {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [ValidateSet('GET', 'PATCH')][string]$Method = 'GET',
+        [AllowNull()][string]$Body,
+        [string]$ContentType = 'application/json'
+    )
+
+    if ([AppDomain]::CurrentDomain.GetData('WinTuner.GUI.DelegatedGraphContext')) {
+        $parameters = @{ Uri = $Uri; Method = $Method }
+        if ($PSBoundParameters.ContainsKey('Body')) { $parameters.Body = $Body }
+        return Invoke-WinTunerDelegatedGraphRequest @parameters
+    }
+    $parameters = @{ Uri = $Uri; Method = $Method; ErrorAction = 'Stop' }
+    if ($PSBoundParameters.ContainsKey('Body')) {
+        $parameters.Body = $Body
+        $parameters.ContentType = $ContentType
+    }
+    Invoke-MgGraphRequest @parameters
+}
+
 function Get-WinTunerGraphContextValidation {
     [CmdletBinding()]
     param(
@@ -12,7 +81,7 @@ function Get-WinTunerGraphContextValidation {
     )
 
     if (-not $Context) {
-        $Context = Get-MgContext -ErrorAction SilentlyContinue
+        $Context = Get-WinTunerGraphContext
     }
     if (-not $Context) {
         return [pscustomobject]@{ IsValid = $false; Reason = 'No Microsoft Graph process context is available.'; Context = $null }
@@ -83,16 +152,46 @@ function Connect-WinTunerGraph {
         )
     )
 
-    if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
-        throw 'Microsoft.Graph.Authentication module not found. Install Microsoft.Graph first.'
-    }
-
     if ($AuthenticationMode -eq 'Interactive') {
         if ($UserPrincipalName -notmatch '^[^@\s]+@[^@\s]+$') {
             throw "Invalid user principal name: '$UserPrincipalName'."
         }
-        $TenantId = $UserPrincipalName.Split('@')[1]
-    } else {
+        $context = [AppDomain]::CurrentDomain.GetData('WinTuner.GUI.DelegatedGraphContext')
+        if ($context) {
+            $validation = Get-WinTunerGraphContextValidation -UserPrincipalName $UserPrincipalName -Context $context
+            if (-not $validation.IsValid) { throw $validation.Reason }
+            return $context
+        }
+
+        # Confirm identity through Graph without decoding tokens or starting
+        # a second authentication client.
+        $account = Invoke-WinTunerDelegatedGraphRequest -Uri 'https://graph.microsoft.com/v1.0/me?$select=userPrincipalName'
+        if (-not [string]::Equals([string]$account.userPrincipalName, $UserPrincipalName, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The WinTuner Graph account does not match the requested user.'
+        }
+        $organization = Invoke-WinTunerDelegatedGraphRequest -Uri 'https://graph.microsoft.com/v1.0/organization?$select=id'
+        $organizations = @($organization.value)
+        $tenantGuid = [guid]::Empty
+        if ($organizations.Count -ne 1 -or -not [guid]::TryParse([string]$organizations[0].id, [ref]$tenantGuid)) {
+            throw 'Microsoft Graph did not return an unambiguous tenant identity.'
+        }
+        $context = [pscustomobject]@{
+            Account = [string]$account.userPrincipalName
+            TenantId = $tenantGuid.ToString()
+            ClientId = 'WinTuner'
+            AuthType = 'Delegated'
+            Scopes = @($Scopes)
+        }
+        [AppDomain]::CurrentDomain.SetData('WinTuner.GUI.DelegatedGraphContext', $context)
+        return $context
+    }
+
+    [AppDomain]::CurrentDomain.SetData('WinTuner.GUI.DelegatedGraphContext', $null)
+    if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
+        throw 'Microsoft.Graph.Authentication module not found. Install Microsoft.Graph first.'
+    }
+
+    if ($AuthenticationMode -ne 'Interactive') {
         if ([string]::IsNullOrWhiteSpace($TenantId)) {
             throw 'Tenant ID is required for app-only Microsoft Graph authentication.'
         }
@@ -123,9 +222,6 @@ function Connect-WinTunerGraph {
     }
 
     switch ($AuthenticationMode) {
-        'Interactive' {
-            $null = Connect-MgGraph -TenantId $TenantId -Scopes $Scopes -ContextScope Process -NoWelcome -ErrorAction Stop *>&1
-        }
         'ClientSecret' {
             $secureSecret = ConvertTo-SecureString -String $ClientSecret -AsPlainText -Force
             $credential = [System.Management.Automation.PSCredential]::new($ClientId, $secureSecret)
@@ -286,11 +382,7 @@ function Get-WinTunerDetectedApps {
         [switch]$ForceRefresh
     )
 
-    if (-not (Get-Command Invoke-MgRestMethod -ErrorAction SilentlyContinue)) {
-        throw "Invoke-MgRestMethod is not available. Connect/import Microsoft.Graph.Authentication first."
-    }
-
-    $context = Get-MgContext -ErrorAction SilentlyContinue
+    $context = Get-WinTunerGraphContext
     $tenantId = $null
 
     if ($context -and $context.TenantId) {
@@ -328,7 +420,7 @@ function Get-WinTunerDetectedApps {
 
         while ($null -eq $response) {
             try {
-                $response = Invoke-MgRestMethod `
+                $response = Invoke-WinTunerGraphRequest `
                     -Uri $uri `
                     -Method GET `
                     -ErrorAction Stop `
@@ -412,6 +504,7 @@ function Disconnect-WinTunerGraph {
     [CmdletBinding()]
     param()
 
+    [AppDomain]::CurrentDomain.SetData('WinTuner.GUI.DelegatedGraphContext', $null)
     try {
         if (Get-MgContext -ErrorAction SilentlyContinue) {
             Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
@@ -423,6 +516,8 @@ function Disconnect-WinTunerGraph {
 
 
 Export-ModuleMember -Function `
+    Get-WinTunerGraphContext, `
+    Invoke-WinTunerGraphRequest, `
     Connect-WinTunerGraph, `
     Get-WinTunerGraphContextValidation, `
     Confirm-WinTunerGraphContext, `
