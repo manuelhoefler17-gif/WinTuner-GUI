@@ -126,6 +126,7 @@ The self-update process includes:
 
 - Persistent application settings
 - Interactive, client-secret, or certificate authentication
+- Named tenant profiles with verified tenant and authentication display (development 0.10.27)
 - Remembered username support
 - Recent-user history
 - Background tenant-connection verification with bounded retries
@@ -244,6 +245,7 @@ WinTuner-GUI/
 │   ├── WinTuner.PackageUpload.psm1
 │   ├── WinTuner.Settings.psm1
 │   ├── WinTuner.SupersededRemoval.psm1
+│   ├── WinTuner.TenantProfiles.psm1
 │   ├── WinTuner.UpdateScan.psm1
 │   └── WinTuner.Winget.psm1
 ├── Workers/
@@ -294,6 +296,9 @@ Persistent settings handling.
 
 **`WinTuner.SupersededRemoval.psm1`**
 Background deletion batching with per-app results and safe handling of already absent apps.
+
+**`WinTuner.TenantProfiles.psm1`**
+Validated local tenant profiles, atomic profile persistence, credential-isolated configuration switching and expected/actual tenant validation.
 
 **`WinTuner.UpdateScan.psm1`**
 Testable update candidate scanning, progress and cooperative cancellation logic.
@@ -393,6 +398,14 @@ Settings are stored in:
 ```
 
 Typical settings include the package path, automatic update checking, remembered users, WinGet overrides, and Entra authentication configuration. If secure client-secret storage is selected, the settings file contains only a Windows DPAPI CurrentUser-protected value. It can be decrypted only by the same Windows user on the same computer; plaintext secrets are never written to the settings file.
+
+### Tenant profiles (development 0.10.27)
+
+Open **Settings > Tenant profiles...** to save the current authentication configuration under a customer name. Enter the customer's expected **directory/tenant GUID**; when signed in, the verified tenant ID is filled in and cannot be changed in the save dialog. Profiles explicitly retain the interactive username, authentication mode, application/certificate identifiers and default package folder, independently of Remember me. Saving a profile does not switch the current session. Use **Use selected** after logout to activate it; profiles are also restored after restarting the GUI.
+
+Switching requires logout and idle operations. The previous identity and protected secret are cleared before applying another profile. The header shows the profile, authentication mode and expected tenant before login, and the verified actual tenant after login. The selected tenant GUID is checked in the login worker before Intune inventory reads; a mismatch blocks the session. A deleted or damaged selected profile blocks login until another profile or **Manual configuration** is explicitly chosen. Manual configuration clears the previous authentication identity; editing **Authentication...** also detaches the selected profile and returns to manual mode. To change a saved configuration, save it under a new name and delete the old profile when no longer needed.
+
+Profiles are stored separately in `%APPDATA%\WinTunerGUI\TenantProfiles.json`, using validated, serialized atomic writes. They contain no tokens, plaintext secrets or certificate private keys. The optional checkbox copies an **already DPAPI-protected** client secret into that profile for reuse by the same Windows user on the same computer; leaving it unchecked prompts for the secret at login. Profile deletion removes that profile's protected secret copy; it does not revoke the credential in Entra or remove copies in other profiles/settings. These files are local configuration, not a portable credential vault. Clear All Caches does not delete profiles.
 
 Cache data is stored separately under the current user's local application data directory:
 
