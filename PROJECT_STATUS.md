@@ -4,7 +4,7 @@
 
 Development version: **0.10.24**
 
-Latest published stable release: **v0.10.23**
+Latest published stable release: **v0.10.24**
 
 Repository:
 `manuelhoefler17-gif/WinTuner-GUI`
@@ -16,9 +16,9 @@ Branches:
 - Changes are developed and tested on `Test`
 - Changes reach `main` only through Pull Requests
 
-The published stable baseline is v0.10.23. Version 0.10.24 is being prepared for publication on `Test`.
+`main` and `Test` are synchronized with the completed v0.10.24 release.
 
-## Release Preparation for 0.10.24
+## Completed Work for 0.10.24
 
 - Isolate update-scan progress callback failures so a temporary progress-file write collision cannot abort an otherwise valid scan; add a regression test covering reporting failures at all stages.
 - Shared interactive sign-in requests all four existing delegated scopes through WinTuner.
@@ -28,6 +28,15 @@ The published stable baseline is v0.10.23. Version 0.10.24 is being prepared for
 - Automated release validation passed: 45 PowerShell files parsed without errors, 170 Pester tests passed, and git diff --check passed. Tests cover shared permission requests, identity rejection, failed tenant verification, provider token retrieval on later requests, PATCH content, external URL rejection, runspace reuse/logout, the existing app-only request path, and update-scan progress failures.
 - The user confirmed a single interactive sign-in in the GUI and authorized publishing v0.10.24. Long-lived token renewal has not yet been validated in a tenant session.
 - The current GUI log also records a completed update scan with 19 checked apps and 11 candidates.
+
+Release completed on 2026-10-29:
+
+- Merged implementation and release metadata through Pull Request #146 after both GitHub checks passed.
+- Created and pushed annotated tag v0.10.24 from main/Test commit 49f085e.
+- Published the GitHub release with WinTuner_GUI.ps1 and its SHA256 checksum.
+- Downloaded both assets again and verified version, syntax and SHA256 integrity.
+- Executed the downloaded script's standalone bootstrap; all 15 runtime files match the tagged release and parse without errors, and the release marker is 0.10.24.
+- WinTuner_GUI.ps1 SHA256: 579A60C595346BAEDBAF3CAF0B2079ED2C46A5E26AD5B8B4638FE4A058B9B3BD.
 
 ## Completed Work for 0.10.23
 
@@ -676,10 +685,10 @@ For significant function changes, prefer replacing a complete known block rather
 
 Latest published stable release:
 
-**v0.10.23**
+**v0.10.24**
 
 Current development version:
 
 **0.10.24**
 
-0.10.23 was published on 2026-10-29. Version 0.10.24 is being developed on `Test`.
+0.10.24 was published on 2026-10-29. The `main` and `Test` branches are synchronized.
