@@ -55,13 +55,14 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.25"
+$script:appVersion  = "0.10.26"
 
 # Bootstrap release dependencies and keep them synchronized with the GUI release.
 $requiredReleaseFiles = @(
   'Modules/WinTuner.AppUpdate.psm1',
   'Modules/WinTuner.Retry.psm1',
   'Modules/WinTuner.UpdateHistory.psm1',
+  'Modules/WinTuner.UpdateRules.psm1',
   'Modules/WinTuner.Authentication.psm1',
   'Modules/WinTuner.Connection.psm1',
   'Modules/WinTuner.Core.psm1',
@@ -243,6 +244,10 @@ $intuneModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Intune.psm1'
 Import-Module $intuneModulePath -Force
 Import-Module (Join-Path $PSScriptRoot 'Modules\WinTuner.UpdateHistory.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'Modules\WinTuner.AppUpdate.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'Modules\WinTuner.UpdateRules.psm1') -Force
+$script:updateRules = @()
+$script:updateRulesTenant = ''
+$script:updateRulesError = ''
 
 # Initialize file logging. The GUI output box is attached after it is created.
 Initialize-WinTunerLogging -BasePath $PSScriptRoot
@@ -1394,6 +1399,7 @@ function Complete-WinTunerUpdateScan {
 
   $script:updateApps = [System.Collections.Generic.List[object]]::new()
   $script:updateVisibleApps = [System.Collections.Generic.List[object]]::new()
+  Read-WinTunerGuiUpdateRules -Force
   $updateListBox.BeginUpdate()
   try {
     $updateListBox.Items.Clear()
@@ -1685,7 +1691,8 @@ function Complete-WinTunerAppUpdateBatch {
     try {
       if (-not $script:isConnected -or [string]$script:currentGraphTenantId -ne [string]$batchResult.TenantId) { throw 'The tenant changed. Start a new preview.' }
       if (Show-WinTunerUpdatePreview -Plan $batchResult) {
-        Start-WinTunerAppUpdateBatch -Apps $Context.Apps -RootPackageFolder $Context.RootPackageFolder -Mode $Context.Mode -ApprovedPlan $batchResult
+        $approvedApps = @($Context.Apps | Where-Object { [string]$_.GraphId -in @($batchResult.Items.GraphId) })
+        Start-WinTunerAppUpdateBatch -Apps $approvedApps -RootPackageFolder $Context.RootPackageFolder -Mode $Context.Mode -ApprovedPlan $batchResult
       } else {
         $script:lastUpdateResultSummary = 'Last update: canceled before deployment'
         Update-Status 'Deployment preview canceled. No apps were changed.'
@@ -1775,6 +1782,7 @@ function Start-WinTunerAppUpdateBatch {
       LatestVersion = [string]$app.LatestVersion
       GraphId = [string]$app.GraphId
       PackageId = [string]$app.PackageId
+      ScannedLatestVersion = if ($app.PSObject.Properties['ScannedLatestVersion']) { [string]$app.ScannedLatestVersion } else { [string]$app.LatestVersion }
     })
   }
   $appsJson = @($workerApps) | ConvertTo-Json -Depth 5 -Compress
@@ -1796,7 +1804,7 @@ function Start-WinTunerAppUpdateBatch {
   Update-DiscoveryActionState
   Update-SupersededActionState
   $updateScript = @'
-param($RepositoryRoot, $AppsJson, $RootPackageFolder, $ProgressPath, $TenantId, $PlanJson, $OperationId, $HistoryBasePath)
+param($RepositoryRoot, $AppsJson, $RootPackageFolder, $ProgressPath, $TenantId, $PlanJson, $OperationId, $HistoryBasePath, $UpdateMode = 'Checked', $RulesBasePath)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 Import-Module WinTuner -ErrorAction Stop
@@ -1806,6 +1814,7 @@ Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.PackageBuild.psm1') -
 Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Intune.psm1') -Force -ErrorAction Stop
 Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.AppUpdate.psm1') -Force -ErrorAction Stop
 Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.UpdateHistory.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.UpdateRules.psm1') -Force -ErrorAction Stop
 function Write-AppUpdateProgressFile {
   param([object]$ProgressInfo)
   $tempPath = "$ProgressPath.$([guid]::NewGuid().ToString('N')).tmp"
@@ -1818,18 +1827,39 @@ function Write-AppUpdateProgressFile {
 $apps = @($AppsJson | ConvertFrom-Json -ErrorAction Stop)
 $graphContext = Get-WinTunerGraphContext
 if (-not $graphContext -or [string]$graphContext.TenantId -ne [string]$TenantId) { throw 'The active Graph tenant does not match the update tenant.' }
+$rules = @(Get-WinTunerUpdateRules -TenantId $TenantId -BasePath $RulesBasePath)
+$selection = Resolve-WinTunerUpdateCandidates -Apps $apps -Rules $rules -Mode $UpdateMode
+if (@($selection.Apps).Count -eq 0) { throw 'No apps are eligible under the current update rules.' }
+if (-not [string]::IsNullOrWhiteSpace($PlanJson) -and @($selection.Skipped).Count -gt 0) { throw 'Update rules changed after preview. Review a new preview.' }
+$apps = @($selection.Apps)
+foreach ($app in $apps) {
+  if (-not [string]::IsNullOrWhiteSpace([string]$app.PinnedVersion)) {
+    $versions = @(Get-WingetVersions -PackageId $app.PackageId)
+    if ($versions -cnotcontains [string]$app.PinnedVersion) { throw "Pinned version '$($app.PinnedVersion)' is not available in WinGet for '$($app.PackageId)'." }
+  }
+}
 if ([string]::IsNullOrWhiteSpace($PlanJson)) {
-  New-WinTunerUpdatePlan -Apps $apps -TenantId $TenantId -RootPackageFolder $RootPackageFolder | ConvertTo-Json -Depth 40 -Compress
+  $plan = New-WinTunerUpdatePlan -Apps $apps -TenantId $TenantId -RootPackageFolder $RootPackageFolder
+  $plan | Add-Member -NotePropertyName Skipped -NotePropertyValue @($selection.Skipped)
+  $plan | ConvertTo-Json -Depth 40 -Compress
   return
 }
 $approvedPlan = $PlanJson | ConvertFrom-Json -ErrorAction Stop
 if ([string]$approvedPlan.TenantId -ne [string]$TenantId -or [string]$approvedPlan.RootPackageFolder -cne $RootPackageFolder) { throw 'The approved update plan does not match this operation.' }
+foreach ($app in $apps) {
+  $expected = @($approvedPlan.Items | Where-Object { $_.GraphId -eq $app.GraphId -and $_.PackageId -eq $app.PackageId })
+  if ($expected.Count -ne 1 -or [string]$expected[0].LatestVersion -cne [string]$app.LatestVersion) { throw 'The update target changed after preview. Review a new preview.' }
+}
 $result = Invoke-WinTunerAppUpdateBatch -Apps $apps -RootPackageFolder $RootPackageFolder -ValidatePlan {
   param($app, $effectiveVersion)
   $expected = @($approvedPlan.Items | Where-Object { $_.GraphId -eq $app.GraphId -and $_.PackageId -eq $app.PackageId })
   if ($expected.Count -ne 1 -or $effectiveVersion -cne [string]$expected[0].LatestVersion) { throw 'The built version differs from the approved preview. Review a new preview before upload.' }
   $currentContext = Get-WinTunerGraphContext
   if (-not $currentContext -or [string]$currentContext.TenantId -ne [string]$TenantId) { throw 'The Graph tenant changed.' }
+  $currentRules = @(Get-WinTunerUpdateRules -TenantId $TenantId -BasePath $RulesBasePath)
+  $decision = Get-WinTunerUpdateRuleDecision -App $app -Rules $currentRules
+  $eligible = if ($UpdateMode -eq 'All') { $decision.CanUpdateAll } else { $decision.CanUpdateSelected }
+  if (-not $eligible -or $decision.TargetVersion -cne $effectiveVersion) { throw 'Update rules changed before upload. Review a new preview.' }
   $current = New-WinTunerUpdatePlan -Apps @($app) -TenantId $TenantId -RootPackageFolder $RootPackageFolder
   if ($current.Items[0].AssignmentHash -cne $expected[0].AssignmentHash) { throw 'The Intune assignments changed after preview. Review a new preview before upload.' }
 }.GetNewClosure() -RecordResult {
@@ -1842,7 +1872,7 @@ $result = Invoke-WinTunerAppUpdateBatch -Apps $apps -RootPackageFolder $RootPack
 $result | ConvertTo-Json -Depth 7 -Compress
 '@
   $powerShell = [System.Management.Automation.PowerShell]::Create()
-  $null = $powerShell.AddScript($updateScript).AddArgument($PSScriptRoot).AddArgument($appsJson).AddArgument($RootPackageFolder).AddArgument($progressPath).AddArgument([string]$script:currentGraphTenantId).AddArgument($planJson).AddArgument($operationId)
+  $null = $powerShell.AddScript($updateScript).AddArgument($PSScriptRoot).AddArgument($appsJson).AddArgument($RootPackageFolder).AddArgument($progressPath).AddArgument([string]$script:currentGraphTenantId).AddArgument($planJson).AddArgument($operationId).AddArgument($null).AddArgument($Mode)
   $timer = New-Object System.Windows.Forms.Timer
   $timer.Interval = 150
   $context = [pscustomobject]@{ PowerShell = $powerShell; AsyncResult = $null; Timer = $timer; ProgressPath = $progressPath; LastProgress = $null; Mode = $Mode; IsPreview = $isPreview; Apps = @($workerApps); RootPackageFolder = $RootPackageFolder }
@@ -4420,6 +4450,14 @@ $updateHeaderLabel.AutoSize = $true
 $updateHeaderLabel.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
 $tabUpdate.Controls.Add($updateHeaderLabel)
 
+$updateRuleButton = New-Object System.Windows.Forms.Button
+$updateRuleButton.Text = 'Update rule for selected app...'
+$updateRuleButton.Location = New-Object System.Drawing.Point(390,15)
+$updateRuleButton.Size = New-Object System.Drawing.Size(260,26)
+$updateRuleButton.Enabled = $false
+$updateRuleButton.Add_Click({ Show-WinTunerUpdateRuleEditor })
+$tabUpdate.Controls.Add($updateRuleButton)
+
 $updateSearchButton = New-Object System.Windows.Forms.Button
 $updateSearchButton.Text = "Search Updates"
 $updateSearchButton.Location = New-Object System.Drawing.Point(100,50)
@@ -4449,6 +4487,7 @@ $updateListBox.Height = 130
 $updateListBox.CheckOnClick = $true
 $updateListBox.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $tabUpdate.Controls.Add($updateListBox)
+$updateListBox.Add_SelectedIndexChanged({ Update-UpdateActionState })
 
 $updateSummaryLabel = New-Object System.Windows.Forms.Label
 $updateSummaryLabel.Text = "Candidates: 0 | Checked: 0"
@@ -4918,12 +4957,152 @@ $script:packageUploadContext = $null
 # Optional: user-chosen versions per PackageID
 $script:selectedPackageVersions = @{}
 
+function Read-WinTunerGuiUpdateRules {
+    param([switch]$Force)
+    $tenant = [string]$script:currentGraphTenantId
+    if (-not $script:isConnected -or [string]::IsNullOrWhiteSpace($tenant)) {
+        $script:updateRules = @(); $script:updateRulesTenant = ''; $script:updateRulesError = ''
+        return
+    }
+    if (-not $Force -and $script:updateRulesTenant -eq $tenant) { return }
+    try {
+        $script:updateRules = @(Get-WinTunerUpdateRules -TenantId $tenant)
+        $script:updateRulesError = ''
+    } catch {
+        $script:updateRules = @()
+        $script:updateRulesError = 'Update rules unavailable; updates are blocked.'
+        Write-Log $script:updateRulesError
+    }
+    $script:updateRulesTenant = $tenant
+}
+
+function Get-WinTunerGuiUpdateDecision {
+    param([Parameter(Mandatory)][object]$App)
+    Read-WinTunerGuiUpdateRules
+    if ($script:updateRulesError) {
+        return [pscustomobject]@{ CanUpdateAll = $false; CanUpdateSelected = $false; TargetVersion = [string]$App.LatestVersion; Description = $script:updateRulesError }
+    }
+    Get-WinTunerUpdateRuleDecision -App $App -Rules $script:updateRules
+}
+
+function Show-WinTunerUpdateRuleEditor {
+    $index = $updateListBox.SelectedIndex
+    if (-not $script:isConnected -or $script:isUpdateOperationActive -or $script:updateScanRunning -or $index -lt 0 -or $index -ge $script:updateVisibleApps.Count) { return }
+    $app = $script:updateVisibleApps[$index]
+    if ([string]::IsNullOrWhiteSpace([string]$app.PackageId)) { Update-Status 'The selected app has no verified package ID.'; return }
+    $tenant = [string]$script:currentGraphTenantId
+    $dialog = New-Object System.Windows.Forms.Form
+    try {
+        $existing = @(Get-WinTunerUpdateRules -TenantId $tenant | Where-Object { $_.PackageId -ieq $app.PackageId })
+        $dialog.Text = "Update rule - $($app.Name)"
+        $dialog.StartPosition = 'CenterParent'
+        $dialog.ClientSize = New-Object System.Drawing.Size(650,390)
+        $dialog.FormBorderStyle = 'FixedDialog'
+        $dialog.MaximizeBox = $false
+        $scope = New-Object System.Windows.Forms.Label
+        $scope.Location = New-Object System.Drawing.Point(15,15)
+        $scope.Size = New-Object System.Drawing.Size(620,45)
+        $scope.Text = "Package: $($app.PackageId)`r`nTenant: $tenant (applies to every Intune app for this package)"
+        $exclude = New-Object System.Windows.Forms.CheckBox
+        $exclude.Location = New-Object System.Drawing.Point(15,65)
+        $exclude.Size = New-Object System.Drawing.Size(620,25)
+        $exclude.Text = 'Exclude from Update All (checked individual updates remain allowed)'
+        $pin = New-Object System.Windows.Forms.CheckBox
+        $pin.Location = New-Object System.Drawing.Point(15,100)
+        $pin.Size = New-Object System.Drawing.Size(155,25)
+        $pin.Text = 'Pin exact version:'
+        $version = New-Object System.Windows.Forms.TextBox
+        $version.Location = New-Object System.Drawing.Point(175,100)
+        $version.Size = New-Object System.Drawing.Size(230,25)
+        $version.Text = [string]$app.CurrentVersion
+        $version.Enabled = $false
+        $hold = New-Object System.Windows.Forms.Button
+        $hold.Location = New-Object System.Drawing.Point(420,98)
+        $hold.Size = New-Object System.Drawing.Size(210,29)
+        $hold.Text = 'Hold installed version'
+        $reasonLabel = New-Object System.Windows.Forms.Label
+        $reasonLabel.Location = New-Object System.Drawing.Point(15,145)
+        $reasonLabel.Text = 'Reason (optional):'
+        $reasonLabel.AutoSize = $true
+        $reason = New-Object System.Windows.Forms.TextBox
+        $reason.Location = New-Object System.Drawing.Point(175,140)
+        $reason.Size = New-Object System.Drawing.Size(455,70)
+        $reason.Multiline = $true
+        $reason.MaxLength = 500
+        $expiryLabel = New-Object System.Windows.Forms.Label
+        $expiryLabel.Location = New-Object System.Drawing.Point(15,235)
+        $expiryLabel.Size = New-Object System.Drawing.Size(155,40)
+        $expiryLabel.Text = 'Expires (local time):'
+        $expiry = New-Object System.Windows.Forms.DateTimePicker
+        $expiry.Location = New-Object System.Drawing.Point(175,230)
+        $expiry.Size = New-Object System.Drawing.Size(270,25)
+        $expiry.Format = 'Custom'
+        $expiry.CustomFormat = 'yyyy-MM-dd HH:mm'
+        $expiry.ShowCheckBox = $true
+        $expiry.Value = [datetime]::Now.AddDays(7)
+        $expiry.Checked = $false
+        $help = New-Object System.Windows.Forms.Label
+        $help.Location = New-Object System.Drawing.Point(15,275)
+        $help.Size = New-Object System.Drawing.Size(615,48)
+        $help.Text = 'Pinning to the installed version holds updates. A newer pinned version must exist in WinGet. Pins apply to both update actions; downgrades are blocked. Leave expiry unchecked for no expiry.'
+        if ($existing.Count -eq 1) {
+            $exclude.Checked = [bool]$existing[0].ExcludeFromAll
+            $pin.Checked = -not [string]::IsNullOrWhiteSpace([string]$existing[0].PinnedVersion)
+            if ($pin.Checked) { $version.Text = [string]$existing[0].PinnedVersion }
+            $version.Enabled = $pin.Checked
+            $reason.Text = [string]$existing[0].Reason
+            if ($existing[0].ExpiresUtc) { $expiry.Value = ([datetimeoffset]$existing[0].ExpiresUtc).LocalDateTime; $expiry.Checked = $true }
+        }
+        $pin.Add_CheckedChanged({ $version.Enabled = $pin.Checked }.GetNewClosure())
+        $hold.Add_Click({ $pin.Checked = $true; $version.Text = [string]$app.CurrentVersion }.GetNewClosure())
+        $buttons = New-Object System.Windows.Forms.FlowLayoutPanel
+        $buttons.Dock = 'Bottom'; $buttons.Height = 48; $buttons.FlowDirection = 'RightToLeft'
+        $cancel = New-Object System.Windows.Forms.Button
+        $cancel.Text = 'Cancel'; $cancel.Width = 120; $cancel.DialogResult = 'Cancel'
+        $save = New-Object System.Windows.Forms.Button
+        $save.Text = 'Save rule'; $save.Width = 120
+        $remove = New-Object System.Windows.Forms.Button
+        $remove.Text = 'Remove rule'; $remove.Width = 120; $remove.Enabled = $existing.Count -gt 0
+        $save.Add_Click({
+            try {
+                $pinnedVersion = if ($pin.Checked) { $version.Text.Trim() } else { '' }
+                if ($pin.Checked -and -not $pinnedVersion) { throw 'Enter the exact version to pin.' }
+                $expiresUtc = if ($expiry.Checked) { $expiry.Value.ToUniversalTime().ToString('o') } else { '' }
+                if ($expiry.Checked -and $expiry.Value -le [datetime]::Now) { throw 'Choose a future expiry or leave expiry unchecked.' }
+                Set-WinTunerUpdateRule -TenantId $tenant -PackageId $app.PackageId -ExcludeFromAll $exclude.Checked -PinnedVersion $pinnedVersion -Reason $reason.Text -ExpiresUtc $expiresUtc
+                Write-Log "Saved update rule for $($app.PackageId) in tenant $tenant."
+                $dialog.DialogResult = 'OK'; $dialog.Close()
+            } catch { [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Update rule could not be saved') }
+        }.GetNewClosure())
+        $remove.Add_Click({
+            try {
+                Set-WinTunerUpdateRule -TenantId $tenant -PackageId $app.PackageId -Remove
+                Write-Log "Removed update rule for $($app.PackageId) in tenant $tenant."
+                $dialog.DialogResult = 'OK'; $dialog.Close()
+            } catch { [void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Update rule could not be removed') }
+        }.GetNewClosure())
+        foreach ($control in @($scope,$exclude,$pin,$version,$hold,$reasonLabel,$reason,$expiryLabel,$expiry,$help)) { $dialog.Controls.Add($control) }
+        foreach ($control in @($cancel,$save,$remove)) { $buttons.Controls.Add($control) }
+        $dialog.Controls.Add($buttons)
+        $dialog.CancelButton = $cancel
+        if ($dialog.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) {
+            Read-WinTunerGuiUpdateRules -Force
+            $updateFilterDebounceTimer.Stop(); $updateFilterDebounceTimer.Start()
+            Update-UpdateActionState
+        }
+    } catch { Update-Status "Update rules unavailable: $($_.Exception.Message)" }
+    finally { $dialog.Dispose() }
+}
+
 function Get-UpdateCandidateDisplayText {
     param([Parameter(Mandatory)][object]$App)
 
     $current = if ([string]::IsNullOrWhiteSpace([string]$App.CurrentVersion)) { '?' } else { [string]$App.CurrentVersion }
     $latest = if ([string]::IsNullOrWhiteSpace([string]$App.LatestVersion)) { '?' } else { [string]$App.LatestVersion }
-    return "$($App.Name) [$current -> $latest]"
+    $decision = Get-WinTunerGuiUpdateDecision -App $App
+    $display = "$($App.Name) [$current -> $($decision.TargetVersion)]"
+    if ($decision.Description) { $display += " | $($decision.Description)" }
+    return $display
 }
 
 function Resolve-WinTunerPackageRootForOperation {
@@ -5091,11 +5270,17 @@ function Update-UpdateActionState {
         $updateAllButton.Text = if ($isDeployingUpdates) { 'Updating...' } else { 'Update ALL (unchecked too)' }
         $candidates = @($script:updateApps)
         $checkedCount = @($candidates | Where-Object { $_ -and $_.Checked }).Count
+        $allowedAllCount = @($candidates | Where-Object { (Get-WinTunerGuiUpdateDecision -App $_).CanUpdateAll }).Count
+        $selectableCount = @($candidates | Where-Object { (Get-WinTunerGuiUpdateDecision -App $_).CanUpdateSelected }).Count
+        $allowedCheckedCount = @($candidates | Where-Object { $_.Checked -and (Get-WinTunerGuiUpdateDecision -App $_).CanUpdateSelected }).Count
         $state = Get-WinTunerUpdateActionState `
             -Connected ([bool]$script:isConnected) `
             -IsBusy ([bool]($script:isLoginOperationActive -or $script:isUpdateOperationActive -or $script:isSupersededOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive -or $script:isPackageUploadActive)) `
             -CandidateCount $candidates.Count `
             -CheckedCount $checkedCount `
+            -EligibleAllCount $allowedAllCount `
+            -EligibleCheckedCount $allowedCheckedCount `
+            -SelectableCount $selectableCount `
             -IsScanRunning ([bool]$script:updateScanRunning) `
             -CancelRequested ([bool]$script:cancelUpdateScan)
 
@@ -5105,8 +5290,9 @@ function Update-UpdateActionState {
         $uncheckAllButton.Enabled = $state.CanUncheckAll
         $updateSelectedButton.Enabled = $state.CanUpdateSelected
         $updateAllButton.Enabled = $state.CanUpdateAll
+        if ($updateRuleButton) { $updateRuleButton.Enabled = $state.CanSearch -and -not $script:updateScanRunning -and $updateListBox.SelectedIndex -ge 0 }
         if ($updateSummaryLabel) {
-            $baseSummary = "Candidates: $($candidates.Count) | Checked: $checkedCount"
+            $baseSummary = "Candidates: $($candidates.Count) | Checked: $checkedCount | Eligible All: $allowedAllCount"
             $updateSummaryLabel.Text = if ([string]::IsNullOrWhiteSpace($script:lastUpdateResultSummary)) { $baseSummary } else { "$baseSummary | $($script:lastUpdateResultSummary)" }
         }
     } catch {
@@ -5115,6 +5301,7 @@ function Update-UpdateActionState {
         $uncheckAllButton.Enabled = $false
         $updateSelectedButton.Enabled = $false
         $updateAllButton.Enabled = $false
+        if ($updateRuleButton) { $updateRuleButton.Enabled = $false }
         Write-LogSafe "Update action state warning: $($_.Exception.Message)"
     }
 
@@ -5463,12 +5650,13 @@ $uploadButton.Add_Click({
 # Check All / Uncheck All Buttons
 # ----------------------------------------------
 $checkAllButton.Add_Click({
-  foreach ($app in $script:updateApps) { $app.Checked = $true }
+  foreach ($app in $script:updateApps) { $app.Checked = [bool](Get-WinTunerGuiUpdateDecision -App $app).CanUpdateSelected }
   for ($i = 0; $i -lt $updateListBox.Items.Count; $i++) {
-    $updateListBox.SetItemChecked($i, $true)
+    $updateListBox.SetItemChecked($i, [bool]$script:updateVisibleApps[$i].Checked)
   }
   Update-UpdateActionState
-  Update-Status "All update candidates checked ($($script:updateApps.Count) items)"
+  $eligibleChecked = @($script:updateApps | Where-Object Checked).Count
+  Update-Status "Eligible update candidates checked ($eligibleChecked items)"
 })
 
 $uncheckAllButton.Add_Click({
@@ -5538,6 +5726,25 @@ $updateFilterBox.Add_TextChanged({
   $updateFilterDebounceTimer.Stop()
   $updateFilterDebounceTimer.Start()
 })
+
+$updateRulesRefreshTimer = New-Object System.Windows.Forms.Timer
+$updateRulesRefreshTimer.Interval = 30000
+$script:updateRulesDisplayStamp = ''
+$updateRulesRefreshTimer.Add_Tick({
+  if (-not $script:isConnected -or $script:isUpdateOperationActive -or $script:updateScanRunning) { return }
+  Read-WinTunerGuiUpdateRules -Force
+  $stamp = ($script:updateRules | ConvertTo-Json -Depth 5 -Compress) + '|' + $script:updateRulesError
+  foreach ($rule in $script:updateRules) {
+    if ($rule.ExpiresUtc) { $stamp += '|' + ([datetimeoffset]$rule.ExpiresUtc -le [datetimeoffset]::UtcNow) }
+  }
+  if ($stamp -ne $script:updateRulesDisplayStamp) {
+    $script:updateRulesDisplayStamp = $stamp
+    $updateFilterDebounceTimer.Stop(); $updateFilterDebounceTimer.Start()
+  }
+  Update-UpdateActionState
+})
+$updateRulesRefreshTimer.Start()
+$form.Add_FormClosed({ $updateRulesRefreshTimer.Stop(); $updateRulesRefreshTimer.Dispose() })
 
 
 # ----------------------------------------------

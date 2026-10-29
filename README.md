@@ -4,7 +4,7 @@
 
 [![PowerShell Version](https://img.shields.io/badge/PowerShell-7.0%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.10.25-orange.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.26-orange.svg)](CHANGELOG.md)
 
 ## 🎯 Overview
 
@@ -348,6 +348,19 @@ From version 0.10.25, transient HTTP 408, 429, 500, 502, 503 and 504 errors and 
 
 Open **Settings > Update history...** while signed in to view the latest 500 completed app-update results for the current tenant and export the displayed rows to CSV. History is stored locally under `%LOCALAPPDATA%\WinTuner\UpdateHistory\<tenant-id>` and retained across GUI restarts and cache clearing. It contains timestamps, package/version identifiers, outcome and reason code; raw service errors and authentication material are excluded. It is a local operational record, not a server audit log. An interrupted app may have no final history entry; earlier completed items remain recorded. CSV exports neutralize leading spreadsheet formulas in text values.
 
+#### Update rules (since version 0.10.26)
+
+In **Updates**, highlight a result and click **Update rule for selected app...**. Rules apply to the package ID within the signed-in tenant and survive Intune app replacement, GUI restarts and cache clearing.
+
+- **Exclude from Update All** skips that package in bulk updates. A deliberately checked individual update remains possible and its preview shows the exclusion.
+- **Pin exact version** uses only that target for both update actions. **Hold installed version** pins the current version and blocks upgrades. No downgrade is initiated. A newer pinned target must exist in WinGet; the preview shows the pinned target rather than silently using the latest release.
+- Add an optional reason and local expiry date/time. An unchecked expiry has no time limit. Expired rules are ignored; eligibility refreshes within 30 seconds while idle and is evaluated again at operation time.
+- **Remove rule** restores normal behavior. A pin blocks Check All/update eligibility when its target is the installed version or is not newer. Held packages remain visible in scan results.
+
+The worker reads current rules before preview and again before upload. A changed pin, exclusion or expired pin that changes the approved target blocks that update for a new preview. The preview lists skipped packages. Rules only control the **Updates** workflow; they are local preferences, not Intune-enforced policies, and do not restrict manual package uploads or Discovery deployment.
+
+Rules are saved separately from credentials under `%APPDATA%\WinTunerGUI\UpdateRules\<tenant-id>.json`. An unreadable or invalid rule document blocks updates until repaired, so saved restrictions are not silently ignored. No additional Graph permissions are needed.
+
 ### 4. Find superseded Intune applications
 
 1. Open **Updates**.
@@ -568,7 +581,7 @@ A development checkout intentionally uses its local dependency files and is ther
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete version history.
 
-Current stable release: **v0.10.25**.
+Current stable release: **v0.10.26**.
 
 ---
 

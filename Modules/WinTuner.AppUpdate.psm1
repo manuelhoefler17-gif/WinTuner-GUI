@@ -182,6 +182,7 @@ function New-WinTunerUpdatePlan {
             Name = [string]$app.Name; GraphId = [string]$app.GraphId; PackageId = [string]$app.PackageId
             CurrentVersion = [string]$app.CurrentVersion; LatestVersion = [string]$app.LatestVersion
             AssignmentHash = $hash; Assignments = @($assignments)
+            RuleDescription = [string](Get-WinTunerAppUpdateObjectValue $app 'RuleDescription')
         })
     }
     [pscustomobject]@{ TenantId = $TenantId.ToString('D'); RootPackageFolder = $RootPackageFolder; Items = @($items); CreatedAtUtc = [datetime]::UtcNow.ToString('o') }
@@ -195,6 +196,8 @@ function Format-WinTunerUpdatePlan {
     foreach ($item in @($Plan.Items)) {
         $lines.Add('')
         $lines.Add("$($item.Name): $($item.CurrentVersion) -> $($item.LatestVersion) [$($item.PackageId)]")
+        $ruleDescription = [string](Get-WinTunerAppUpdateObjectValue $item 'RuleDescription')
+        if ($ruleDescription) { $lines.Add("  Rule: $ruleDescription") }
         if (@($item.Assignments).Count -eq 0) { $lines.Add('  No assignments. The new app will not be assigned.'); continue }
         foreach ($assignment in @($item.Assignments)) {
             $intent = [string](Get-WinTunerAppUpdateObjectValue $assignment 'intent')
@@ -209,7 +212,12 @@ function Format-WinTunerUpdatePlan {
         }
     }
     $lines.Add('')
-    $lines.Add('Assignments will be preserved. If the Intune version or assignments change before upload, the affected update is blocked for a new review.')
+    $skippedProperty = $Plan.PSObject.Properties['Skipped']
+    if ($skippedProperty -and @($skippedProperty.Value).Count -gt 0) {
+        $lines.Add('Skipped by update rules:')
+        foreach ($entry in @($skippedProperty.Value)) { $lines.Add("  $($entry.Name): $($entry.Description)") }
+    }
+    $lines.Add('Assignments will be preserved. If the Intune version, assignments or update rules change before upload, the affected update is blocked for a new review.')
     $lines -join [Environment]::NewLine
 }
 
