@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Development version: **0.10.25**
+Development version: **0.10.26**
 
 Latest published stable release: **v0.10.25**
 
@@ -16,7 +16,20 @@ Branches:
 - Changes are developed and tested on `Test`
 - Changes reach `main` only through Pull Requests
 
-`main` and `Test` are synchronized with the completed v0.10.25 release.
+The published stable baseline is v0.10.25. Version 0.10.26 is being prepared for publication on `Test`.
+
+## Release Preparation for 0.10.26
+
+- Implement feature-list item 4: persistent tenant/package update rules for Update All exclusions and exact-version pins/holds, with optional reason and local-time expiry.
+- Exclusions affect only Update All; deliberately checked updates remain allowed. Pins affect both update actions and do not initiate downgrades.
+- Keep held/skipped results visible, calculate button/check-all eligibility centrally, and show applied rules/skipped apps in deployment preview.
+- Validate current rules before preview/build and before upload. Validate pinned target availability in WinGet and block stale approvals when the effective target changes.
+- Store rules independently of credentials in %APPDATA%\WinTunerGUI\UpdateRules\<tenant-id>.json with tenant/schema validation, serialized atomic writes and fail-closed loading.
+- Refresh idle rule/expiry display every 30 seconds, and preserve rules across cache clearing, tenant switches and app replacement.
+- Automated validation passed: 53 PowerShell files parsed without errors, all 204 Pester tests passed, and git diff --check passed. Tests cover tenant-separated storage, malformed-file blocking, expiry, exact pins/holds, original-candidate preservation, action state and the actual worker with exclusions, pinned targets and mid-build rule changes.
+- The user confirmed the final manual GUI rule workflow worked and authorized publication of v0.10.26.
+
+Next feature-list items: 5 (tenant profiles), 6 (installation status), 7 (controlled old-app cleanup), 8 (sanitized diagnostic export).
 
 ## Completed Work for 0.10.25
 
@@ -130,6 +143,7 @@ Modules:
 - `Modules/WinTuner.AppUpdate.psm1`
 - `Modules/WinTuner.Retry.psm1`
 - `Modules/WinTuner.UpdateHistory.psm1`
+- `Modules/WinTuner.UpdateRules.psm1`
 - `Modules/WinTuner.Authentication.psm1`
 - `Modules/WinTuner.Connection.psm1`
 - `Modules/WinTuner.Core.psm1`
@@ -727,6 +741,6 @@ Latest published stable release:
 
 Current development version:
 
-**0.10.25**
+**0.10.26**
 
-0.10.25 was published on 2026-10-29. The `main` and `Test` branches are synchronized.
+0.10.25 was published on 2026-10-29. Version 0.10.26 is in development on `Test`.

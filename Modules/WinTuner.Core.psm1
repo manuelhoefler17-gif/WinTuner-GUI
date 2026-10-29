@@ -368,10 +368,16 @@ function Get-WinTunerUpdateActionState {
 
         [bool]$IsScanRunning = $false,
 
-        [bool]$CancelRequested = $false
+        [bool]$CancelRequested = $false,
+        [int]$EligibleAllCount = -1,
+        [int]$EligibleCheckedCount = -1,
+        [int]$SelectableCount = -1
     )
 
     $effectiveCheckedCount = [Math]::Min($CheckedCount, $CandidateCount)
+    $allCount = if ($EligibleAllCount -lt 0) { $CandidateCount } else { [Math]::Min($EligibleAllCount, $CandidateCount) }
+    $checkedAllowed = if ($EligibleCheckedCount -lt 0) { $effectiveCheckedCount } else { [Math]::Min($EligibleCheckedCount, $effectiveCheckedCount) }
+    $selectable = if ($SelectableCount -lt 0) { $CandidateCount } else { [Math]::Min($SelectableCount, $CandidateCount) }
     $canInteract = $Connected -and -not $IsBusy
     $canCancelScan = $Connected -and $IsBusy -and $IsScanRunning -and -not $CancelRequested
 
@@ -382,10 +388,10 @@ function Get-WinTunerUpdateActionState {
         } else {
             'Search Updates'
         }
-        CanCheckAll       = $canInteract -and $CandidateCount -gt 0 -and $effectiveCheckedCount -lt $CandidateCount
+        CanCheckAll       = $canInteract -and $selectable -gt 0 -and $checkedAllowed -lt $selectable
         CanUncheckAll     = $canInteract -and $effectiveCheckedCount -gt 0
-        CanUpdateSelected = $canInteract -and $effectiveCheckedCount -gt 0
-        CanUpdateAll      = $canInteract -and $CandidateCount -gt 0
+        CanUpdateSelected = $canInteract -and $checkedAllowed -gt 0
+        CanUpdateAll      = $canInteract -and $allCount -gt 0
         CanLogout         = $canInteract
     }
 }

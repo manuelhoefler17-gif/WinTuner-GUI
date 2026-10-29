@@ -2,6 +2,18 @@
 
 All notable changes to WinTuner GUI are documented here.
 
+## [0.10.26] – 2026-10-29
+
+### Added
+- Tenant- and package-scoped update rules: exclude packages from Update All, pin an exact version, or hold the installed version, with optional reason and expiry.
+- A rule editor in the Updates tab, visible rule/eligibility information and skipped-app details in deployment preview.
+- Persistent atomic rule storage with tenant validation; malformed rules block updates instead of silently dropping restrictions.
+- Recheck rules in the worker before preview/build and immediately before upload, including verifying pinned versions exist in WinGet.
+
+### Changed
+- Update All respects exclusions; explicitly checked updates can still update excluded packages. Version pins apply to both update actions and never initiate downgrades.
+- Check All and update buttons respect per-app eligibility, and expired rules are ignored automatically.
+
 ## [0.10.25] – 2026-10-29
 
 ### Fixed
