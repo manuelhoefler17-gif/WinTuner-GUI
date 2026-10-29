@@ -4,7 +4,7 @@
 
 [![PowerShell Version](https://img.shields.io/badge/PowerShell-7.0%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.10.26-orange.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.27-orange.svg)](CHANGELOG.md)
 
 ## 🎯 Overview
 
@@ -126,7 +126,7 @@ The self-update process includes:
 
 - Persistent application settings
 - Interactive, client-secret, or certificate authentication
-- Named tenant profiles with verified tenant and authentication display (development 0.10.27)
+- Named tenant profiles with verified tenant and authentication display (since 0.10.27)
 - Remembered username support
 - Recent-user history
 - Background tenant-connection verification with bounded retries
@@ -399,7 +399,7 @@ Settings are stored in:
 
 Typical settings include the package path, automatic update checking, remembered users, WinGet overrides, and Entra authentication configuration. If secure client-secret storage is selected, the settings file contains only a Windows DPAPI CurrentUser-protected value. It can be decrypted only by the same Windows user on the same computer; plaintext secrets are never written to the settings file.
 
-### Tenant profiles (development 0.10.27)
+### Tenant profiles (since 0.10.27)
 
 Open **Settings > Tenant profiles...** to save the current authentication configuration under a customer name. Enter the customer's expected **directory/tenant GUID**; when signed in, the verified tenant ID is filled in and cannot be changed in the save dialog. Profiles explicitly retain the interactive username, authentication mode, application/certificate identifiers and default package folder, independently of Remember me. Saving a profile does not switch the current session. Use **Use selected** after logout to activate it; profiles are also restored after restarting the GUI.
 
@@ -594,7 +594,7 @@ A development checkout intentionally uses its local dependency files and is ther
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete version history.
 
-Current stable release: **v0.10.26**.
+Current stable release: **v0.10.27**.
 
 ---
 

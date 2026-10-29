@@ -16,7 +16,7 @@ Branches:
 - Changes are developed and tested on `Test`
 - Changes reach `main` only through Pull Requests
 
-The 0.10.27 tenant-profile implementation was developed on `Test` for integration through a Pull Request. The published release remains v0.10.26 until separate release approval.
+The 0.10.27 tenant-profile implementation was merged through Pull Request #152 and `Test` was synchronized with `main`. Release publication has been approved and release metadata is being prepared on `Test`.
 
 ## Development Work for 0.10.27
 
@@ -27,7 +27,8 @@ The 0.10.27 tenant-profile implementation was developed on `Test` for integratio
 - Profile storage is separate from caches, schema validated and written atomically under a named mutex. Tenant IDs of existing profiles are immutable; no plaintext credentials or tokens are stored.
 - Automated validation passed: all 55 PowerShell files parse, all 221 Pester tests pass, and git diff --check passes. Tests include DPAPI-only profile secrets, credential isolation, malformed/duplicate profile blocking, profile restoration and the actual login worker rejecting a wrong tenant in all three modes before Intune inventory/preflight reads.
 - The user confirmed the final profile workflow and successful profile restoration after a GUI restart. The interactive profile manager was tested with a saved customer configuration.
-- Implementation integration is approved. Tagging and publication of v0.10.27 still require separate release approval; app-only profile login has automated coverage but was not explicitly confirmed in this final manual test.
+- Implementation was integrated through Pull Request #152 after both GitHub checks passed; `Test` and `main` were synchronized at 9daea99.
+- The user authorized tagging and publication of v0.10.27. Release asset and standalone bootstrap verification are pending; app-only profile login has automated coverage but was not explicitly confirmed in this final manual test.
 - Remaining feature-list items after profiles: 6 (installation status), 7 (controlled old-app cleanup), 8 (sanitized diagnostic export).
 
 ## Completed Work for 0.10.26

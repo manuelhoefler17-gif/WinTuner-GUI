@@ -2,7 +2,7 @@
 
 All notable changes to WinTuner GUI are documented here.
 
-## [0.10.27] – Unreleased
+## [0.10.27] – 2026-10-29
 
 ### Added
 - Local named tenant profiles for interactive, client-secret and certificate authentication, including the expected tenant GUID, identity and package folder.
