@@ -2,7 +2,7 @@
 
 All notable changes to WinTuner GUI are documented here.
 
-## [0.10.28] – Unreleased
+## [0.10.28] – 2026-10-29
 
 ### Fixed
 - Log each background package-build retry once and show its HTTP status directly in the status/log message.

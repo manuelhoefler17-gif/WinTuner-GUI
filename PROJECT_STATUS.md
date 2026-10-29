@@ -25,7 +25,7 @@ The v0.10.27 release is published and verified. Implementation and release metad
 - HTTP 429 without a usable Retry-After now uses 15/30 second fallback waits. Valid server delays remain authoritative; other transient fallback waits, three-attempt cap, 120-second total wait budget, cancellation and deployment replay protection remain intact.
 - Automated validation passed: all 56 PowerShell files parse without errors, all 226 Pester tests pass, and git diff --check passes. Regression coverage exercises the real package-build/batch/JSON/GUI-log path with a simulated 429, verifies exactly one retry log entry and one deployment after recovery, and covers longer backoff, server Retry-After precedence, budget limits, cancellation and non-retryable failures.
 - The user confirmed that the error did not occur in the final manual GUI test and authorized continuation. A real 429/retry was not reproduced in that test; retry behavior is covered by automated regression tests. The external service's rate limit cannot be removed by this fix.
-- Implementation integration is approved. Tagging and release publication of v0.10.28 still require separate approval.
+- The fix was integrated through Pull Request #155 after both GitHub checks passed, and Test/main were synchronized at f857b7f. The user approved tagging and publication of v0.10.28; release asset and standalone verification are pending.
 - Planned feature-list item 6 (installation status) remains next after this focused retry fix.
 
 ## Completed Work for 0.10.27
