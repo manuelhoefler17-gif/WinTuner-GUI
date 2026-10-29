@@ -4,7 +4,7 @@
 
 Development version: **0.10.23**
 
-Latest published stable release: **v0.10.22**
+Latest published stable release: **v0.10.23**
 
 Repository:
 `manuelhoefler17-gif/WinTuner-GUI`
@@ -16,9 +16,9 @@ Branches:
 - Changes are developed and tested on `Test`
 - Changes reach `main` only through Pull Requests
 
-The v0.10.23 release is being prepared on `Test`; the latest published release remains v0.10.22 until publication.
+`main` and `Test` are synchronized with the completed v0.10.23 release.
 
-## 0.10.23 Release Preparation
+## Completed Work for 0.10.23
 
 - Enable AutoUpdate superseded apps on copied Available assignments of the newly deployed app after an existing Intune app is updated.
 - Preserve other assignment settings and skip other assignment intents.
@@ -27,6 +27,15 @@ The v0.10.23 release is being prepared on `Test`; the latest published release r
 - A transient HTTP 429 during package creation failed safely; a user-initiated retry succeeded.
 - Release validation passed: 44 PowerShell files parsed without errors, 161 Pester tests passed, and git diff --check passed.
 - Unified interactive authentication is deferred to the next development change after this release.
+
+Release completed on 2026-10-29:
+
+- Merged implementation and release metadata through Pull Request #144 after both GitHub checks passed.
+- Created and pushed annotated tag v0.10.23 from main/Test commit bfa7081.
+- Published the GitHub release with WinTuner_GUI.ps1 and its SHA256 checksum.
+- Downloaded both assets again and verified SHA256 integrity.
+- Executed the standalone bootstrap from the downloaded GUI script; all 15 runtime files match the tagged release and parse without errors, and the release marker is 0.10.23.
+- WinTuner_GUI.ps1 SHA256: CCB8263EA2ADADF95735B60E4CCA0225251D81F5A673F7617DDAEB84E20053E2.
 
 ---
 
@@ -656,10 +665,10 @@ For significant function changes, prefer replacing a complete known block rather
 
 Latest published stable release:
 
-**v0.10.22** (v0.10.23 prepared for publication)
+**v0.10.23**
 
 Current development version:
 
 **0.10.23**
 
-0.10.22 was published on 2026-09-28. Version 0.10.23 is being prepared on `Test` on 2026-10-29.
+0.10.23 was published on 2026-10-29. The `main` and `Test` branches are synchronized.
