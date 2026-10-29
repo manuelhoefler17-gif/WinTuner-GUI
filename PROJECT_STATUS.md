@@ -4,7 +4,7 @@
 
 Development version: **0.10.26**
 
-Latest published stable release: **v0.10.25**
+Latest published stable release: **v0.10.26**
 
 Repository:
 `manuelhoefler17-gif/WinTuner-GUI`
@@ -16,11 +16,11 @@ Branches:
 - Changes are developed and tested on `Test`
 - Changes reach `main` only through Pull Requests
 
-The published stable baseline is v0.10.25. Version 0.10.26 is being prepared for publication on `Test`.
+`main` and `Test` are synchronized with the completed v0.10.26 release.
 
-## Release Preparation for 0.10.26
+## Completed Work for 0.10.26
 
-- Implement feature-list item 4: persistent tenant/package update rules for Update All exclusions and exact-version pins/holds, with optional reason and local-time expiry.
+- Implemented feature-list item 4: persistent tenant/package update rules for Update All exclusions and exact-version pins/holds, with optional reason and local-time expiry.
 - Exclusions affect only Update All; deliberately checked updates remain allowed. Pins affect both update actions and do not initiate downgrades.
 - Keep held/skipped results visible, calculate button/check-all eligibility centrally, and show applied rules/skipped apps in deployment preview.
 - Validate current rules before preview/build and before upload. Validate pinned target availability in WinGet and block stale approvals when the effective target changes.
@@ -28,6 +28,15 @@ The published stable baseline is v0.10.25. Version 0.10.26 is being prepared for
 - Refresh idle rule/expiry display every 30 seconds, and preserve rules across cache clearing, tenant switches and app replacement.
 - Automated validation passed: 53 PowerShell files parsed without errors, all 204 Pester tests passed, and git diff --check passed. Tests cover tenant-separated storage, malformed-file blocking, expiry, exact pins/holds, original-candidate preservation, action state and the actual worker with exclusions, pinned targets and mid-build rule changes.
 - The user confirmed the final manual GUI rule workflow worked and authorized publication of v0.10.26.
+
+Release completed on 2026-10-29:
+
+- Merged implementation and release metadata through Pull Request #150 after both GitHub checks passed.
+- Created and pushed annotated tag v0.10.26 from main/Test commit e82a92a.
+- Published the GitHub release with WinTuner_GUI.ps1 and its SHA256 checksum.
+- Downloaded both assets again and verified version, syntax and SHA256 integrity.
+- Executed the downloaded script's standalone bootstrap; all 18 runtime files match the tagged release and parse without errors, and the release marker is 0.10.26.
+- WinTuner_GUI.ps1 SHA256: D49053AE90EBCA2B72E6F6DC23B764F5F7294503A611B21A5EE28E5E91759CB8.
 
 Next feature-list items: 5 (tenant profiles), 6 (installation status), 7 (controlled old-app cleanup), 8 (sanitized diagnostic export).
 
@@ -737,10 +746,10 @@ For significant function changes, prefer replacing a complete known block rather
 
 Latest published stable release:
 
-**v0.10.25**
+**v0.10.26**
 
 Current development version:
 
 **0.10.26**
 
-0.10.25 was published on 2026-10-29. Version 0.10.26 is in development on `Test`.
+0.10.26 was published on 2026-10-29. The `main` and `Test` branches are synchronized.
