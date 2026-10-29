@@ -1,5 +1,19 @@
 Set-StrictMode -Version Latest
 
+function Send-WinTunerUpdateScanProgress {
+    param(
+        [Parameter(Mandatory)][scriptblock]$ReportProgress,
+        [Parameter(Mandatory)][object]$ProgressInfo
+    )
+
+    try { & $ReportProgress $ProgressInfo }
+    catch {
+        # A reader may temporarily block replacement of the progress file.
+        # Reporting is advisory; it must not discard verified scan results.
+        Write-Verbose "Update scan progress could not be reported: $($_.Exception.Message)"
+    }
+}
+
 function Invoke-WinTunerUpdateScan {
     [CmdletBinding()]
     param(
@@ -31,7 +45,7 @@ function Invoke-WinTunerUpdateScan {
     }
 
     try {
-        & $ReportProgress ([pscustomobject]@{
+        Send-WinTunerUpdateScanProgress -ReportProgress $ReportProgress -ProgressInfo ([pscustomobject]@{
             Stage     = 'Loading'
             Processed = 0
             Total     = 0
@@ -68,7 +82,7 @@ function Invoke-WinTunerUpdateScan {
             $appName = if ($nameProperty) { [string]$nameProperty.Value } else { '' }
             $currentVersion = [string]$currentVersionProperty.Value
 
-            & $ReportProgress ([pscustomobject]@{
+            Send-WinTunerUpdateScanProgress -ReportProgress $ReportProgress -ProgressInfo ([pscustomobject]@{
                 Stage     = 'Checking'
                 Processed = $result.CheckedApps
                 Total     = $result.TotalApps
@@ -123,7 +137,7 @@ function Invoke-WinTunerUpdateScan {
         $result.Candidates = @($candidates)
         $result.CandidateCount = $candidates.Count
 
-        & $ReportProgress ([pscustomobject]@{
+        Send-WinTunerUpdateScanProgress -ReportProgress $ReportProgress -ProgressInfo ([pscustomobject]@{
             Stage     = if ($result.Canceled) { 'Canceled' } else { 'Completed' }
             Processed = $result.CheckedApps
             Total     = $result.TotalApps

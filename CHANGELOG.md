@@ -2,6 +2,17 @@
 
 All notable changes to WinTuner GUI are documented here.
 
+## [0.10.24] – 2026-10-29
+
+### Fixed
+- Keep update scans running when a temporary progress-file write collision prevents reporting a status update.
+
+### Changed
+- Interactive login requests the existing WinTuner and Discovery scopes together and reuses the WinTuner credential provider for direct Graph requests, removing the separate interactive Graph PowerShell sign-in.
+- Verify the actual Graph user and tenant before sharing session metadata across background workflows; clear that metadata on logout and before a new login.
+- Obtain tokens through the WinTuner provider for each direct request so token renewal stays with that provider; access tokens are not saved in GUI settings or its session metadata.
+- Keep client-secret and certificate Graph SDK authentication unchanged.
+
 ## [0.10.23] – 2026-10-29
 
 ### Changed

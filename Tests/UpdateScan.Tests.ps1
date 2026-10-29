@@ -4,6 +4,31 @@ BeforeAll {
 }
 
 Describe 'Invoke-WinTunerUpdateScan' {
+    It 'completes all lookups when progress-file reporting fails at every stage' {
+        $apps = @(
+            [pscustomobject]@{ Name = 'First'; CurrentVersion = '1.0'; PackageId = 'Vendor.First' },
+            [pscustomobject]@{ Name = 'Second'; CurrentVersion = '1.0'; PackageId = 'Vendor.Second' }
+        )
+        $progressStages = [System.Collections.Generic.List[string]]::new()
+        $result = Invoke-WinTunerUpdateScan `
+            -GetApps { $apps }.GetNewClosure() `
+            -ResolvePackageId { param($app) $app.PackageId } `
+            -GetVersions { '2.0' } `
+            -IsNewerVersion { $true } `
+            -ReportProgress {
+                param($progressInfo)
+                $progressStages.Add($progressInfo.Stage)
+                throw [System.IO.IOException]::new('Cannot create a file when that file already exists.')
+            }.GetNewClosure()
+
+        $result.ErrorMessage | Should -BeNullOrEmpty
+        $result.CheckedApps | Should -Be 2
+        $result.CandidateCount | Should -Be 2
+        $result.LookupFailureCount | Should -Be 0
+        @($result.Candidates.PackageId) | Should -Be @('Vendor.First', 'Vendor.Second')
+        $progressStages | Should -Be @('Loading', 'Checking', 'Checking', 'Completed')
+    }
+
     It 'returns verified and fallback candidates with stable deployment fields' {
         $apps = @(
             [pscustomobject]@{ Name = 'Verified'; CurrentVersion = '1.0'; LatestVersion = '1.1'; GraphId = 'graph-1'; PackageId = 'Vendor.Verified' },

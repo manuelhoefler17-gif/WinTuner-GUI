@@ -2,7 +2,7 @@
 
 ## Current Version
 
-Development version: **0.10.23**
+Development version: **0.10.24**
 
 Latest published stable release: **v0.10.23**
 
@@ -16,7 +16,18 @@ Branches:
 - Changes are developed and tested on `Test`
 - Changes reach `main` only through Pull Requests
 
-`main` and `Test` are synchronized with the completed v0.10.23 release.
+The published stable baseline is v0.10.23. Version 0.10.24 is being prepared for publication on `Test`.
+
+## Release Preparation for 0.10.24
+
+- Isolate update-scan progress callback failures so a temporary progress-file write collision cannot abort an otherwise valid scan; add a regression test covering reporting failures at all stages.
+- Shared interactive sign-in requests all four existing delegated scopes through WinTuner.
+- Direct Graph requests for Discovery and Available-assignment AutoUpdate use Get-WtToken from the same credential provider, including its token renewal.
+- User and tenant are checked through Graph /me and /organization before session metadata is shared across runspaces. No tokens are stored in that shared metadata.
+- Logout and a new login clear the shared interactive context. Client-secret/certificate Graph SDK flows remain in place.
+- Automated release validation passed: 45 PowerShell files parsed without errors, 170 Pester tests passed, and git diff --check passed. Tests cover shared permission requests, identity rejection, failed tenant verification, provider token retrieval on later requests, PATCH content, external URL rejection, runspace reuse/logout, the existing app-only request path, and update-scan progress failures.
+- The user confirmed a single interactive sign-in in the GUI and authorized publishing v0.10.24. Long-lived token renewal has not yet been validated in a tenant session.
+- The current GUI log also records a completed update scan with 19 checked apps and 11 candidates.
 
 ## Completed Work for 0.10.23
 
@@ -669,6 +680,6 @@ Latest published stable release:
 
 Current development version:
 
-**0.10.23**
+**0.10.24**
 
-0.10.23 was published on 2026-10-29. The `main` and `Test` branches are synchronized.
+0.10.23 was published on 2026-10-29. Version 0.10.24 is being developed on `Test`.

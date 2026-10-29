@@ -4,7 +4,7 @@
 
 [![PowerShell Version](https://img.shields.io/badge/PowerShell-7.0%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.10.23-orange.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.24-orange.svg)](CHANGELOG.md)
 
 ## 🎯 Overview
 
@@ -169,16 +169,18 @@ Interactive user sign-in remains the default. Configure another mode before sign
 
 #### User login (interactive)
 
-No customer-owned Entra App Registration is required. The WinTuner and Microsoft Graph sign-in clients request these delegated Microsoft Graph permissions:
+No customer-owned Entra App Registration is required. Starting with version 0.10.24, one shared WinTuner sign-in requests these delegated Microsoft Graph permissions for both module commands and direct Graph requests:
 
 | Delegated permission | Requested by | Purpose |
 | --- | --- | --- |
-| `DeviceManagementApps.ReadWrite.All` | WinTuner and WinTuner GUI | Read and manage Intune applications, including Win32 app uploads and updates. |
-| `DeviceManagementConfiguration.ReadWrite.All` | WinTuner 1.3.2 default login | Default upstream WinTuner scope for reading and managing Intune configuration and policy data. |
-| `DeviceManagementManagedDevices.Read.All` | WinTuner GUI Discovery | Read managed-device inventory and detected applications used by Discovery. |
-| `Directory.Read.All` | WinTuner GUI Graph session | Read directory data available to the current Graph integration. |
+| `DeviceManagementApps.ReadWrite.All` | Shared WinTuner login | Read and manage Intune applications, including Win32 app uploads and updates. |
+| `DeviceManagementConfiguration.ReadWrite.All` | Shared WinTuner login | Preserve the upstream WinTuner scope for reading and managing Intune configuration and policy data. |
+| `DeviceManagementManagedDevices.Read.All` | Shared WinTuner login | Read managed-device inventory and detected applications used by Discovery. |
+| `Directory.Read.All` | Shared WinTuner login | Read directory data, including the tenant identity verified during sign-in. |
 
 A tenant administrator must grant consent for all delegated permissions. The signed-in account also needs an appropriate Intune role for the operations it performs. These permissions belong to the interactive sign-in path and do not need to be added to the customer-owned app-only registration.
+
+Discovery and assignment updates obtain their access tokens from the existing WinTuner credential provider for each request. There is no second interactive Graph PowerShell login. The GUI shares only verified user/tenant metadata across its background runspaces; it does not save access tokens in settings or its own cache. Token renewal remains with the WinTuner credential provider. Entra consent, MFA, or sign-in policies can still require interaction. Logout clears the shared session metadata and disconnects both providers. Client-secret and certificate authentication retain their existing Graph SDK connection.
 
 #### Entra application (client secret or certificate)
 
@@ -559,7 +561,7 @@ A development checkout intentionally uses its local dependency files and is ther
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete version history.
 
-Current stable release: **v0.10.23**.
+Current stable release: **v0.10.24**.
 
 ---
 
