@@ -55,11 +55,13 @@ $PSDefaultParameterValues = @{
 # ============================================================
 
 # --- Application metadata ---
-$script:appVersion  = "0.10.24"
+$script:appVersion  = "0.10.25"
 
 # Bootstrap release dependencies and keep them synchronized with the GUI release.
 $requiredReleaseFiles = @(
   'Modules/WinTuner.AppUpdate.psm1',
+  'Modules/WinTuner.Retry.psm1',
+  'Modules/WinTuner.UpdateHistory.psm1',
   'Modules/WinTuner.Authentication.psm1',
   'Modules/WinTuner.Connection.psm1',
   'Modules/WinTuner.Core.psm1',
@@ -239,6 +241,8 @@ Import-Module $loggingModulePath -Force
 # Load WinTuner Intune / Graph helpers
 $intuneModulePath = Join-Path $PSScriptRoot 'Modules\WinTuner.Intune.psm1'
 Import-Module $intuneModulePath -Force
+Import-Module (Join-Path $PSScriptRoot 'Modules\WinTuner.UpdateHistory.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'Modules\WinTuner.AppUpdate.psm1') -Force
 
 # Initialize file logging. The GUI output box is attached after it is created.
 Initialize-WinTunerLogging -BasePath $PSScriptRoot
@@ -1551,6 +1555,98 @@ $result | ConvertTo-Json -Depth 6 -Compress
   }
 }
 
+function Show-WinTunerUpdatePreview {
+  param([Parameter(Mandatory)][object]$Plan)
+  $dialog = New-Object System.Windows.Forms.Form
+  try {
+    $dialog.Text = 'Deployment preview'
+    $dialog.StartPosition = 'CenterParent'
+    $dialog.Size = New-Object System.Drawing.Size(880,600)
+    $dialog.MinimumSize = New-Object System.Drawing.Size(600,400)
+    $text = New-Object System.Windows.Forms.TextBox
+    $text.Multiline = $true
+    $text.ReadOnly = $true
+    $text.WordWrap = $false
+    $text.ScrollBars = 'Both'
+    $text.Dock = 'Fill'
+    $text.Font = New-Object System.Drawing.Font('Consolas',10)
+    $text.Text = Format-WinTunerUpdatePlan -Plan $Plan
+    $buttons = New-Object System.Windows.Forms.FlowLayoutPanel
+    $buttons.Dock = 'Bottom'
+    $buttons.Height = 48
+    $buttons.FlowDirection = 'RightToLeft'
+    $cancel = New-Object System.Windows.Forms.Button
+    $cancel.Text = 'Cancel'
+    $cancel.DialogResult = 'Cancel'
+    $cancel.Width = 120
+    $approve = New-Object System.Windows.Forms.Button
+    $approve.Text = 'Start updates'
+    $approve.DialogResult = 'OK'
+    $approve.Width = 150
+    $buttons.Controls.Add($cancel)
+    $buttons.Controls.Add($approve)
+    $dialog.Controls.Add($text)
+    $dialog.Controls.Add($buttons)
+    $dialog.AcceptButton = $cancel
+    $dialog.CancelButton = $cancel
+    return ($dialog.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK)
+  } finally { $dialog.Dispose() }
+}
+
+function Show-WinTunerUpdateHistory {
+  $tenant = [guid]::Empty
+  if (-not $script:isConnected -or -not [guid]::TryParse([string]$script:currentGraphTenantId, [ref]$tenant)) {
+    Update-Status 'Sign in to view the update history for the current tenant.'
+    return
+  }
+  $dialog = New-Object System.Windows.Forms.Form
+  try {
+    $entries = @(Get-WinTunerUpdateHistory -TenantId $tenant)
+    $dialog.Text = "Update history - $tenant (latest $($entries.Count) entries)"
+    $dialog.Size = New-Object System.Drawing.Size(1050,550)
+    $dialog.MinimumSize = New-Object System.Drawing.Size(600,350)
+    $dialog.StartPosition = 'CenterParent'
+    $grid = New-Object System.Windows.Forms.DataGridView
+    $grid.Dock = 'Fill'
+    $grid.ReadOnly = $true
+    $grid.AllowUserToAddRows = $false
+    $grid.AllowUserToDeleteRows = $false
+    $grid.AutoSizeColumnsMode = 'DisplayedCells'
+    foreach ($field in 'TimestampUtc','Name','CurrentVersion','TargetVersion','EffectiveVersion','Status','ReasonCode','PackageId') {
+      [void]$grid.Columns.Add($field, $field)
+    }
+    foreach ($entry in $entries) {
+      [void]$grid.Rows.Add([object[]]@($entry.TimestampUtc,$entry.Name,$entry.CurrentVersion,$entry.TargetVersion,$entry.EffectiveVersion,$entry.Status,$entry.ReasonCode,$entry.PackageId))
+    }
+    $export = New-Object System.Windows.Forms.Button
+    $export.Text = 'Export displayed history to CSV...'
+    $export.Dock = 'Bottom'
+    $export.Height = 40
+    $export.Enabled = $entries.Count -gt 0
+    $export.Add_Click({
+      $save = New-Object System.Windows.Forms.SaveFileDialog
+      try {
+        $save.Filter = 'CSV files (*.csv)|*.csv'
+        $save.FileName = "WinTuner-UpdateHistory-$tenant.csv"
+        if ($save.ShowDialog($dialog) -eq [System.Windows.Forms.DialogResult]::OK) {
+          try {
+            Export-WinTunerUpdateHistory -Entries $entries -Path $save.FileName
+            Write-Log "Exported $($entries.Count) update history entries for tenant $tenant."
+          } catch {
+            [void][System.Windows.Forms.MessageBox]::Show('The update history could not be exported.', 'Export failed')
+          }
+        }
+      } finally { $save.Dispose() }
+    }.GetNewClosure())
+    $dialog.Controls.Add($grid)
+    $dialog.Controls.Add($export)
+    [void]$dialog.ShowDialog($form)
+  } catch {
+    Write-Log "Update history could not be opened: $($_.Exception.Message)"
+    Update-Status 'Update history could not be opened.'
+  } finally { $dialog.Dispose() }
+}
+
 function Complete-WinTunerAppUpdateBatch {
   param([Parameter(Mandatory=$true)][object]$Context)
   $batchResult = $null
@@ -1585,8 +1681,29 @@ function Complete-WinTunerAppUpdateBatch {
     Update-DiscoveryActionState
     return
   }
+  if ($Context.IsPreview) {
+    try {
+      if (-not $script:isConnected -or [string]$script:currentGraphTenantId -ne [string]$batchResult.TenantId) { throw 'The tenant changed. Start a new preview.' }
+      if (Show-WinTunerUpdatePreview -Plan $batchResult) {
+        Start-WinTunerAppUpdateBatch -Apps $Context.Apps -RootPackageFolder $Context.RootPackageFolder -Mode $Context.Mode -ApprovedPlan $batchResult
+      } else {
+        $script:lastUpdateResultSummary = 'Last update: canceled before deployment'
+        Update-Status 'Deployment preview canceled. No apps were changed.'
+        Write-Log 'Update canceled at deployment preview.'
+        Update-UpdateActionState
+        Update-DiscoveryActionState
+      }
+    } catch {
+      Update-Status "Deployment preview failed: $($_.Exception.Message)"
+      Write-Log "Deployment preview failed: $($_.Exception.Message)"
+      Update-UpdateActionState
+      Update-DiscoveryActionState
+    }
+    return
+  }
   $failedItems = [System.Collections.Generic.List[object]]::new()
   foreach ($itemResult in @($batchResult.Results)) {
+    if ($itemResult.PSObject.Properties['HistoryWarning']) { Write-Log $itemResult.HistoryWarning }
     if ($itemResult.Succeeded) {
       Write-Log "Successfully updated in background: $($itemResult.Name) ($($itemResult.CurrentVersion) -> $($itemResult.EffectiveVersion))"
       if (-not [string]::IsNullOrWhiteSpace([string]$itemResult.AutoUpdateSummary)) {
@@ -1631,9 +1748,10 @@ function Start-WinTunerAppUpdateBatch {
   param(
     [Parameter(Mandatory=$true)][object[]]$Apps,
     [Parameter(Mandatory=$true)][string]$RootPackageFolder,
-    [ValidateSet('Checked','All')][string]$Mode
+    [ValidateSet('Checked','All')][string]$Mode,
+    [AllowNull()][object]$ApprovedPlan
   )
-  if (-not $script:isConnected -or $script:isUpdateOperationActive -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive -or $script:isPackageUploadActive -or $script:isSupersededOperationActive -or $script:discoveryScanRunning -or $script:isDiscoveryDeploymentActive) {
+  if (-not $script:isConnected -or $script:isUpdateOperationActive -or $script:updateScanRunning -or $script:isPackageSearchActive -or $script:isVersionLookupActive -or $script:isPackageBuildActive -or $script:isPackageUploadActive -or $script:isSupersededOperationActive -or $script:discoveryScanRunning -or $script:isDiscoveryDeploymentActive) {
     Update-UpdateActionState
     return
   }
@@ -1660,6 +1778,8 @@ function Start-WinTunerAppUpdateBatch {
     })
   }
   $appsJson = @($workerApps) | ConvertTo-Json -Depth 5 -Compress
+  $planJson = if ($ApprovedPlan) { $ApprovedPlan | ConvertTo-Json -Depth 40 -Compress } else { '' }
+  $isPreview = -not [bool]$ApprovedPlan
   $operationId = [guid]::NewGuid().ToString('N')
   $progressPath = Join-Path ([System.IO.Path]::GetTempPath()) "wintuner-app-update-$operationId.progress.json"
   $script:isUpdateOperationActive = $true
@@ -1668,14 +1788,15 @@ function Start-WinTunerAppUpdateBatch {
   $script:progressBar.Maximum = [Math]::Max(1, $workerApps.Count)
   $script:progressBar.Value = 0
   $script:progressBar.Visible = $true
-  $script:lastUpdateResultSummary = "Last update: running ($($workerApps.Count) app(s))"
-  Update-Status "Starting background update for $($workerApps.Count) app(s)..."
+  $script:lastUpdateResultSummary = if ($isPreview) { 'Last update: preparing deployment preview' } else { "Last update: running ($($workerApps.Count) app(s))" }
+  if ($isPreview) { Update-Status 'Loading deployment preview and current Intune assignments...' }
+  else { Update-Status "Starting background update for $($workerApps.Count) app(s)..." }
   Write-Log "Starting background app update -> Mode: $Mode, Apps: $($workerApps.Count)"
   Update-UpdateActionState
   Update-DiscoveryActionState
   Update-SupersededActionState
   $updateScript = @'
-param($RepositoryRoot, $AppsJson, $RootPackageFolder, $ProgressPath)
+param($RepositoryRoot, $AppsJson, $RootPackageFolder, $ProgressPath, $TenantId, $PlanJson, $OperationId, $HistoryBasePath)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 Import-Module WinTuner -ErrorAction Stop
@@ -1684,6 +1805,7 @@ Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Winget.psm1') -Force 
 Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.PackageBuild.psm1') -Force -ErrorAction Stop
 Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.Intune.psm1') -Force -ErrorAction Stop
 Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.AppUpdate.psm1') -Force -ErrorAction Stop
+Import-Module (Join-Path $RepositoryRoot 'Modules\WinTuner.UpdateHistory.psm1') -Force -ErrorAction Stop
 function Write-AppUpdateProgressFile {
   param([object]$ProgressInfo)
   $tempPath = "$ProgressPath.$([guid]::NewGuid().ToString('N')).tmp"
@@ -1694,17 +1816,36 @@ function Write-AppUpdateProgressFile {
   } finally { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue }
 }
 $apps = @($AppsJson | ConvertFrom-Json -ErrorAction Stop)
-$result = Invoke-WinTunerAppUpdateBatch -Apps $apps -RootPackageFolder $RootPackageFolder -ReportProgress {
+$graphContext = Get-WinTunerGraphContext
+if (-not $graphContext -or [string]$graphContext.TenantId -ne [string]$TenantId) { throw 'The active Graph tenant does not match the update tenant.' }
+if ([string]::IsNullOrWhiteSpace($PlanJson)) {
+  New-WinTunerUpdatePlan -Apps $apps -TenantId $TenantId -RootPackageFolder $RootPackageFolder | ConvertTo-Json -Depth 40 -Compress
+  return
+}
+$approvedPlan = $PlanJson | ConvertFrom-Json -ErrorAction Stop
+if ([string]$approvedPlan.TenantId -ne [string]$TenantId -or [string]$approvedPlan.RootPackageFolder -cne $RootPackageFolder) { throw 'The approved update plan does not match this operation.' }
+$result = Invoke-WinTunerAppUpdateBatch -Apps $apps -RootPackageFolder $RootPackageFolder -ValidatePlan {
+  param($app, $effectiveVersion)
+  $expected = @($approvedPlan.Items | Where-Object { $_.GraphId -eq $app.GraphId -and $_.PackageId -eq $app.PackageId })
+  if ($expected.Count -ne 1 -or $effectiveVersion -cne [string]$expected[0].LatestVersion) { throw 'The built version differs from the approved preview. Review a new preview before upload.' }
+  $currentContext = Get-WinTunerGraphContext
+  if (-not $currentContext -or [string]$currentContext.TenantId -ne [string]$TenantId) { throw 'The Graph tenant changed.' }
+  $current = New-WinTunerUpdatePlan -Apps @($app) -TenantId $TenantId -RootPackageFolder $RootPackageFolder
+  if ($current.Items[0].AssignmentHash -cne $expected[0].AssignmentHash) { throw 'The Intune assignments changed after preview. Review a new preview before upload.' }
+}.GetNewClosure() -RecordResult {
+  param($itemResult)
+  Add-WinTunerUpdateHistory -TenantId $TenantId -OperationId $OperationId -Result $itemResult -BasePath $HistoryBasePath
+}.GetNewClosure() -ReportProgress {
   param($progressInfo)
   Write-AppUpdateProgressFile -ProgressInfo $progressInfo
 }
 $result | ConvertTo-Json -Depth 7 -Compress
 '@
   $powerShell = [System.Management.Automation.PowerShell]::Create()
-  $null = $powerShell.AddScript($updateScript).AddArgument($PSScriptRoot).AddArgument($appsJson).AddArgument($RootPackageFolder).AddArgument($progressPath)
+  $null = $powerShell.AddScript($updateScript).AddArgument($PSScriptRoot).AddArgument($appsJson).AddArgument($RootPackageFolder).AddArgument($progressPath).AddArgument([string]$script:currentGraphTenantId).AddArgument($planJson).AddArgument($operationId)
   $timer = New-Object System.Windows.Forms.Timer
   $timer.Interval = 150
-  $context = [pscustomobject]@{ PowerShell = $powerShell; AsyncResult = $null; Timer = $timer; ProgressPath = $progressPath; LastProgress = $null; Mode = $Mode }
+  $context = [pscustomobject]@{ PowerShell = $powerShell; AsyncResult = $null; Timer = $timer; ProgressPath = $progressPath; LastProgress = $null; Mode = $Mode; IsPreview = $isPreview; Apps = @($workerApps); RootPackageFolder = $RootPackageFolder }
   $script:updateDeploymentContext = $context
   $timer.Add_Tick({
     $currentContext = $script:updateDeploymentContext
@@ -1718,7 +1859,11 @@ $result | ConvertTo-Json -Depth 7 -Compress
           $maximum = [Math]::Max(1, [int]$progressInfo.Total)
           $script:progressBar.Maximum = $maximum
           $script:progressBar.Value = [Math]::Min([int]$progressInfo.Processed, $maximum)
-          Update-Status ("Updating ({0}/{1}): {2}" -f $progressInfo.Processed, $progressInfo.Total, $progressInfo.AppName)
+          if ([string]$progressInfo.Stage -eq 'Retry') {
+            $retryText = "Waiting $($progressInfo.DelaySeconds)s before retry $($progressInfo.Attempt)/$($progressInfo.MaxAttempts): $($progressInfo.AppName)"
+            Update-Status $retryText
+            Write-Log $retryText
+          } else { Update-Status ("Updating ({0}/{1}): {2}" -f $progressInfo.Processed, $progressInfo.Total, $progressInfo.AppName) }
         }
       } catch {}
     }
@@ -4706,6 +4851,13 @@ $authenticationSettingsButton.Height = 35
 $tabSettings.Controls.Add($authenticationSettingsButton)
 $authenticationSettingsButton.Add_Click({ Show-WinTunerAuthenticationSettings })
 
+$historyButton = New-Object System.Windows.Forms.Button
+$historyButton.Text = 'Update history...'
+$historyButton.Location = New-Object System.Drawing.Point(20,375)
+$historyButton.Size = New-Object System.Drawing.Size(180,35)
+$historyButton.Add_Click({ Show-WinTunerUpdateHistory })
+$tabSettings.Controls.Add($historyButton)
+
 $graphPermissionsButton.Add_Click({
   $permissionSummary = @"
 USER LOGIN (Interactive)
@@ -5425,19 +5577,6 @@ $updateSelectedButton.Add_Click({
 
     Write-Log "Starting update for $($checkedApps.Count) checked candidate(s), including filtered items."
 
-    $confirmationLines = @($checkedApps | ForEach-Object { Get-UpdateCandidateDisplayText -App $_ })
-    $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "The following checked apps will be updated:$([Environment]::NewLine)$([Environment]::NewLine)$($confirmationLines -join [Environment]::NewLine)",
-        'Confirm checked updates',
-        [System.Windows.Forms.MessageBoxButtons]::YesNo,
-        [System.Windows.Forms.MessageBoxIcon]::Question
-    )
-    if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) {
-        Update-Status 'Checked app update canceled.'
-        Write-Log 'Update checked apps canceled by user.'
-        return
-    }
-
     $rootPackageFolder = Resolve-WinTunerPackageRootForOperation -Path $pathBox.Text -CreateIfMissing
     if ([string]::IsNullOrWhiteSpace($rootPackageFolder)) { return }
     try {
@@ -5463,20 +5602,6 @@ $updateAllButton.Add_Click({
     } | Sort-Object Name)
     if (-not $updatedApps -or $updatedApps.Count -eq 0) {
         Update-Status "No update candidates found."
-        return
-    }
-
-    # Show confirmation dialog
-    $appNames = ($updatedApps | ForEach-Object { Get-UpdateCandidateDisplayText -App $_ }) -join [Environment]::NewLine
-    $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "The following apps will be updated:$([Environment]::NewLine)$([Environment]::NewLine)$appNames",
-        "Confirm",
-        [System.Windows.Forms.MessageBoxButtons]::YesNo,
-        [System.Windows.Forms.MessageBoxIcon]::Question
-    )
-
-    if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) {
-        Update-Status "Mass update canceled."
         return
     }
 
