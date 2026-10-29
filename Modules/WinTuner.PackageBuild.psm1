@@ -1,4 +1,5 @@
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'WinTuner.Retry.psm1') -ErrorAction Stop
 
 function New-WinTunerPackageBuildResult {
     param(
@@ -21,11 +22,12 @@ function Invoke-WinTunerPackageAttempt {
         [Parameter(Mandatory)][string]$PackageId,
         [Parameter(Mandatory)][string]$PackageFolder,
         [AllowNull()][string]$Version,
-        [Parameter(Mandatory)][scriptblock]$CreatePackage
+        [Parameter(Mandatory)][scriptblock]$CreatePackage,
+        [scriptblock]$ReportRetry = { param($RetryInfo) }
     )
 
     try {
-        $null = & $CreatePackage $PackageId $PackageFolder $Version
+        $null = Invoke-WinTunerRetry -Operation { & $CreatePackage $PackageId $PackageFolder $Version }.GetNewClosure() -ReportRetry $ReportRetry
         return New-WinTunerPackageBuildResult -Succeeded $true -EffectiveVersion $Version
     }
     catch {
@@ -91,6 +93,7 @@ function Invoke-WinTunerPackageBuild {
         [AllowNull()][string]$LatestVersion,
         [AllowNull()][string]$InstalledVersion,
         [ValidateSet('Automatic', 'RetrySame', 'Previous')][string]$Mode = 'Automatic',
+        [scriptblock]$ReportRetry = { param($RetryInfo) },
         [scriptblock]$CreatePackage = {
             param($Id, $Folder, $Version)
             if ([string]::IsNullOrWhiteSpace([string]$Version)) {
@@ -132,7 +135,8 @@ function Invoke-WinTunerPackageBuild {
         -PackageId $PackageId `
         -PackageFolder $PackageFolder `
         -Version $attemptVersion `
-        -CreatePackage $CreatePackage
+        -CreatePackage $CreatePackage `
+        -ReportRetry $ReportRetry
 
     if ($attempt.Succeeded -or $Mode -eq 'RetrySame') {
         return $attempt
