@@ -4,7 +4,7 @@
 
 Development version: **0.10.28**
 
-Latest published stable release: **v0.10.27**
+Latest published stable release: **v0.10.28**
 
 Repository:
 `manuelhoefler17-gif/WinTuner-GUI`
@@ -16,17 +16,26 @@ Branches:
 - Changes are developed and tested on `Test`
 - Changes reach `main` only through Pull Requests
 
-The v0.10.27 release is published and verified. Implementation and release metadata reached `main` through Pull Requests #152 and #153; `Test` is synchronized with `main` after each merge.
+The v0.10.28 release is published and verified. The retry fix and release metadata reached `main` through Pull Requests #155 and #156; `Test` is synchronized with `main` after each merge.
 
-## Development Work for 0.10.28
+## Completed Work for 0.10.28
 
 - Investigated the reported Claude update retries: package creation returned HTTP 429; the later attempt succeeded. Duplicate retry lines came from calling both Update-Status (which logs already) and Write-Log.
 - Background package retry progress now carries the numeric HTTP status through the JSON boundary and uses one status/log call. Raw response bodies and authentication data are excluded from retry messages.
 - HTTP 429 without a usable Retry-After now uses 15/30 second fallback waits. Valid server delays remain authoritative; other transient fallback waits, three-attempt cap, 120-second total wait budget, cancellation and deployment replay protection remain intact.
 - Automated validation passed: all 56 PowerShell files parse without errors, all 226 Pester tests pass, and git diff --check passes. Regression coverage exercises the real package-build/batch/JSON/GUI-log path with a simulated 429, verifies exactly one retry log entry and one deployment after recovery, and covers longer backoff, server Retry-After precedence, budget limits, cancellation and non-retryable failures.
 - The user confirmed that the error did not occur in the final manual GUI test and authorized continuation. A real 429/retry was not reproduced in that test; retry behavior is covered by automated regression tests. The external service's rate limit cannot be removed by this fix.
-- The fix was integrated through Pull Request #155 after both GitHub checks passed, and Test/main were synchronized at f857b7f. The user approved tagging and publication of v0.10.28; release asset and standalone verification are pending.
+- The fix was integrated through Pull Request #155 after both GitHub checks passed, and Test/main were synchronized at f857b7f. The user approved tagging and publication of v0.10.28.
 - Planned feature-list item 6 (installation status) remains next after this focused retry fix.
+
+Release completed on 2026-10-29:
+
+- Merged release metadata through Pull Request #156 after both GitHub checks passed.
+- Created and pushed annotated tag v0.10.28 from synchronized main/Test commit 025be47.
+- Published the GitHub release with WinTuner_GUI.ps1 and its SHA256 checksum.
+- Independently downloaded both assets and verified version, syntax and SHA256 integrity.
+- Executed the downloaded script's actual standalone bootstrap in a fresh temporary folder. All 19 runtime files match their tagged Git blobs exactly, parse without errors and produce release marker 0.10.28.
+- WinTuner_GUI.ps1 SHA256: 2D92C69B9B971D6F7DCEA8FC873F2DA85D3204BCD6DBCC86D0298D496F5EEDDB.
 
 ## Completed Work for 0.10.27
 
@@ -778,10 +787,10 @@ For significant function changes, prefer replacing a complete known block rather
 
 Latest published stable release:
 
-**v0.10.27**
+**v0.10.28**
 
 Current development version:
 
 **0.10.28**
 
-0.10.27 was published and its assets/standalone bootstrap verified on 2026-10-29. The `main` and `Test` branches are synchronized after each release-documentation merge.
+0.10.28 was published and its assets/standalone bootstrap verified on 2026-10-29. The `main` and `Test` branches are synchronized after each release-documentation merge.
