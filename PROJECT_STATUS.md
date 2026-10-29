@@ -4,7 +4,7 @@
 
 Development version: **0.10.25**
 
-Latest published stable release: **v0.10.24**
+Latest published stable release: **v0.10.25**
 
 Repository:
 `manuelhoefler17-gif/WinTuner-GUI`
@@ -16,9 +16,9 @@ Branches:
 - Changes are developed and tested on `Test`
 - Changes reach `main` only through Pull Requests
 
-The stable baseline is v0.10.24. Version 0.10.25 is being prepared for publication on `Test`.
+`main` and `Test` are synchronized with the completed v0.10.25 release.
 
-## Release Preparation for 0.10.25
+## Completed Work for 0.10.25
 
 First implementation block from the agreed feature list:
 
@@ -36,6 +36,15 @@ Manual validation completed:
 - A real 7-Zip update from 26.03 to 26.05 completed and appeared in the tenant history as Updated.
 - The user supplied the CSV export with the expected tenant, operation, app, version and outcome fields.
 - The user authorized commit, PR, merge and publication of v0.10.25.
+
+Release completed on 2026-10-29:
+
+- Merged implementation and release metadata through Pull Request #148 after both GitHub checks passed.
+- Created and pushed annotated tag v0.10.25 from main/Test commit 16b3607.
+- Published the GitHub release with WinTuner_GUI.ps1 and its SHA256 checksum.
+- Downloaded both assets again and verified version, syntax and SHA256 integrity.
+- Executed the downloaded script's standalone bootstrap; all 17 runtime files match the tagged release and parse without errors, and the release marker is 0.10.25.
+- WinTuner_GUI.ps1 SHA256: 2C1536E2728F56C816FCCFAF63031B8F6A792A0244055D082C8369FA35D28502.
 
 Following implementation blocks, in priority order:
 
@@ -714,10 +723,10 @@ For significant function changes, prefer replacing a complete known block rather
 
 Latest published stable release:
 
-**v0.10.24**
+**v0.10.25**
 
 Current development version:
 
 **0.10.25**
 
-0.10.24 was published on 2026-10-29. Version 0.10.25 is in development on `Test`.
+0.10.25 was published on 2026-10-29. The `main` and `Test` branches are synchronized.
