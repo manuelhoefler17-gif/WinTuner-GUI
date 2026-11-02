@@ -14,24 +14,24 @@ Describe 'Invoke-WinTunerAppUpdateBatch' {
             PackageId      = 'Vendor.App'
         }
 
-        $result = Invoke-WinTunerAppUpdateBatch `
-            -Apps @($app) `
-            -RootPackageFolder $TestDrive `
-            -BuildPackage {
+        Mock New-WinTunerUpdatePackage -ModuleName WinTuner.AppUpdate -MockWith {
                 param($Id, $Folder, $Target, $Installed)
                 $calls.Add("build|$Id|$Folder|$Target|$Installed")
                 [pscustomobject]@{ Succeeded = $true; EffectiveVersion = $Target }
-            }.GetNewClosure() `
-            -ValidateArtifact {
+            }.GetNewClosure()
+        Mock Test-WinTunerUpdateArtifact -ModuleName WinTuner.AppUpdate -MockWith {
                 param($Root, $Id, $Version)
                 $calls.Add("validate|$Root|$Id|$Version")
                 [pscustomobject]@{ IsValid = $true; IntuneWinPath = (Join-Path $Root 'package.intunewin') }
-            }.GetNewClosure() `
-            -DeployPackage {
+            }.GetNewClosure()
+        Mock Publish-WinTunerUpdatePackage -ModuleName WinTuner.AppUpdate -MockWith {
                 param($App, $Id, $Version, $Root)
                 $calls.Add("deploy|$($App.GraphId)|$Id|$Version|$Root")
                 [pscustomobject]@{ Id = 'new-graph-456' }
-            }.GetNewClosure() `
+            }.GetNewClosure()
+        $result = Invoke-WinTunerAppUpdateBatch `
+            -Apps @($app) `
+            -RootPackageFolder $TestDrive `
             -ConfigureAvailableAssignmentAutoUpdate {
                 param($GraphId)
                 $calls.Add("autoupdate|$GraphId")
@@ -51,14 +51,14 @@ Describe 'Invoke-WinTunerAppUpdateBatch' {
 
     It 'blocks deployment when exact artifact validation fails' {
         $deployCalls = 0
+        Mock New-WinTunerUpdatePackage -ModuleName WinTuner.AppUpdate -MockWith { [pscustomobject]@{ Succeeded = $true; EffectiveVersion = '2' } }
+        Mock Test-WinTunerUpdateArtifact -ModuleName WinTuner.AppUpdate -MockWith { [pscustomobject]@{ IsValid = $false; ReasonCode = 'MissingIntuneWin'; Reason = 'Expected file is missing.' } }
+        Mock Publish-WinTunerUpdatePackage -ModuleName WinTuner.AppUpdate -MockWith { $deployCalls++ }.GetNewClosure()
         $result = Invoke-WinTunerAppUpdateBatch `
             -Apps @([pscustomobject]@{
                 Name = 'Unsafe App'; CurrentVersion = '1'; LatestVersion = '2'; PackageId = 'Unsafe.App'
             }) `
-            -RootPackageFolder $TestDrive `
-            -BuildPackage { [pscustomobject]@{ Succeeded = $true; EffectiveVersion = '2' } } `
-            -ValidateArtifact { [pscustomobject]@{ IsValid = $false; ReasonCode = 'MissingIntuneWin'; Reason = 'Expected file is missing.' } } `
-            -DeployPackage { $deployCalls++ }.GetNewClosure()
+            -RootPackageFolder $TestDrive
 
         $result.SuccessCount | Should -Be 0
         $result.FailureCount | Should -Be 1
@@ -68,12 +68,12 @@ Describe 'Invoke-WinTunerAppUpdateBatch' {
 
     It 'blocks package creation when the verified scan result has no PackageId' {
         $buildCalls = 0
+        Mock New-WinTunerUpdatePackage -ModuleName WinTuner.AppUpdate -MockWith { $buildCalls++ }.GetNewClosure()
         $result = Invoke-WinTunerAppUpdateBatch `
             -Apps @([pscustomobject]@{
                 Name = 'Unknown App'; CurrentVersion = '1'; LatestVersion = '2'; PackageId = ''
             }) `
-            -RootPackageFolder $TestDrive `
-            -BuildPackage { $buildCalls++ }.GetNewClosure()
+            -RootPackageFolder $TestDrive
 
         $result.FailureCount | Should -Be 1
         $result.Results[0].ReasonCode | Should -Be 'MissingPackageId'
@@ -87,16 +87,16 @@ Describe 'Invoke-WinTunerAppUpdateBatch' {
             [pscustomobject]@{ Name = 'Second'; CurrentVersion = '1'; LatestVersion = '2'; PackageId = 'Vendor.Second' }
         )
 
-        $result = Invoke-WinTunerAppUpdateBatch `
-            -Apps $apps `
-            -RootPackageFolder $TestDrive `
-            -BuildPackage { param($Id, $Folder, $Target) [pscustomobject]@{ Succeeded = $true; EffectiveVersion = $Target } } `
-            -ValidateArtifact { [pscustomobject]@{ IsValid = $true } } `
-            -DeployPackage {
+        Mock New-WinTunerUpdatePackage -ModuleName WinTuner.AppUpdate -MockWith { param($Id, $Folder, $Target) [pscustomobject]@{ Succeeded = $true; EffectiveVersion = $Target } }
+        Mock Test-WinTunerUpdateArtifact -ModuleName WinTuner.AppUpdate -MockWith { [pscustomobject]@{ IsValid = $true } }
+        Mock Publish-WinTunerUpdatePackage -ModuleName WinTuner.AppUpdate -MockWith {
                 param($App, $Id)
                 $deployCalls.Add($Id)
                 if ($Id -eq 'Vendor.First') { throw 'Tenant rejected deployment' }
             }.GetNewClosure()
+        $result = Invoke-WinTunerAppUpdateBatch `
+            -Apps $apps `
+            -RootPackageFolder $TestDrive
 
         $result.SuccessCount | Should -Be 1
         $result.FailureCount | Should -Be 1

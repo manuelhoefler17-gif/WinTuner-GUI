@@ -1,5 +1,44 @@
 Set-StrictMode -Version Latest
 
+function New-WinTunerUpdatePackage {
+    param($Id, $Folder, $Target, $Installed, $RetryReporter)
+    Invoke-WinTunerPackageBuild `
+        -PackageId $Id `
+        -PackageFolder $Folder `
+        -DesiredVersion $Target `
+        -LatestVersion $Target `
+        -InstalledVersion $Installed `
+        -ReportRetry $RetryReporter
+}
+
+function Test-WinTunerUpdateArtifact {
+    param($Root, $Id, $Version)
+    Test-WinTunerPackageArtifact `
+        -RootPackageFolder $Root `
+        -PackageId $Id `
+        -Version $Version
+}
+
+function Publish-WinTunerUpdatePackage {
+    param($App, $Id, $Version, $Root)
+    if (-not [string]::IsNullOrWhiteSpace([string]$App.GraphId)) {
+        Deploy-WtWin32App `
+            -GraphId ([string]$App.GraphId) `
+            -KeepAssignments `
+            -PackageId $Id `
+            -Version $Version `
+            -RootPackageFolder $Root `
+            -ErrorAction Stop
+    }
+    else {
+        Deploy-WtWin32App `
+            -PackageId $Id `
+            -Version $Version `
+            -RootPackageFolder $Root `
+            -ErrorAction Stop
+    }
+}
+
 function Get-WinTunerAppUpdateProperty {
     param(
         [Parameter(Mandatory)][object]$InputObject,
@@ -253,9 +292,6 @@ function Invoke-WinTunerAppUpdateItem {
     param(
         [Parameter(Mandatory)][object]$App,
         [Parameter(Mandatory)][string]$RootPackageFolder,
-        [Parameter(Mandatory)][scriptblock]$BuildPackage,
-        [Parameter(Mandatory)][scriptblock]$ValidateArtifact,
-        [Parameter(Mandatory)][scriptblock]$DeployPackage,
         [Parameter(Mandatory)][scriptblock]$ConfigureAvailableAssignmentAutoUpdate,
         [Parameter(Mandatory)][scriptblock]$ValidatePlan,
         [Parameter(Mandatory)][scriptblock]$ReportRetry
@@ -290,7 +326,7 @@ function Invoke-WinTunerAppUpdateItem {
     }
 
     try {
-        $buildResult = & $BuildPackage $packageId $RootPackageFolder $targetVersion $currentVersion $ReportRetry
+        $buildResult = New-WinTunerUpdatePackage $packageId $RootPackageFolder $targetVersion $currentVersion $ReportRetry
     }
     catch {
         return New-WinTunerAppUpdateItemResult `
@@ -331,7 +367,7 @@ function Invoke-WinTunerAppUpdateItem {
     }
 
     try {
-        $validation = & $ValidateArtifact $RootPackageFolder $packageId $effectiveVersion
+        $validation = Test-WinTunerUpdateArtifact $RootPackageFolder $packageId $effectiveVersion
     }
     catch {
         return New-WinTunerAppUpdateItemResult `
@@ -379,7 +415,7 @@ function Invoke-WinTunerAppUpdateItem {
     }
 
     try {
-        $deployment = & $DeployPackage $App $packageId $effectiveVersion $RootPackageFolder
+        $deployment = Publish-WinTunerUpdatePackage $App $packageId $effectiveVersion $RootPackageFolder
     }
     catch {
         return New-WinTunerAppUpdateItemResult `
@@ -429,42 +465,6 @@ function Invoke-WinTunerAppUpdateBatch {
     param(
         [Parameter(Mandatory)][ValidateNotNull()][object[]]$Apps,
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$RootPackageFolder,
-        [scriptblock]$BuildPackage = {
-            param($Id, $Folder, $Target, $Installed, $RetryReporter)
-            Invoke-WinTunerPackageBuild `
-                -PackageId $Id `
-                -PackageFolder $Folder `
-                -DesiredVersion $Target `
-                -LatestVersion $Target `
-                -InstalledVersion $Installed `
-                -ReportRetry $RetryReporter
-        },
-        [scriptblock]$ValidateArtifact = {
-            param($Root, $Id, $Version)
-            Test-WinTunerPackageArtifact `
-                -RootPackageFolder $Root `
-                -PackageId $Id `
-                -Version $Version
-        },
-        [scriptblock]$DeployPackage = {
-            param($App, $Id, $Version, $Root)
-            if (-not [string]::IsNullOrWhiteSpace([string]$App.GraphId)) {
-                Deploy-WtWin32App `
-                    -GraphId ([string]$App.GraphId) `
-                    -KeepAssignments `
-                    -PackageId $Id `
-                    -Version $Version `
-                    -RootPackageFolder $Root `
-                    -ErrorAction Stop
-            }
-            else {
-                Deploy-WtWin32App `
-                    -PackageId $Id `
-                    -Version $Version `
-                    -RootPackageFolder $Root `
-                    -ErrorAction Stop
-            }
-        },
         [scriptblock]$ConfigureAvailableAssignmentAutoUpdate = {
             param($DeployedGraphId)
             Set-WinTunerAvailableAssignmentAutoUpdate -GraphId $DeployedGraphId
@@ -493,9 +493,6 @@ function Invoke-WinTunerAppUpdateBatch {
         $itemResult = Invoke-WinTunerAppUpdateItem `
             -App $app `
             -RootPackageFolder $RootPackageFolder `
-            -BuildPackage $BuildPackage `
-            -ValidateArtifact $ValidateArtifact `
-            -DeployPackage $DeployPackage `
             -ConfigureAvailableAssignmentAutoUpdate $ConfigureAvailableAssignmentAutoUpdate `
             -ValidatePlan $ValidatePlan `
             -ReportRetry {

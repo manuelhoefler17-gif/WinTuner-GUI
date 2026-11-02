@@ -107,6 +107,8 @@ Existing packages can be reused across GUI sessions only after the selected pack
 
 Changing the application, package version, or package root recalculates Upload readiness. Invalid or stale artifacts cannot enable Upload and are rebuilt when package creation is requested.
 
+The app-update, Discovery-deployment and individual-upload workflows use fixed private functions for package building, artifact validation and deployment. They do not accept caller-supplied `BuildPackage`, `ValidateArtifact` or `DeployPackage` ScriptBlocks. Tests use mocks instead. This narrows those interfaces; it does not replace downloaded-code integrity checks or a full security audit.
+
 ### 🔄 Self-update
 
 WinTuner GUI can check GitHub for newer releases.

@@ -66,14 +66,13 @@ $app = [pscustomobject]@{
     DisplayName = 'Contoso Tool'
     WingetApp = [pscustomobject]@{ Name = 'Contoso Tool'; PackageID = 'Contoso.Tool'; Version = '2.0' }
 }
-$deployment = Invoke-WinTunerDiscoveryDeployment -Apps @($app) -RootPackageFolder $RepositoryRoot -BuildPackage {
-    [pscustomobject]@{ Succeeded = $true; EffectiveVersion = '2.0' }
-} -ValidateArtifact {
-    [pscustomobject]@{ IsValid = $true }
-} -DeployPackage {
-    param($Id, $Version, $Root)
-    [pscustomobject]@{ WouldDeploy = "$Id|$Version|$Root" }
+& (Get-Module WinTuner.DiscoveryDeployment) {
+    # Test-only replacements in this disposable runspace; no production callbacks.
+    function script:New-WinTunerDiscoveryPackage { param($Id,$Root,$Version) [pscustomobject]@{Succeeded=$true;EffectiveVersion=$Version} }
+    function script:Test-WinTunerDiscoveryArtifact { param($Root,$Id,$Version) [pscustomobject]@{IsValid=$true} }
+    function script:Publish-WinTunerDiscoveryPackage { param($Id,$Version,$Root) [pscustomobject]@{WouldDeploy="$Id|$Version|$Root"} }
 }
+$deployment = Invoke-WinTunerDiscoveryDeployment -Apps @($app) -RootPackageFolder $RepositoryRoot
 $removal = Invoke-WinTunerSupersededRemoval -Apps @([pscustomobject]@{ Name = 'Old Tool'; GraphId = 'graph-old' }) -RemoveApp {
     param($App)
     [pscustomobject]@{ WouldRemove = $App.GraphId }
