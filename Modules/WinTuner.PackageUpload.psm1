@@ -1,5 +1,15 @@
 Set-StrictMode -Version Latest
 
+function Test-WinTunerUploadArtifact {
+    param($Root, $Id, $Version)
+    Test-WinTunerPackageArtifact -RootPackageFolder $Root -PackageId $Id -Version $Version
+}
+
+function Publish-WinTunerUploadPackage {
+    param($Id, $Version, $Root)
+    Deploy-WtWin32App -PackageId $Id -Version $Version -RootPackageFolder $Root -ErrorAction Stop
+}
+
 function New-WinTunerPackageUploadResult {
     param(
         [bool]$Succeeded,
@@ -21,26 +31,11 @@ function Invoke-WinTunerPackageUpload {
     param(
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$PackageId,
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$Version,
-        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$RootPackageFolder,
-        [scriptblock]$ValidateArtifact = {
-            param($Root, $Id, $SelectedVersion)
-            Test-WinTunerPackageArtifact `
-                -RootPackageFolder $Root `
-                -PackageId $Id `
-                -Version $SelectedVersion
-        },
-        [scriptblock]$DeployPackage = {
-            param($Id, $SelectedVersion, $Root)
-            Deploy-WtWin32App `
-                -PackageId $Id `
-                -Version $SelectedVersion `
-                -RootPackageFolder $Root `
-                -ErrorAction Stop
-        }
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$RootPackageFolder
     )
 
     try {
-        $validation = & $ValidateArtifact $RootPackageFolder $PackageId $Version
+        $validation = Test-WinTunerUploadArtifact $RootPackageFolder $PackageId $Version
     }
     catch {
         return New-WinTunerPackageUploadResult `
@@ -70,7 +65,7 @@ function Invoke-WinTunerPackageUpload {
     }
 
     try {
-        $null = & $DeployPackage $PackageId $Version $RootPackageFolder
+        $null = Publish-WinTunerUploadPackage $PackageId $Version $RootPackageFolder
     }
     catch {
         return New-WinTunerPackageUploadResult `

@@ -1,5 +1,20 @@
 Set-StrictMode -Version Latest
 
+function New-WinTunerDiscoveryPackage {
+    param($Id, $Root, $Version)
+    Invoke-WinTunerPackageBuild -PackageId $Id -PackageFolder $Root -DesiredVersion $Version -LatestVersion $Version
+}
+
+function Test-WinTunerDiscoveryArtifact {
+    param($Root, $Id, $Version)
+    Test-WinTunerPackageArtifact -RootPackageFolder $Root -PackageId $Id -Version $Version
+}
+
+function Publish-WinTunerDiscoveryPackage {
+    param($Id, $Version, $Root)
+    Deploy-WtWin32App -PackageId $Id -Version $Version -RootPackageFolder $Root -ErrorAction Stop
+}
+
 function Get-WinTunerDiscoveryDeploymentProperty {
     param([Parameter(Mandatory)][object]$InputObject, [Parameter(Mandatory)][string]$Name)
     $property = $InputObject.PSObject.Properties[$Name]
@@ -12,18 +27,6 @@ function Invoke-WinTunerDiscoveryDeployment {
     param(
         [Parameter(Mandatory)][ValidateNotNull()][object[]]$Apps,
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$RootPackageFolder,
-        [scriptblock]$BuildPackage = {
-            param($Id, $Folder, $Version)
-            Invoke-WinTunerPackageBuild -PackageId $Id -PackageFolder $Folder -DesiredVersion $Version -LatestVersion $Version
-        },
-        [scriptblock]$ValidateArtifact = {
-            param($Root, $Id, $Version)
-            Test-WinTunerPackageArtifact -RootPackageFolder $Root -PackageId $Id -Version $Version
-        },
-        [scriptblock]$DeployPackage = {
-            param($Id, $Version, $Root)
-            Deploy-WtWin32App -PackageId $Id -Version $Version -RootPackageFolder $Root -ErrorAction Stop
-        },
         [scriptblock]$ReportProgress = { param($ProgressInfo) }
     )
 
@@ -63,7 +66,7 @@ function Invoke-WinTunerDiscoveryDeployment {
 
         if ([string]::IsNullOrWhiteSpace($reasonCode)) {
             try {
-                $buildResult = & $BuildPackage $packageId $RootPackageFolder $targetVersion
+                $buildResult = New-WinTunerDiscoveryPackage $packageId $RootPackageFolder $targetVersion
             } catch {
                 $reasonCode = 'PackageBuildFailed'
                 $message = "Package creation failed for '$name': $($_.Exception.Message)"
@@ -82,7 +85,7 @@ function Invoke-WinTunerDiscoveryDeployment {
 
         if ([string]::IsNullOrWhiteSpace($reasonCode)) {
             try {
-                $validation = & $ValidateArtifact $RootPackageFolder $packageId $effectiveVersion
+                $validation = Test-WinTunerDiscoveryArtifact $RootPackageFolder $packageId $effectiveVersion
             } catch {
                 $reasonCode = 'ValidationError'
                 $message = "Package validation failed for '$name': $($_.Exception.Message)"
@@ -97,7 +100,7 @@ function Invoke-WinTunerDiscoveryDeployment {
 
         if ([string]::IsNullOrWhiteSpace($reasonCode)) {
             try {
-                $null = & $DeployPackage $packageId $effectiveVersion $RootPackageFolder
+                $null = Publish-WinTunerDiscoveryPackage $packageId $effectiveVersion $RootPackageFolder
             } catch {
                 $reasonCode = 'DeploymentFailed'
                 $message = "Deployment failed for '$name': $($_.Exception.Message)"

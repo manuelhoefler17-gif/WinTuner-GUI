@@ -21,12 +21,12 @@ Describe 'Invoke-WinTunerPackageUpload' {
             $events.Add("deploy|$Root|$Id|$Version")
         }.GetNewClosure()
 
+        Mock Test-WinTunerUploadArtifact -ModuleName WinTuner.PackageUpload -MockWith $validator
+        Mock Publish-WinTunerUploadPackage -ModuleName WinTuner.PackageUpload -MockWith $deployer
         $result = Invoke-WinTunerPackageUpload `
             -PackageId 'Vendor.App' `
             -Version '2.0.0' `
-            -RootPackageFolder $TestDrive `
-            -ValidateArtifact $validator `
-            -DeployPackage $deployer
+            -RootPackageFolder $TestDrive
 
         $result.Succeeded | Should -BeTrue
         $result.ReasonCode | Should -Be 'Uploaded'
@@ -42,18 +42,18 @@ Describe 'Invoke-WinTunerPackageUpload' {
             $deployCount++
         }.GetNewClosure()
 
-        $result = Invoke-WinTunerPackageUpload `
-            -PackageId 'Vendor.App' `
-            -Version '2.0.0' `
-            -RootPackageFolder $TestDrive `
-            -ValidateArtifact {
+        Mock Test-WinTunerUploadArtifact -ModuleName WinTuner.PackageUpload -MockWith {
                 [pscustomobject]@{
                     IsValid    = $false
                     ReasonCode = 'PackageFileMissing'
                     Reason     = 'The metadata-referenced package file is missing.'
                 }
-            } `
-            -DeployPackage $deployer
+            }
+        Mock Publish-WinTunerUploadPackage -ModuleName WinTuner.PackageUpload -MockWith $deployer
+        $result = Invoke-WinTunerPackageUpload `
+            -PackageId 'Vendor.App' `
+            -Version '2.0.0' `
+            -RootPackageFolder $TestDrive
 
         $result.Succeeded | Should -BeFalse
         $result.ReasonCode | Should -Be 'PackageFileMissing'
@@ -63,19 +63,19 @@ Describe 'Invoke-WinTunerPackageUpload' {
 
     It 'returns deployment errors without losing the validated package path' {
         $expectedPath = Join-Path $TestDrive 'Vendor.App\2.0.0\Vendor.App.intunewin'
-        $result = Invoke-WinTunerPackageUpload `
-            -PackageId 'Vendor.App' `
-            -Version '2.0.0' `
-            -RootPackageFolder $TestDrive `
-            -ValidateArtifact {
+        Mock Test-WinTunerUploadArtifact -ModuleName WinTuner.PackageUpload -MockWith {
                 [pscustomobject]@{
                     IsValid       = $true
                     ReasonCode    = 'Valid'
                     Reason        = 'Valid package artifact.'
                     IntuneWinPath = $expectedPath
                 }
-            }.GetNewClosure() `
-            -DeployPackage { throw 'Tenant rejected the package.' }
+            }.GetNewClosure()
+        Mock Publish-WinTunerUploadPackage -ModuleName WinTuner.PackageUpload -MockWith { throw 'Tenant rejected the package.' }
+        $result = Invoke-WinTunerPackageUpload `
+            -PackageId 'Vendor.App' `
+            -Version '2.0.0' `
+            -RootPackageFolder $TestDrive
 
         $result.Succeeded | Should -BeFalse
         $result.ReasonCode | Should -Be 'DeploymentFailed'

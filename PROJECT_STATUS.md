@@ -18,6 +18,13 @@ Branches:
 
 The v0.10.28 release is published and verified. The retry fix and release metadata reached `main` through Pull Requests #155 and #156; `Test` is synchronized with `main` after each merge.
 
+## Source-only security hardening after 0.10.28
+
+- Removed BuildPackage, ValidateArtifact and DeployPackage executable parameters from app updates, Discovery deployment and individual uploads. Fixed private helpers retain the existing build/validation/deployment behavior, including Graph identity and KeepAssignments.
+- Tests now use Pester mocks and test-only isolated-runspace substitutes. Boundary tests verify callback rejection before execution, private helpers and argument forwarding without interpreting code-like text.
+- Validation: all 57 PowerShell files parse, all 238 Pester tests pass, and git diff --check passes. No live tenant deployment was performed for this refactor.
+- This focused change is separate from the local, unreleased 0.10.29 development work. No tag, release or release-asset replacement is included. The external security checker must be rerun against main after integration.
+
 ## Completed Work for 0.10.28
 
 - Investigated the reported Claude update retries: package creation returned HTTP 429; the later attempt succeeded. Duplicate retry lines came from calling both Update-Status (which logs already) and Write-Log.

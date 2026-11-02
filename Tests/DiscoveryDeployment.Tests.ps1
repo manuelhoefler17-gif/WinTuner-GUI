@@ -9,18 +9,21 @@ Describe 'Invoke-WinTunerDiscoveryDeployment' {
             DisplayName = 'Contoso Tool'
             WingetApp = [pscustomobject]@{ Name = 'Contoso Tool'; PackageID = 'Contoso.Tool'; Version = '2.0' }
         }
-        $result = Invoke-WinTunerDiscoveryDeployment -Apps @($app) -RootPackageFolder $TestDrive -BuildPackage {
+        Mock New-WinTunerDiscoveryPackage -ModuleName WinTuner.DiscoveryDeployment -MockWith {
             param($Id, $Root, $Version)
             $calls.Add("build|$Id|$Version")
             [pscustomobject]@{ Succeeded = $true; EffectiveVersion = $Version }
-        }.GetNewClosure() -ValidateArtifact {
+        }.GetNewClosure()
+        Mock Test-WinTunerDiscoveryArtifact -ModuleName WinTuner.DiscoveryDeployment -MockWith {
             param($Root, $Id, $Version)
             $calls.Add("validate|$Id|$Version")
             [pscustomobject]@{ IsValid = $true; IntuneWinPath = (Join-Path $Root 'package.intunewin') }
-        }.GetNewClosure() -DeployPackage {
+        }.GetNewClosure()
+        Mock Publish-WinTunerDiscoveryPackage -ModuleName WinTuner.DiscoveryDeployment -MockWith {
             param($Id, $Version)
             $calls.Add("deploy|$Id|$Version")
         }.GetNewClosure()
+        $result = Invoke-WinTunerDiscoveryDeployment -Apps @($app) -RootPackageFolder $TestDrive
 
         $result.SuccessCount | Should -Be 1
         $result.Results[0].ReasonCode | Should -Be 'Deployed'
@@ -30,11 +33,14 @@ Describe 'Invoke-WinTunerDiscoveryDeployment' {
     It 'blocks deployment when exact artifact validation fails' {
         $deployCalls = 0
         $app = [pscustomobject]@{ DisplayName = 'Unsafe'; WingetApp = [pscustomobject]@{ Name = 'Unsafe'; PackageID = 'Unsafe.App'; Version = '1.0' } }
-        $result = Invoke-WinTunerDiscoveryDeployment -Apps @($app) -RootPackageFolder $TestDrive -BuildPackage {
+        Mock New-WinTunerDiscoveryPackage -ModuleName WinTuner.DiscoveryDeployment -MockWith {
             [pscustomobject]@{ Succeeded = $true; EffectiveVersion = '1.0' }
-        } -ValidateArtifact {
+        }
+        Mock Test-WinTunerDiscoveryArtifact -ModuleName WinTuner.DiscoveryDeployment -MockWith {
             [pscustomobject]@{ IsValid = $false; ReasonCode = 'MissingIntuneWin'; Reason = 'Expected file is missing.' }
-        } -DeployPackage { $deployCalls++ }.GetNewClosure()
+        }
+        Mock Publish-WinTunerDiscoveryPackage -ModuleName WinTuner.DiscoveryDeployment -MockWith { $deployCalls++ }.GetNewClosure()
+        $result = Invoke-WinTunerDiscoveryDeployment -Apps @($app) -RootPackageFolder $TestDrive
 
         $result.FailureCount | Should -Be 1
         $result.Results[0].ReasonCode | Should -Be 'MissingIntuneWin'
@@ -46,13 +52,16 @@ Describe 'Invoke-WinTunerDiscoveryDeployment' {
             [pscustomobject]@{ DisplayName = 'First'; WingetApp = [pscustomobject]@{ Name = 'First'; PackageID = 'Vendor.First'; Version = '2' } }
             [pscustomobject]@{ DisplayName = 'Second'; WingetApp = [pscustomobject]@{ Name = 'Second'; PackageID = 'Vendor.Second'; Version = '3' } }
         )
-        $result = Invoke-WinTunerDiscoveryDeployment -Apps $apps -RootPackageFolder $TestDrive -BuildPackage {
+        Mock New-WinTunerDiscoveryPackage -ModuleName WinTuner.DiscoveryDeployment -MockWith {
             param($Id, $Root, $Version)
             [pscustomobject]@{ Succeeded = $true; EffectiveVersion = $Version }
-        } -ValidateArtifact { [pscustomobject]@{ IsValid = $true } } -DeployPackage {
+        }
+        Mock Test-WinTunerDiscoveryArtifact -ModuleName WinTuner.DiscoveryDeployment -MockWith { [pscustomobject]@{ IsValid = $true } }
+        Mock Publish-WinTunerDiscoveryPackage -ModuleName WinTuner.DiscoveryDeployment -MockWith {
             param($Id)
             if ($Id -eq 'Vendor.First') { throw 'tenant rejected deployment' }
         }
+        $result = Invoke-WinTunerDiscoveryDeployment -Apps $apps -RootPackageFolder $TestDrive
 
         $result.SuccessCount | Should -Be 1
         $result.FailureCount | Should -Be 1
@@ -66,7 +75,8 @@ Describe 'Invoke-WinTunerDiscoveryDeployment' {
             [pscustomobject]@{ DisplayName = 'No Id'; WingetApp = [pscustomobject]@{ Name = 'No Id'; PackageID = ''; Version = '1' } }
             [pscustomobject]@{ DisplayName = 'No Version'; WingetApp = [pscustomobject]@{ Name = 'No Version'; PackageID = 'No.Version'; Version = '' } }
         )
-        $result = Invoke-WinTunerDiscoveryDeployment -Apps $apps -RootPackageFolder $TestDrive -BuildPackage { $buildCalls++ }.GetNewClosure()
+        Mock New-WinTunerDiscoveryPackage -ModuleName WinTuner.DiscoveryDeployment -MockWith { $buildCalls++ }.GetNewClosure()
+        $result = Invoke-WinTunerDiscoveryDeployment -Apps $apps -RootPackageFolder $TestDrive
         $result.FailureCount | Should -Be 2
         $result.Results.ReasonCode | Should -Be @('MissingPackageId', 'MissingTargetVersion')
         $buildCalls | Should -Be 0
@@ -75,9 +85,12 @@ Describe 'Invoke-WinTunerDiscoveryDeployment' {
     It 'reports package-build exceptions without attempting validation or deployment' {
         $laterCalls = 0
         $app = [pscustomobject]@{ DisplayName = 'Build Fails'; WingetApp = [pscustomobject]@{ Name = 'Build Fails'; PackageID = 'Build.Fails'; Version = '1' } }
-        $result = Invoke-WinTunerDiscoveryDeployment -Apps @($app) -RootPackageFolder $TestDrive -BuildPackage {
+        Mock New-WinTunerDiscoveryPackage -ModuleName WinTuner.DiscoveryDeployment -MockWith {
             throw 'download failed'
-        } -ValidateArtifact { $laterCalls++ }.GetNewClosure() -DeployPackage { $laterCalls++ }.GetNewClosure()
+        }
+        Mock Test-WinTunerDiscoveryArtifact -ModuleName WinTuner.DiscoveryDeployment -MockWith { $laterCalls++ }.GetNewClosure()
+        Mock Publish-WinTunerDiscoveryPackage -ModuleName WinTuner.DiscoveryDeployment -MockWith { $laterCalls++ }.GetNewClosure()
+        $result = Invoke-WinTunerDiscoveryDeployment -Apps @($app) -RootPackageFolder $TestDrive
 
         $result.Results[0].ReasonCode | Should -Be 'PackageBuildFailed'
         $laterCalls | Should -Be 0
@@ -86,11 +99,14 @@ Describe 'Invoke-WinTunerDiscoveryDeployment' {
     It 'reports validation exceptions without attempting deployment' {
         $deployCalls = 0
         $app = [pscustomobject]@{ DisplayName = 'Validation Fails'; WingetApp = [pscustomobject]@{ Name = 'Validation Fails'; PackageID = 'Validation.Fails'; Version = '1' } }
-        $result = Invoke-WinTunerDiscoveryDeployment -Apps @($app) -RootPackageFolder $TestDrive -BuildPackage {
+        Mock New-WinTunerDiscoveryPackage -ModuleName WinTuner.DiscoveryDeployment -MockWith {
             [pscustomobject]@{ Succeeded = $true; EffectiveVersion = '1' }
-        } -ValidateArtifact {
+        }
+        Mock Test-WinTunerDiscoveryArtifact -ModuleName WinTuner.DiscoveryDeployment -MockWith {
             throw 'metadata unreadable'
-        } -DeployPackage { $deployCalls++ }.GetNewClosure()
+        }
+        Mock Publish-WinTunerDiscoveryPackage -ModuleName WinTuner.DiscoveryDeployment -MockWith { $deployCalls++ }.GetNewClosure()
+        $result = Invoke-WinTunerDiscoveryDeployment -Apps @($app) -RootPackageFolder $TestDrive
 
         $result.Results[0].ReasonCode | Should -Be 'ValidationError'
         $deployCalls | Should -Be 0

@@ -41,11 +41,11 @@ Describe 'Read-only deployment planning' {
 
     It 'blocks deployment when final plan validation fails and records the failure' {
         $state = @{ Deploys = 0; History = @() }
+        Mock New-WinTunerUpdatePackage -ModuleName WinTuner.AppUpdate -MockWith { @{ Succeeded = $true; EffectiveVersion = '2.0' } }
+        Mock Test-WinTunerUpdateArtifact -ModuleName WinTuner.AppUpdate -MockWith { @{ IsValid = $true } }
+        Mock Publish-WinTunerUpdatePackage -ModuleName WinTuner.AppUpdate -MockWith { $state.Deploys++ }.GetNewClosure()
         $batch = Invoke-WinTunerAppUpdateBatch -Apps @($app) -RootPackageFolder $TestDrive `
-            -BuildPackage { @{ Succeeded = $true; EffectiveVersion = '2.0' } } `
-            -ValidateArtifact { @{ IsValid = $true } } `
             -ValidatePlan { throw 'The assignments changed after preview.' } `
-            -DeployPackage { $state.Deploys++ }.GetNewClosure() `
             -RecordResult { param($result) $state.History += $result }.GetNewClosure()
         $batch.FailureCount | Should -Be 1
         $batch.Results[0].ReasonCode | Should -Be 'PlanChanged'
@@ -56,10 +56,11 @@ Describe 'Read-only deployment planning' {
     It 'does not repeat a successful deployment when local history cannot be saved' {
         $app.GraphId = ''
         $state = @{ Deploys = 0 }
+        Mock New-WinTunerUpdatePackage -ModuleName WinTuner.AppUpdate -MockWith { @{ Succeeded = $true; EffectiveVersion = '2.0' } }
+        Mock Test-WinTunerUpdateArtifact -ModuleName WinTuner.AppUpdate -MockWith { @{ IsValid = $true } }
+        Mock Publish-WinTunerUpdatePackage -ModuleName WinTuner.AppUpdate -MockWith { $state.Deploys++ }.GetNewClosure()
         $batch = Invoke-WinTunerAppUpdateBatch -Apps @($app) -RootPackageFolder $TestDrive `
-            -BuildPackage { @{ Succeeded = $true; EffectiveVersion = '2.0' } } `
-            -ValidateArtifact { @{ IsValid = $true } } `
-            -DeployPackage { $state.Deploys++ }.GetNewClosure() -RecordResult { throw 'Disk full' }
+             -RecordResult { throw 'Disk full' }
         $batch.SuccessCount | Should -Be 1
         $batch.Results[0].HistoryWarning | Should -Match 'could not be saved'
         $state.Deploys | Should -Be 1
@@ -67,10 +68,10 @@ Describe 'Read-only deployment planning' {
 
     It 'never automatically replays a complete deployment after a 429 response' {
         $state = @{ Deploys = 0 }
-        $batch = Invoke-WinTunerAppUpdateBatch -Apps @($app) -RootPackageFolder $TestDrive `
-            -BuildPackage { @{ Succeeded = $true; EffectiveVersion = '2.0' } } `
-            -ValidateArtifact { @{ IsValid = $true } } `
-            -DeployPackage { $state.Deploys++; throw 'HTTP 429 Too Many Requests during upload' }.GetNewClosure()
+        Mock New-WinTunerUpdatePackage -ModuleName WinTuner.AppUpdate -MockWith { @{ Succeeded = $true; EffectiveVersion = '2.0' } }
+        Mock Test-WinTunerUpdateArtifact -ModuleName WinTuner.AppUpdate -MockWith { @{ IsValid = $true } }
+        Mock Publish-WinTunerUpdatePackage -ModuleName WinTuner.AppUpdate -MockWith { $state.Deploys++; throw 'HTTP 429 Too Many Requests during upload' }.GetNewClosure()
+        $batch = Invoke-WinTunerAppUpdateBatch -Apps @($app) -RootPackageFolder $TestDrive
         $batch.FailureCount | Should -Be 1
         $batch.Results[0].ReasonCode | Should -Be 'DeploymentFailed'
         $state.Deploys | Should -Be 1

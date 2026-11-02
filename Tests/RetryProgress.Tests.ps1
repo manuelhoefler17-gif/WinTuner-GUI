@@ -27,12 +27,15 @@ Describe 'Retry progress across build, JSON and GUI logging' {
             Invoke-WinTunerPackageBuild -PackageId $Id -PackageFolder $Folder -DesiredVersion $Target -CreatePackage $creator -ReportRetry $RetryReporter
         }.GetNewClosure()
         $app = [pscustomobject]@{ Name='Claude'; CurrentVersion='1.0'; LatestVersion='2.0'; GraphId='old-app'; PackageId='Anthropic.Claude' }
-        $result = Invoke-WinTunerAppUpdateBatch -Apps @($app) -RootPackageFolder $TestDrive -BuildPackage $builder -ValidateArtifact {
+        Mock New-WinTunerUpdatePackage -ModuleName WinTuner.AppUpdate -MockWith $builder
+        Mock Test-WinTunerUpdateArtifact -ModuleName WinTuner.AppUpdate -MockWith {
             [pscustomobject]@{ IsValid=$true }
-        } -DeployPackage {
+        }
+        Mock Publish-WinTunerUpdatePackage -ModuleName WinTuner.AppUpdate -MockWith {
             $state.Deploys++
             [pscustomobject]@{ Id='new-app' }
-        }.GetNewClosure() -ConfigureAvailableAssignmentAutoUpdate {
+        }.GetNewClosure()
+        $result = Invoke-WinTunerAppUpdateBatch -Apps @($app) -RootPackageFolder $TestDrive    -ConfigureAvailableAssignmentAutoUpdate {
             [pscustomobject]@{ Summary='No Available assignments found.' }
         } -ReportProgress {param($info) $progress.Add($info)}.GetNewClosure()
         $result.SuccessCount | Should -Be 1

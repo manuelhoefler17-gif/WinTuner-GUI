@@ -2,6 +2,11 @@
 
 All notable changes to WinTuner GUI are documented here.
 
+## [Unreleased]
+
+### Security
+- Replace caller-supplied BuildPackage, ValidateArtifact and DeployPackage ScriptBlocks with fixed private function calls in app updates, Discovery deployment and individual uploads. Tests use mocks instead; exact artifact validation and upload blocking remain in place.
+
 ## [0.10.28] – 2026-10-29
 
 ### Fixed
